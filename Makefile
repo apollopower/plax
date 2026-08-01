@@ -4,24 +4,24 @@ PKG    := ./cmd/plax
 .PHONY: build install test vet fmt lint check clean
 
 build:
-      go build -o $(BINARY) $(PKG)
+	go build -o $(BINARY) $(PKG)
 
 install:
-      go install $(PKG)
+	go install $(PKG)
 
 test:
-      go test -race ./...
+	go test -race ./...
 
 vet:
-      go vet ./...
+	go vet ./...
 
 fmt:
-      gofmt -l -w .
+	gofmt -l -w .
 
 lint:
-      golangci-lint run
+	golangci-lint run
 
 check: fmt vet lint test
 
 clean:
-      rm -f $(BINARY
+	rm -f $(BINARY)
