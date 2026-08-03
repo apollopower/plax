@@ -14,7 +14,8 @@ Package: `pkg/derive/postgres/`
 
 Connects to a shared Postgres server (same `POSTGRES_USER`/`POSTGRES_PASSWORD`
 as the blueprint declares; read from the host's running postgres container or
-a local socket).
+a local socket). The seed command comes from the blueprint's `seed.command`
+field (e.g. `bun run db fixtures`).
 
 State machine:
 
@@ -57,22 +58,25 @@ configured base name).
 3. Target inherits provenance table with base_version stamp
 
 **`RefreshBase()`** — Staged refresh via `base_next` swap (avoids race with
-ongoing clones).
+ongoing clones). Creates `base_next` fresh (empty) rather than copying the
+old base via TEMPLATE. This avoids two problems: carrying forward data the
+seed script no longer declares, and duplicate rows from non-idempotent seeds.
 
-1. `CREATE DATABASE plax_base_next TEMPLATE plax_base`
-   (This copies the current base including its schema and data.)
-2. Temporarily allow connections on `plax_base_next`
-3. Run `bun run db fixtures` against `plax_base_next`
-4. Increment provenance on `plax_base_next`
-5. Lock `plax_base_next`
-6. Rename: drop `plax_base` (if no clones are in flight — see note below),
+1. `CREATE DATABASE plax_base_next`
+   (Fresh empty database, not a template copy.)
+2. Run migrations against `plax_base_next`: `bun run db migrate`
+3. Stamp provenance on `plax_base_next`
+4. Run seed against `plax_base_next`: `bun run db fixtures`
+   (Connections are allowed during seeding — the swap is what closes it.)
+5. Increment provenance version on `plax_base_next`
+6. Lock `plax_base_next`: `ALTER DATABASE ... ALLOW_CONNECTIONS false`
+7. Swap: drop the old `plax_base` (if no clones are in flight — see note),
    rename `plax_base_next` to `plax_base`
-7. Drop the old `plax_base`
 
-Note on step 6: `DROP DATABASE` fails if any clone is in progress. If it
+Note on step 7: `DROP DATABASE` fails if any clone is in progress. If it
 fails, retry after a short backoff. Clone operations take ~100ms, so this
-window is small. If it consistently fails, the refresh marks `plax_base_next`
-for deferred swap and notifies via `plax status`.
+window is small. If it consistently fails, the refresh leaves `plax_base_next`
+in place for deferred swap and notifies via `plax status`.
 
 **`DropInstanceDB(name string)`** — `DROP DATABASE IF EXISTS <name>`
 
@@ -146,7 +150,7 @@ A future `plax doctor` check verifies it's reachable.
 - [ ] Postgres driver: `CreateBase`, `SeedBase`, `ResetBase`, `CloneBase`,
       `RefreshBase`, `DropInstanceDB`
 - [ ] Provenance table creation and stamping
-- [ ] Staged refresh with `base_next` swap
+- [ ] Staged refresh with fresh `base_next` creation (not template copy)
 - [ ] Docker driver: `RunService`, `StopService`, `RemoveService`,
       `RemoveVolume`
 - [ ] Docker network create/remove per instance

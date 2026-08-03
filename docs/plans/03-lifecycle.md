@@ -18,8 +18,9 @@ The main orchestration command. Given an instance name (e.g. `i1`):
    already existing).
 4. **Create worktree** — `git worktree add .plax/worktrees/<name>
    plax/<name>`
-5. **Allocate ports** — One per port-bearing service and process in the
-   blueprint. Probe OS for availability. Register in registry.
+5. **Allocate ports** — One per port-bearing `dedicated` service and native
+   process in the blueprint. `logical` services are skipped — they share the
+   host's existing port. Probe OS for availability. Register in registry.
 6. **Derive .env** — Read `.env.example` from worktree root. For each hole
    declared in blueprint, substitute `{{VAR}}` with the allocated port or
    computed value. Copy all non-hole variables verbatim. Write result to
@@ -28,9 +29,19 @@ The main orchestration command. Given an instance name (e.g. `i1`):
 8. **Start dedicated containers** — Loop over services with
    `isolation: "dedicated"`. Call Docker driver for each with allocated
    ports.
-9. **Start native processes** — Loop over `processes` in blueprint. For each,
-   spawn the command in the worktree directory with the derived `.env` loaded.
-   Record PIDs.
+9. **Start native processes** — Loop over `processes` in blueprint. For each:
+   - Build the environment: merge the host's `os.Environ()` with the derived
+     `.env` variables and the allocated port (set as the env var named by
+     `port_var`, e.g. `PORT=3001`)
+   - If the `command` string contains `{{VAR}}` template holes, substitute
+     them with the allocated port value
+   - Spawn the command in the worktree directory with the merged environment
+   - Record the PID
+
+   For the eai app process (`port_var: "PORT"`, `command: "bun run dev:app"`),
+   this means `PORT=3001` is set in the environment before spawning. `next dev`
+   reads `PORT` from the environment and listens on the allocated port
+   automatically.
 10. **Write registry** — Save instance record with all ports, container IDs,
     PIDs, DB name, provenance version, and state=`"running"`.
 
@@ -71,8 +82,8 @@ Read registry. Print table:
 
 ```
 NAME   STATE     BRANCH             PORTS                               CREATED
-i1     running   plax/feature-auth  3001 5433 6380 3031                 5m ago
-i2     running   plax/feature-fix   3002 5434 6381 3032                 2m ago
+i1     running   plax/feature-auth  3001 6380 3031                       5m ago
+i2     running   plax/feature-fix   3002 6381 3032                       2m ago
 ```
 
 Fields: name, state, branch, allocated ports, age, unread message count.
@@ -109,9 +120,10 @@ and the `env.holes` map:
 2. For each hole key (e.g. `DATABASE_URL`), find the corresponding line in
    the template (by key prefix) and replace its value with the rendered hole
    template
-3. For the `{{DB_NAME}}` variable: compute `plax_<name>` (always)
-4. For `{{APP_PORT}}`, `{{PGPORT}}`, `{{REDIS_PORT}}`, `{{GOTENBERG_PORT}}`:
-   use allocated port values
+3. `{{DB_NAME}}` resolves to `plax_<name>` (always)
+4. All other `{{VAR}}` holes resolve to their allocated port value or the
+   env var set on the process (e.g. `{{PORT}}` → 3001, `{{REDIS_PORT}}` →
+   6380)
 5. Copy all non-hole lines verbatim (preserves comments and ordering)
 6. Write to `<worktree>/.env`
 
@@ -130,4 +142,6 @@ is appended at the end of the file.
 - [ ] `.env` derivation engine (hole substitution)
 - [ ] Git worktree + branch management
 - [ ] Process supervision (spawn, track PID, signal on teardown)
+- [ ] Process port injection: set `PORT` env var + `{{VAR}}` template
+      substitution in command strings
 - [ ] Two running instances of eai on the same machine, non-colliding
