@@ -125,7 +125,7 @@ collision:
 
 | Strategy | Use when | Example |
 |---|---|---|
-| `logical` | The service has a good built-in way to separate tenants | Postgres: one server, one database per instance, cloned in about 100 ms |
+| `logical` | The service has a good built-in way to separate tenants | Postgres: one server, one database per instance, cloned in about 100 ms. All instances share the same host port; only the database name varies. |
 | `dedicated` | The service separates tenants badly or not at all | Redis: one small container each. Database indexes stop at 16, and queue names collide inside an index |
 | `shared` | The service holds no state | A rendering or conversion service: one container serves everyone |
 | `external` | The dependency cannot be cloned | Blob storage in SaaS: run a local emulator, or share it on purpose and say so |
@@ -163,11 +163,13 @@ to create is an instance you keep, and instances you keep are the copies §1 is 
 
 So day one is `logical` for Postgres, `native` for the app's own processes, `dedicated`
 for the rest. `logical` buys cheap creation and brings the base, the provenance row, and
-the drift report with it. `native` is the difference §7.2 exists to test. `shared` and
-`external` wait: `shared` is an optimization and the one strategy that fails quietly, so
-it arrives when a specific service hurts, with its `doctor` check in the same change;
-`external` is an escape hatch, written the first time a dependency refuses to be cloned.
-Measurements decide those two. They do not decide the first three.
+the drift report with it. `logical` services stay on one host port — all instances share
+5432, each with its own database name — so they do not consume from the port pool.
+`native` is the difference §7.2 exists to test. `shared` and `external` wait: `shared` is
+an optimization and the one strategy that fails quietly, so it arrives when a specific
+service hurts, with its `doctor` check in the same change; `external` is an escape hatch,
+written the first time a dependency refuses to be cloned. Measurements decide those two.
+They do not decide the first three.
 
 ### 2.3 Window — not something we build
 
@@ -225,10 +227,13 @@ the day the base lives somewhere the instance does not.
 
 **Refreshing the base.** Re-seeding the base while someone is creating an instance is
 a race: the template mechanism takes a lock, and a copy taken mid-refresh would see
-half-written data. So a refresh writes into a second database, `base_next`, and renames
-it into place when it finishes. `base_next` accepts connections while it is being
-seeded — it has to — and the swap is what closes it: rename, then set the flag.
-Creating an instance never waits on a refresh and never sees a partial base.
+half-written data. So a refresh creates a fresh `base_next` from scratch (empty,
+migrated, then seeded), and renames it into place when it finishes. Copying the old base
+via TEMPLATE and then re-seeding would carry forward data the seed script no longer
+declares, and duplicate rows if the seed is not idempotent. A fresh creation avoids both.
+`base_next` accepts connections while it is being seeded — it has to — and the swap is
+what closes it: rename, then set the flag. Creating an instance never waits on a refresh
+and never sees a partial base.
 
 **Provenance and drift.** The base carries a one-row table *inside the database
 itself*: source name, version, when it was refreshed. Because it lives inside the

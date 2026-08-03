@@ -28,13 +28,16 @@ JSON, checked into the repo root as `plax.json`. No comments.
   "name": "eai",
   "port_pool": { "start": 3000, "end": 4000 },
   "toolchain": ".tool-versions",
+  "seed": {
+    "command": "bun run db fixtures",
+    "workdir": "."
+  },
   "services": {
     "db": {
       "isolation": "logical",
       "type": "postgres",
       "image": "ankane/pgvector:v0.5.0",
-      "env": { "POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": "postgres" },
-      "ports": { "5432": { "var": "PGPORT" } }
+      "env": { "POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": "postgres" }
     },
     "redis": {
       "isolation": "dedicated",
@@ -55,7 +58,7 @@ JSON, checked into the repo root as `plax.json`. No comments.
       "isolation": "native",
       "command": "bun run dev:app",
       "workdir": ".",
-      "port_var": "APP_PORT",
+      "port_var": "PORT",
       "default_port": 3000
     },
     {
@@ -69,16 +72,16 @@ JSON, checked into the repo root as `plax.json`. No comments.
   "env": {
     "template": ".env.example",
     "holes": {
-      "DATABASE_URL": "postgres://postgres:postgres@localhost:{{PGPORT}}/{{DB_NAME}}",
-      "DATABASE_TEST_URL": "postgres://postgres:postgres@localhost:{{PGPORT}}/{{DB_NAME}}_test",
+      "DATABASE_URL": "postgres://postgres:postgres@localhost:5432/{{DB_NAME}}",
+      "DATABASE_TEST_URL": "postgres://postgres:postgres@localhost:5432/{{DB_NAME}}_test",
       "WORKER_REDIS_URL": "redis://localhost:{{REDIS_PORT}}/0",
       "WORKER_REDIS_TEST_URL": "redis://localhost:{{REDIS_PORT}}/1",
       "CACHE_REDIS_URL": "redis://localhost:{{REDIS_PORT}}/2",
       "CACHE_REDIS_TEST_URL": "redis://localhost:{{REDIS_PORT}}/3",
-      "NEXTAUTH_URL": "http://localhost:{{APP_PORT}}",
-      "NEXT_PUBLIC_SITE_URL": "http://localhost:{{APP_PORT}}",
+      "NEXTAUTH_URL": "http://localhost:{{PORT}}",
+      "NEXT_PUBLIC_SITE_URL": "http://localhost:{{PORT}}",
       "GOTENBERG_URL": "http://localhost:{{GOTENBERG_PORT}}",
-      "MCP_ISSUER_URL": "http://localhost:{{APP_PORT}}"
+      "MCP_ISSUER_URL": "http://localhost:{{PORT}}"
     }
   }
 }
@@ -112,6 +115,32 @@ JSON, checked into the repo root as `plax.json`. No comments.
 | 3 | [`03-lifecycle.md`](03-lifecycle.md) | `up/down/ls/attach/exec` — first runnable instances |
 | 4 | [`04-state.md`](04-state.md) | `suspend/resume/status/doctor/rederive/base` — drift detection, state management |
 | 5 | [`05-ipc.md`](05-ipc.md) | `send/recv` — instance mailbox for agent IPC |
+
+---
+
+## Plan file conventions
+
+Every phase plan must contain these sections in order:
+
+| # | Section | Purpose |
+|---|---|---|
+| 1 | **Objective** | One sentence — what this phase delivers |
+| 2 | **Package layout** | File tree with one-line purpose per file |
+| 3 | **Type specifications** | Every Go struct with JSON tags, field docs, and validation rules |
+| 4 | **Algorithms** | Step-by-step pseudocode. Edge cases called out inline with `⚠` markers |
+| 5 | **CLI specification** | Exact command syntax, flags, args, exit codes, stdout/stderr behavior |
+| 6 | **Error handling** | Table of failure modes → expected behavior (error message, exit code, rollback) |
+| 7 | **Tests** | Unit tests (named functions + what they verify), integration tests (full scenario), test fixtures needed |
+| 8 | **Acceptance criteria** | Verifiable checklist of outcomes. Items must be specific ("running `X` produces output matching `Y`") |
+| 9 | **Dependencies** | Go imports with exact module paths, pinned to known versions |
+
+Rules:
+
+- Use `⚠` to mark edge cases inside algorithms
+- Use `→` to show cause → effect in error tables
+- Struct fields list their Go type and JSON tag inline: `Name string \`json:"name"\``
+- Test entries name specific functions: `TestBluePrintValidation_LogicalServiceMustHaveType`
+- Acceptance criteria are imperative: "`plax init` in the eai repo root produces valid JSON on stdout, exits 0"
 
 ---
 
