@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "name": "eai",
+  "port_pool": {
+    "start": 3000,
+    "end": 4000
+  },
+  "toolchain": ".tool-versions",
+  "seed": {
+    "command": "TODO: add seed command, e.g. 'bun run db fixtures'",
+    "workdir": "."
+  },
+  "services": {
+    "db": {
+      "isolation": "logical",
+      "type": "postgres",
+      "image": "ankane/pgvector:v0.5.0",
+      "env": {
+        "POSTGRES_PASSWORD": "postgres",
+        "POSTGRES_USER": "postgres"
+      }
+    },
+    "gotenberg": {
+      "isolation": "shared",
+      "image": "gotenberg/gotenberg:8",
+      "ports": {
+        "3000": {
+          "var": "GOTENBERG_PORT",
+          "default": "3030"
+        }
+      },
+      "command": [
+        "gotenberg",
+        "--api-port=3000",
+        "--api-timeout=90s",
+        "--libreoffice-restart-after=10"
+      ]
+    },
+    "redis": {
+      "isolation": "dedicated",
+      "image": "redis:7.2",
+      "ports": {
+        "6379": {
+          "var": "REDIS_PORT",
+          "default": "6379"
+        }
+      }
+    }
+  },
+  "processes": [
+    {
+      "name": "app",
+      "isolation": "native",
+      "command": "bun run dev:app",
+      "workdir": ".",
+      "port_var": "PORT",
+      "default_port": 3000
+    },
+    {
+      "name": "workers",
+      "isolation": "native",
+      "command": "bun run dev:workers",
+      "workdir": ".",
+      "depends_on": [
+        "app"
+      ]
+    }
+  ],
+  "env": {
+    "template": ".env.example",
+    "holes": {
+      "CACHE_REDIS_TEST_URL": "redis://localhost:{{REDIS_PORT}}/3",
+      "CACHE_REDIS_URL": "redis://localhost:{{REDIS_PORT}}/2",
+      "GOTENBERG_URL": "http://localhost:{{GOTENBERG_PORT}}",
+      "NEXTAUTH_URL": "http://localhost:{{PORT}}",
+      "NEXT_PUBLIC_SITE_URL": "http://localhost:{{PORT}}",
+      "WORKER_REDIS_TEST_URL": "redis://localhost:{{REDIS_PORT}}/1",
+      "WORKER_REDIS_URL": "redis://localhost:{{REDIS_PORT}}/0"
+    }
+  }
+}
