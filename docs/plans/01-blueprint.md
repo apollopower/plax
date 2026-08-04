@@ -280,8 +280,30 @@ container dependencies.
    }
    ```
 
-   ⚠ `init` emits these as placeholders. The `command` field comes from
-   `package.json` scripts if available, or is left as a TODO marker.
+    ⚠ `init` emits these as placeholders. The `command` field comes from
+    `package.json` scripts if available, or is left as a TODO marker.
+
+    **Why the agent is the editor, not the parser.** `plax init` is a
+    scaffold, not a general-purpose detector. It emits hardcoded eai defaults
+    (`app`, `workers`, `bun run dev:*`) because there is no reliable heuristic
+    for determining which scripts in `package.json` are the dev server vs.
+    the worker vs. the cron job. The repo's own layout — monorepo or single,
+    turbo or nx, Procfile or Makefile — carries information a parser cannot
+    infer but an agent can.
+
+    The intended workflow is:
+
+    ```
+    plax init --root . > plax.json         # scaffold
+    # Agent inspects package.json, turbo.json, Procfile, top-level scripts
+    # Agent edits plax.json: correct processes, commands, seed, toolchain
+    ```
+
+    The agent has full repo access. It can read `package.json` scripts,
+    monorepo workspace config, `Makefile` targets, and `Procfile` entries
+    simultaneously. A parser with bounded heuristics cannot beat that.
+    `init` gives the agent a structured starting point; the agent finishes
+    the job.
 
 5. **Parse `.env.example`.**
    Read `.env.example` line by line. For each line:
