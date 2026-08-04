@@ -9,10 +9,10 @@ import (
 )
 
 type Registry struct {
-	Version         int                        `json:"version"`
-	BlueprintStamp  BlueprintStamp             `json:"blueprint_stamp"`
-	Instances       map[string]InstanceRecord  `json:"instances"`
-	PortAllocations map[int]PortAllocation     `json:"port_allocations"`
+	Version         int                       `json:"version"`
+	BlueprintStamp  BlueprintStamp            `json:"blueprint_stamp"`
+	Instances       map[string]InstanceRecord `json:"instances"`
+	PortAllocations map[int]PortAllocation    `json:"port_allocations"`
 
 	path string
 }

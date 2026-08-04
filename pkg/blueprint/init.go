@@ -11,11 +11,11 @@ import (
 )
 
 type composeService struct {
-	Image       string              `yaml:"image"`
-	Ports       []any               `yaml:"ports"`
-	Volumes     []any               `yaml:"volumes"`
-	Environment any                 `yaml:"environment"` // map or list
-	Command     any                 `yaml:"command"`     // string or list
+	Image       string `yaml:"image"`
+	Ports       []any  `yaml:"ports"`
+	Volumes     []any  `yaml:"volumes"`
+	Environment any    `yaml:"environment"` // map or list
+	Command     any    `yaml:"command"`     // string or list
 }
 
 func InitFromRepo(root string) (*Blueprint, error) {
