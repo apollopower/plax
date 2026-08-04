@@ -1,14 +1,14 @@
 package blueprint
 
 type Blueprint struct {
-	Version   int                  `json:"version"`
-	Name      string               `json:"name"`
-	PortPool  PortPool             `json:"port_pool"`
-	Toolchain string               `json:"toolchain"`
-	Seed      SeedConfig           `json:"seed"`
+	Version   int                   `json:"version"`
+	Name      string                `json:"name"`
+	PortPool  PortPool              `json:"port_pool"`
+	Toolchain string                `json:"toolchain"`
+	Seed      SeedConfig            `json:"seed"`
 	Services  map[string]ServiceDef `json:"services"`
-	Processes []ProcessDef         `json:"processes"`
-	Env       EnvConfig            `json:"env"`
+	Processes []ProcessDef          `json:"processes"`
+	Env       EnvConfig             `json:"env"`
 }
 
 type PortPool struct {
@@ -46,13 +46,13 @@ const (
 )
 
 type ProcessDef struct {
-	Name        string   `json:"name"`
+	Name        string           `json:"name"`
 	Isolation   ServiceIsolation `json:"isolation"`
-	Command     string   `json:"command"`
-	Workdir     string   `json:"workdir"`
-	PortVar     string   `json:"port_var,omitempty"`
-	DefaultPort int      `json:"default_port,omitempty"`
-	DependsOn   []string `json:"depends_on,omitempty"`
+	Command     string           `json:"command"`
+	Workdir     string           `json:"workdir"`
+	PortVar     string           `json:"port_var,omitempty"`
+	DefaultPort int              `json:"default_port,omitempty"`
+	DependsOn   []string         `json:"depends_on,omitempty"`
 }
 
 type EnvConfig struct {
