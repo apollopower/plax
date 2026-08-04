@@ -108,8 +108,8 @@ services:
 	if !ok {
 		t.Fatal("expected container port 80")
 	}
-	if pd.Var != "SVC_PORT" {
-		t.Errorf("bare port should get SVC_PORT, got %q", pd.Var)
+	if pd.Var != "WEB_PORT" {
+		t.Errorf("bare port should get WEB_PORT (derived from svc name), got %q", pd.Var)
 	}
 }
 

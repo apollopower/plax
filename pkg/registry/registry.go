@@ -89,11 +89,22 @@ func (r *Registry) Save() error {
 		return fmt.Errorf("registry: mkdir: %w", err)
 	}
 
-	tmpPath := r.path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	f, err := os.CreateTemp(dir, ".registry-*.tmp")
+	if err != nil {
+		return fmt.Errorf("registry: create tmp: %w", err)
+	}
+	tmpPath := f.Name()
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("registry: write tmp: %w", err)
 	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("registry: close tmp: %w", err)
+	}
 	if err := os.Rename(tmpPath, r.path); err != nil {
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("registry: rename: %w", err)
 	}
 
@@ -101,8 +112,14 @@ func (r *Registry) Save() error {
 }
 
 func (r *Registry) AddInstance(id string, rec InstanceRecord) error {
+	if rec.ID != "" && rec.ID != id {
+		return fmt.Errorf("registry: record ID %q does not match key %q", rec.ID, id)
+	}
 	if _, exists := r.Instances[id]; exists {
 		return fmt.Errorf("registry: instance %q already exists", id)
+	}
+	if rec.ID == "" {
+		rec.ID = id
 	}
 	r.Instances[id] = rec
 	return nil
@@ -121,12 +138,9 @@ func (r *Registry) RemoveInstance(id string) error {
 	return nil
 }
 
-func (r *Registry) GetInstance(id string) (*InstanceRecord, bool) {
+func (r *Registry) GetInstance(id string) (InstanceRecord, bool) {
 	rec, ok := r.Instances[id]
-	if !ok {
-		return nil, false
-	}
-	return &rec, true
+	return rec, ok
 }
 
 func (r *Registry) AllocPort(port int, inst, svc string) error {
