@@ -34,7 +34,11 @@ func ValidateBlueprint(bp *Blueprint) []error {
 				errs = append(errs, fmt.Errorf("blueprint: service %q is logical but declares ports", svcName))
 			}
 		}
-		for _, pd := range svc.Ports {
+		for portKey, pd := range svc.Ports {
+			if pd.Var == "" {
+				errs = append(errs, fmt.Errorf("blueprint: service %q port %s has empty var name", svcName, portKey))
+				continue
+			}
 			if prev, ok := usedPortVars[pd.Var]; ok {
 				errs = append(errs, fmt.Errorf("blueprint: port var %q used by services %q and %q", pd.Var, prev, svcName))
 			} else {

@@ -201,6 +201,19 @@ func TestValidate_HoleNotInTemplate(t *testing.T) {
 	}
 }
 
+func TestValidate_EmptyPortVar(t *testing.T) {
+	bp := *validBP
+	bp.Services["bad"] = ServiceDef{
+		Isolation: IsolationDedicated,
+		Image:     "img",
+		Ports:     map[string]PortDef{"8080": {Var: ""}},
+	}
+	errs := ValidateBlueprint(&bp)
+	if !containsErr(errs, "empty var name") {
+		t.Errorf("expected empty var name error, got %v", errs)
+	}
+}
+
 func containsErr(errs []error, substr string) bool {
 	for _, e := range errs {
 		if strings.Contains(e.Error(), substr) {

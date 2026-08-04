@@ -122,10 +122,10 @@ func buildServiceDef(name string, s composeService) ServiceDef {
 		def.Ports = nil
 	} else if len(s.Volumes) > 0 {
 		def.Isolation = IsolationDedicated
-		def.Ports = buildPorts(s.Ports)
+		def.Ports = buildPorts(s.Ports, name)
 	} else {
 		def.Isolation = IsolationShared
-		def.Ports = buildPorts(s.Ports)
+		def.Ports = buildPorts(s.Ports, name)
 		fmt.Fprintf(os.Stderr, "init: service %q has no volumes, defaulting to shared — verify isolation\n", name)
 	}
 
@@ -136,7 +136,7 @@ func buildServiceDef(name string, s composeService) ServiceDef {
 	return def
 }
 
-func buildPorts(ports []any) map[string]PortDef {
+func buildPorts(ports []any, svcName string) map[string]PortDef {
 	result := map[string]PortDef{}
 	for _, p := range ports {
 		portStr := fmt.Sprint(p)
@@ -164,7 +164,7 @@ func buildPorts(ports []any) map[string]PortDef {
 		}
 
 		if varName == "" {
-			varName = "SVC_PORT"
+			varName = strings.ToUpper(svcName) + "_PORT"
 		}
 
 		result[containerPort] = PortDef{Var: varName, Default: defaultHostPort}
@@ -303,10 +303,10 @@ func detectHoles(envVars map[string]string, services map[string]ServiceDef, port
 				continue
 			}
 
-			varName, known := portVarMap[portNum]
-			if !known {
-				varName = portNum
-			}
+		varName, known := portVarMap[portNum]
+		if !known {
+			varName = "FIXME_PORT_" + portNum
+		}
 
 			pat := regexp.MustCompile(`localhost:` + regexp.QuoteMeta(portNum) + `\b`)
 			template = pat.ReplaceAllString(template, "localhost:{{"+varName+"}}")

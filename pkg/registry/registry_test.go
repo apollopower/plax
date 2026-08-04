@@ -98,9 +98,12 @@ func TestSave_AtomicWrite(t *testing.T) {
 			t.Fatalf("Save: %v", err)
 		}
 
-		tmpPath := r.path + ".tmp"
-		if _, err := os.Stat(tmpPath); err == nil {
-			t.Error("tmp file should have been removed after rename")
+		dir := filepath.Dir(r.path)
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			if filepath.Ext(e.Name()) == ".tmp" {
+				t.Error("tmp file should have been removed after rename")
+			}
 		}
 		if _, err := os.Stat(r.path); err != nil {
 			t.Errorf("target file should exist: %v", err)
