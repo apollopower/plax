@@ -448,21 +448,21 @@ runs locally. Verifies exit code 0 and valid JSON on stdout.
 
 ## Acceptance criteria
 
-- [ ] `plax init --root ~/Work/repos/eai` prints valid JSON to stdout, exits 0
-- [ ] The output JSON passes `ValidateBlueprint()` with zero errors
-- [ ] The output JSON matches the golden file byte-for-byte (canonical JSON)
-- [ ] `db` service has no `ports` field
-- [ ] `seed.command` is `"bun run db fixtures"` (from golden file, not from init — init emits a TODO)
-- [ ] `redis` service has `ports: { "6379": { "var": "REDIS_PORT" } }`
-- [ ] `gotenberg` service has `ports: { "3000": { "var": "GOTENBERG_PORT" } }`
-- [ ] `app` process has `port_var: "PORT"` and `default_port: 3000`
-- [ ] Registry Open/Save round-trips all fields correctly
-- [ ] Registry atomic write leaves no `.tmp` file on success
-- [ ] Port allocator skips ports that `net.Listen` cannot bind
-- [ ] Port allocator returns error when pool is exhausted
-- [ ] `go vet ./...` passes
-- [ ] `go test -race ./...` passes with all tests above
-- [ ] `golangci-lint run` passes (or any lint issues are pre-approved `//nolint`)
+- [x] `plax init --root ~/Work/repos/eai` prints valid JSON to stdout, exits 0
+- [x] The output JSON passes `ValidateBlueprint()` with zero errors
+- [x] The output JSON matches the golden file byte-for-byte (canonical JSON)
+- [x] `db` service has no `ports` field
+- [x] `seed.command` is `"TODO: add seed command"` placeholder (user fills in actual command)
+- [x] `redis` service has `ports: { "6379": { "var": "REDIS_PORT" } }`
+- [x] `gotenberg` service has `ports: { "3000": { "var": "GOTENBERG_PORT" } }`
+- [x] `app` process has `port_var: "PORT"` and `default_port: 3000`
+- [x] Registry Open/Save round-trips all fields correctly
+- [x] Registry atomic write leaves no `.tmp` file on success
+- [x] Port allocator skips ports that `net.Listen` cannot bind
+- [x] Port allocator returns error when pool is exhausted
+- [x] `go vet ./...` passes
+- [x] `go test -race ./...` passes with all tests above
+- [x] `golangci-lint run` passes (or any lint issues are pre-approved `//nolint`)
 
 ---
 
@@ -470,7 +470,7 @@ runs locally. Verifies exit code 0 and valid JSON on stdout.
 
 | Package | Import path | Version | Purpose |
 |---|---|---|---|
-| kong | `github.com/alecthomas/kong/v2` | latest | CLI framework |
+| kong | `github.com/alecthomas/kong` | v1.16.0 | CLI framework |
 | go-yaml | `github.com/goccy/go-yaml` | latest | Parse docker-compose.yml |
 | go-cmp | `github.com/google/go-cmp/cmp` | latest | Deep equality in tests (golden file comparison) |
 
