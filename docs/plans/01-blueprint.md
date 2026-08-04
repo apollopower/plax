@@ -19,7 +19,7 @@ pkg/
     validate.go               # ValidateBlueprint(blueprint) []error
     validate_test.go          # One test per validation rule
     init.go                   # InitFromRepo(root string) (*Blueprint, error)
-    init_test.go              # Runs against eai repo fixtures, golden-file output
+    init_test.go              # Runs against sample repo fixtures, golden-file output
   registry/
     registry.go               # Registry, InstanceRecord, PortAllocation, atomic read/write
     registry_test.go          # CRUD round-trip, concurrent read/write (sequential safe for now)
@@ -259,7 +259,7 @@ container dependencies.
    ⚠ Logical services get no `ports` field in the output.
 
 4. **Build process list.**
-   Emit two entries (hardcoded for the eai target; other repos will need
+    Emit two entries (hardcoded for the sample target; other repos will need
    this filled in manually):
 
    ```json
@@ -284,7 +284,7 @@ container dependencies.
     `package.json` scripts if available, or is left as a TODO marker.
 
     **Why the agent is the editor, not the parser.** `plax init` is a
-    scaffold, not a general-purpose detector. It emits hardcoded eai defaults
+     scaffold, not a general-purpose detector. It emits hardcoded example defaults
     (`app`, `workers`, `bun run dev:*`) because there is no reliable heuristic
     for determining which scripts in `package.json` are the dev server vs.
     the worker vs. the cron job. The repo's own layout — monorepo or single,
@@ -318,7 +318,7 @@ container dependencies.
    For each variable in the env template:
    - If its value matches `localhost:\d+` (contains `localhost:` followed by a port number) → candidate hole
    - ⚠ EXCEPT: if the port number is 5432 AND a logical postgres service was detected in step 2:
-     do NOT flag it as a hole — postgres port is shared across instances, so `DATABASE_URL=postgres://postgres:postgres@localhost:5432/eai_dev` stays static (the DB name substitution happens via `{{DB_NAME}}` in the blueprint hole template, which the user writes manually)
+     do NOT flag it as a hole — postgres port is shared across instances, so `DATABASE_URL=postgres://postgres:postgres@localhost:5432/sample_dev` stays static (the DB name substitution happens via `{{DB_NAME}}` in the blueprint hole template, which the user writes manually)
    - For all other `localhost:PORT` candidates, emit a hole template using `{{PORT_VAR}}` syntax derived from the variable or service name
 
    Emit the `holes` map: each key is the env var name, each value is a
@@ -370,9 +370,9 @@ plax init [--root <path>]
 
 Example usage:
 ```
-cd ~/Work/repos/eai
+cd ~/Work/repos/sample
 plax init > plax.json
-plax init --root ~/Work/repos/eai > plax.json
+plax init --root ~/Work/repos/sample > plax.json
 ```
 
 `plax init` does NOT create `plax.json`. It prints to stdout. The user
@@ -397,12 +397,12 @@ redirects or copies.
 
 ### Test fixtures
 
-Create `pkg/blueprint/testdata/eai/` directory containing copies of:
-- `docker-compose.yml` — the eai compose file
-- `.env.example` — the eai env example file
+Create `pkg/blueprint/testdata/sample/` directory containing copies of:
+- `docker-compose.yml` — the sample compose file
+- `.env.example` — the sample env example file
 - `plax.json.golden` — the expected golden output of `plax init` on these inputs
 
-The golden file is committed. Tests compare `InitFromRepo(testdata/eai/)`
+The golden file is committed. Tests compare `InitFromRepo(testdata/sample/)`
 output against the golden file using `go-cmp` or `bytes.Equal` after
 normalizing JSON (canonical ordering via `json.Marshal` + `json.Indent`).
 ⚠ Use a `cmp.Transformer` to ignore field ordering in maps and slices.
@@ -414,7 +414,7 @@ normalizing JSON (canonical ordering via `json.Marshal` + `json.Indent`).
 - `TestBlueprintUnmarshal_UnknownFields` — JSON with extra keys does not error (`json.Decoder.DisallowUnknownFields()` is NOT used — forward-compat)
 
 **`pkg/blueprint/validate_test.go`:**
-- `TestValidate_ValidBlueprint` — eai golden blueprint passes all rules
+- `TestValidate_ValidBlueprint` — sample golden blueprint passes all rules
 - `TestValidate_VersionNotOne` — version 2 returns "unsupported version 2"
 - `TestValidate_MissingName` — empty name returns "name is required"
 - `TestValidate_PortPoolInvalid` — start=5000 end=4000 → "range invalid"; start=0 → "range invalid" (> 1024 check)
@@ -429,7 +429,7 @@ normalizing JSON (canonical ordering via `json.Marshal` + `json.Indent`).
 - `TestValidate_HoleNotInTemplate` — hole key absent from template file → warning (not error)
 
 **`pkg/blueprint/init_test.go`:**
-- `TestInit_EaiRepo_GoldenMatch` — `InitFromRepo("testdata/eai/")` output matches `testdata/eai/plax.json.golden`
+- `TestInit_SampleRepo_GoldenMatch` — `InitFromRepo("testdata/sample/")` output matches `testdata/sample/plax.json.golden`
 - `TestInit_MissingCompose` — returns error, error message contains "not found"
 - `TestInit_MissingEnvExample` — succeeds with empty holes map
 - `TestInit_ComposeWithNoImage` — service without image is skipped with warning
@@ -462,15 +462,15 @@ normalizing JSON (canonical ordering via `json.Marshal` + `json.Indent`).
 
 ### Integration test
 
-`TestEaiInitWithoutErrors` — runs `plax init --root <actual eai repo path>`.
-This test is **skipped in CI** (requires the eai repo to be present) but
+`TestSampleInitWithoutErrors` — runs `plax init --root <actual sample repo path>`.
+This test is **skipped in CI** (requires the sample repo to be present) but
 runs locally. Verifies exit code 0 and valid JSON on stdout.
 
 ---
 
 ## Acceptance criteria
 
-- [x] `plax init --root ~/Work/repos/eai` prints valid JSON to stdout, exits 0
+- [x] `plax init --root <sample repo root>` prints valid JSON to stdout, exits 0
 - [x] The output JSON passes `ValidateBlueprint()` with zero errors
 - [x] The output JSON matches the golden file byte-for-byte (canonical JSON)
 - [x] `db` service has no `ports` field

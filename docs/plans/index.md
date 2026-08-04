@@ -8,7 +8,7 @@ Built for coding agents working in parallel.
 
 ## Target repo
 
-**Empwr.ai (eai)** — `~/Work/repos/eai`
+**Example repo** — `~/Work/repos/example`
 
 - Next.js (Pages Router) + tRPC + React + Tailwind + Postgres + Redis + BullMQ + Gotenberg
 - Toolchain: Node 22.19.0, Bun 1.3.11 (`.tool-versions`)
@@ -25,7 +25,7 @@ JSON, checked into the repo root as `plax.json`. No comments.
 ```jsonc
 {
   "version": 1,
-  "name": "eai",
+  "name": "sample",
   "port_pool": { "start": 3000, "end": 4000 },
   "toolchain": ".tool-versions",
   "seed": {
@@ -101,7 +101,7 @@ JSON, checked into the repo root as `plax.json`. No comments.
 | Redis isolation | Dedicated (one container per instance) |
 | Gotenberg isolation | Dedicated (one container per instance) |
 | App processes | Native (run in worktree with derived `.env`) |
-| Base seed | `bun run db fixtures` for eai; configurable per repo |
+| Base seed | `bun run db fixtures` for the sample; configurable per repo |
 | Base reset | Drop and recreate base DB with schema only, no data |
 
 ---
@@ -140,7 +140,7 @@ Rules:
 - Use `→` to show cause → effect in error tables
 - Struct fields list their Go type and JSON tag inline: `Name string \`json:"name"\``
 - Test entries name specific functions: `TestBluePrintValidation_LogicalServiceMustHaveType`
-- Acceptance criteria are imperative: "`plax init` in the eai repo root produces valid JSON on stdout, exits 0"
+- Acceptance criteria are imperative: "`plax init` in a repo root produces valid JSON on stdout, exits 0"
 
 ---
 

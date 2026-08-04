@@ -38,7 +38,7 @@ The main orchestration command. Given an instance name (e.g. `i1`):
    - Spawn the command in the worktree directory with the merged environment
    - Record the PID
 
-   For the eai app process (`port_var: "PORT"`, `command: "bun run dev:app"`),
+   For a sample app process (`port_var: "PORT"`, `command: "bun run dev:app"`),
    this means `PORT=3001` is set in the environment before spawning. `next dev`
    reads `PORT` from the environment and listens on the allocated port
    automatically.
@@ -144,4 +144,4 @@ is appended at the end of the file.
 - [ ] Process supervision (spawn, track PID, signal on teardown)
 - [ ] Process port injection: set `PORT` env var + `{{VAR}}` template
       substitution in command strings
-- [ ] Two running instances of eai on the same machine, non-colliding
+- [ ] Two running instances of the sample on the same machine, non-colliding

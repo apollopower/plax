@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-func TestInit_EaiRepo_GoldenMatch(t *testing.T) {
-	root := "testdata/eai"
+func TestInit_SampleRepo_GoldenMatch(t *testing.T) {
+	root := "testdata/sample"
 	bp, err := InitFromRepo(root)
 	if err != nil {
 		t.Fatalf("InitFromRepo: %v", err)
@@ -204,8 +204,8 @@ services:
 	}
 }
 
-func TestInit_EaiRepo_PassesValidation(t *testing.T) {
-	root := "testdata/eai"
+func TestInit_SampleRepo_PassesValidation(t *testing.T) {
+	root := "testdata/sample"
 	bp, err := InitFromRepo(root)
 	if err != nil {
 		t.Fatalf("InitFromRepo: %v", err)
