@@ -70,11 +70,11 @@ func ValidateBlueprint(bp *Blueprint) []error {
 	if bp.Seed.Workdir == "" {
 		errs = append(errs, fmt.Errorf("blueprint: seed.workdir is required"))
 	}
-	if bp.Env.Template == "" {
+	if len(bp.Env.Holes) > 0 && bp.Env.Template == "" {
 		errs = append(errs, fmt.Errorf("blueprint: env.template is required"))
 	}
 
-	if bp.Env.Template != "" {
+	if bp.Env.Template != "" && len(bp.Env.Holes) > 0 {
 		errs = append(errs, checkHolesInTemplate(bp.Env.Template, bp.Env.Holes)...)
 	}
 
@@ -84,7 +84,7 @@ func ValidateBlueprint(bp *Blueprint) []error {
 func checkHolesInTemplate(templatePath string, holes map[string]string) []error {
 	data, err := os.ReadFile(templatePath)
 	if err != nil {
-		return nil
+		return []error{fmt.Errorf("blueprint: cannot read template file %q: %w", templatePath, err)}
 	}
 	content := string(data)
 	var warns []error

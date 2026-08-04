@@ -42,11 +42,12 @@ const (
 	IsolationDedicated ServiceIsolation = "dedicated"
 	IsolationShared    ServiceIsolation = "shared"
 	IsolationExternal  ServiceIsolation = "external"
+	IsolationNative    ServiceIsolation = "native"
 )
 
 type ProcessDef struct {
 	Name        string   `json:"name"`
-	Isolation   string   `json:"isolation"`
+	Isolation   ServiceIsolation `json:"isolation"`
 	Command     string   `json:"command"`
 	Workdir     string   `json:"workdir"`
 	PortVar     string   `json:"port_var,omitempty"`

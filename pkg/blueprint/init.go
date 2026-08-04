@@ -65,9 +65,7 @@ func InitFromRepo(root string) (*Blueprint, error) {
 
 	bp.Env.Holes = detectHoles(envVars, bp.Services, portVarMap)
 
-	if bp.Name == "" {
-		bp.Name = filepath.Base(root)
-	}
+	bp.Name = filepath.Base(root)
 
 	return bp, nil
 }
@@ -265,8 +263,7 @@ func findComment(s string) int {
 func buildPortVarMap(services map[string]ServiceDef, processes []ProcessDef) map[string]string {
 	m := map[string]string{}
 	for _, svc := range services {
-		for containerPort, pd := range svc.Ports {
-			m[containerPort] = pd.Var
+		for _, pd := range svc.Ports {
 			if pd.Default != "" {
 				m[pd.Default] = pd.Var
 			}
@@ -293,22 +290,32 @@ func detectHoles(envVars map[string]string, services map[string]ServiceDef, port
 
 	holes := map[string]string{}
 	for key, val := range envVars {
-		m := portRef.FindStringSubmatch(val)
-		if m == nil {
-			continue
-		}
-		portNum := m[1]
-		if portNum == "5432" && hasLogicalPostgres {
+		matches := portRef.FindAllStringSubmatch(val, -1)
+		if len(matches) == 0 {
 			continue
 		}
 
-		varName, known := portVarMap[portNum]
-		if !known {
-			varName = portNum
+		template := val
+		replaced := false
+		for _, m := range matches {
+			portNum := m[1]
+			if portNum == "5432" && hasLogicalPostgres {
+				continue
+			}
+
+			varName, known := portVarMap[portNum]
+			if !known {
+				varName = portNum
+			}
+
+			pat := regexp.MustCompile(`localhost:` + regexp.QuoteMeta(portNum) + `\b`)
+			template = pat.ReplaceAllString(template, "localhost:{{"+varName+"}}")
+			replaced = true
 		}
 
-		template := portRef.ReplaceAllString(val, "localhost:{{"+varName+"}}")
-		holes[key] = template
+		if replaced {
+			holes[key] = template
+		}
 	}
 	return holes
 }
@@ -317,7 +324,7 @@ func defaultProcesses() []ProcessDef {
 	return []ProcessDef{
 		{
 			Name:        "app",
-			Isolation:   "native",
+			Isolation:   IsolationNative,
 			Command:     "bun run dev:app",
 			Workdir:     ".",
 			PortVar:     "PORT",
@@ -325,7 +332,7 @@ func defaultProcesses() []ProcessDef {
 		},
 		{
 			Name:      "workers",
-			Isolation: "native",
+			Isolation: IsolationNative,
 			Command:   "bun run dev:workers",
 			Workdir:   ".",
 			DependsOn: []string{"app"},

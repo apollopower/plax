@@ -211,6 +211,8 @@ func TestInit_EaiRepo_PassesValidation(t *testing.T) {
 		t.Fatalf("InitFromRepo: %v", err)
 	}
 
+	bp.Env.Template = filepath.Join(root, bp.Env.Template)
+
 	errs := ValidateBlueprint(bp)
 	if len(errs) > 0 {
 		t.Errorf("expected no validation errors, got: %v", errs)

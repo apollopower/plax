@@ -28,7 +28,7 @@ var validBP = &Blueprint{
 	Processes: []ProcessDef{
 		{Name: "app", Isolation: "native", Command: "next dev", Workdir: ".", PortVar: "PORT", DefaultPort: 3000},
 	},
-	Env: EnvConfig{Template: ".env.example", Holes: map[string]string{"DATABASE_URL": "postgres://localhost:{{PORT}}/db"}},
+	Env: EnvConfig{Template: ".env.example", Holes: map[string]string{}},
 }
 
 func TestValidate_ValidBlueprint(t *testing.T) {
@@ -175,6 +175,7 @@ func TestValidate_SeedWorkdirMissing(t *testing.T) {
 func TestValidate_EnvTemplateMissing(t *testing.T) {
 	bp := *validBP
 	bp.Env.Template = ""
+	bp.Env.Holes = map[string]string{"K": "v"}
 	errs := ValidateBlueprint(&bp)
 	if !containsErr(errs, "env.template is required") {
 		t.Errorf("expected env.template error, got %v", errs)
