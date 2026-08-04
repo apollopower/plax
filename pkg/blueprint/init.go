@@ -303,10 +303,10 @@ func detectHoles(envVars map[string]string, services map[string]ServiceDef, port
 				continue
 			}
 
-		varName, known := portVarMap[portNum]
-		if !known {
-			varName = "FIXME_PORT_" + portNum
-		}
+			varName, known := portVarMap[portNum]
+			if !known {
+				varName = "FIXME_PORT_" + portNum
+			}
 
 			pat := regexp.MustCompile(`localhost:` + regexp.QuoteMeta(portNum) + `\b`)
 			template = pat.ReplaceAllString(template, "localhost:{{"+varName+"}}")
