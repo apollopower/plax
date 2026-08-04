@@ -46,6 +46,9 @@ type Provenance struct {
 	Toolchain   string `json:"toolchain"`
 }
 
+// Opens an existing registry file or returns an empty, ready-to-use registry
+// if the file does not exist. A separate Create function is unnecessary — the
+// caller always wants a working registry, whether or not a file exists yet.
 func Open(path string) (*Registry, error) {
 	r := &Registry{
 		Version:         1,
@@ -89,6 +92,8 @@ func (r *Registry) Save() error {
 		return fmt.Errorf("registry: mkdir: %w", err)
 	}
 
+	// Write to a uniquely-named temp file then atomically rename into place,
+	// so a crash never leaves a partial or corrupted registry on disk.
 	f, err := os.CreateTemp(dir, ".registry-*.tmp")
 	if err != nil {
 		return fmt.Errorf("registry: create tmp: %w", err)

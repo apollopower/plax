@@ -18,10 +18,10 @@ func ValidateBlueprint(bp *Blueprint) []error {
 	}
 
 	if bp.PortPool.Start < 1024 || bp.PortPool.End < 1024 {
-		errs = append(errs, fmt.Errorf("blueprint: port_pool range invalid"))
+		errs = append(errs, fmt.Errorf("blueprint: port_pool.start (%d) or end (%d) is a system port", bp.PortPool.Start, bp.PortPool.End))
 	}
 	if bp.PortPool.Start >= bp.PortPool.End {
-		errs = append(errs, fmt.Errorf("blueprint: port_pool range invalid"))
+		errs = append(errs, fmt.Errorf("blueprint: port_pool.start (%d) must be less than end (%d)", bp.PortPool.Start, bp.PortPool.End))
 	}
 
 	usedPortVars := map[string]string{}
@@ -91,13 +91,13 @@ func checkHolesInTemplate(templatePath string, holes map[string]string) []error 
 		return []error{fmt.Errorf("blueprint: cannot read template file %q: %w", templatePath, err)}
 	}
 	content := string(data)
-	var warns []error
+	var errs []error
 	for key := range holes {
 		if !lineHasKey(content, key) {
-			warns = append(warns, fmt.Errorf("blueprint: hole %q not found in template file %q (warning)", key, templatePath))
+			errs = append(errs, fmt.Errorf("blueprint: hole %q not found in template file %q (warning)", key, templatePath))
 		}
 	}
-	return warns
+	return errs
 }
 
 func lineHasKey(content, key string) bool {

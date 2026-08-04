@@ -19,17 +19,15 @@ func New(start, end int, reg *registry.Registry) *PortPool {
 }
 
 func (p *PortPool) Allocate(instance, service string) (int, error) {
-	start := p.start
-	end := p.end
-
-	if start == 0 {
-		start = 3000
+	// Sensible defaults for web/API services when the blueprint omits the pool range.
+	if p.start == 0 {
+		p.start = 3000
 	}
-	if end == 0 {
-		end = 4000
+	if p.end == 0 {
+		p.end = 4000
 	}
 
-	for port := start; port <= end; port++ {
+	for port := p.start; port <= p.end; port++ {
 		if _, exists := p.registry.PortAllocations[port]; exists {
 			continue
 		}
@@ -42,7 +40,7 @@ func (p *PortPool) Allocate(instance, service string) (int, error) {
 		return port, nil
 	}
 
-	return 0, fmt.Errorf("portpool: no free port in range %d-%d", start, end)
+	return 0, fmt.Errorf("portpool: no free port in range %d-%d", p.start, p.end)
 }
 
 func (p *PortPool) Release(port int) {
