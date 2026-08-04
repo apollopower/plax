@@ -24,8 +24,7 @@ func main() {
 		kong.Description("Run many parallel dev environments for coding agents."),
 		kong.UsageOnError(),
 	)
-	switch {
-	case ctx.Command() == "init":
+	if ctx.Command() == "init" {
 		err := runInit(cli.Init)
 		ctx.FatalIfErrorf(err)
 	}

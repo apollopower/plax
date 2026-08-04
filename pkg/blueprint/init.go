@@ -91,6 +91,7 @@ func parseComposeFile(path string) (map[string]composeService, error) {
 		}
 		svcData, err := yaml.Marshal(item.Value)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "init: warning: service %q has unparseable definition: %v\n", name, err)
 			continue
 		}
 		var svc composeService
@@ -104,6 +105,8 @@ func parseComposeFile(path string) (map[string]composeService, error) {
 	return result, nil
 }
 
+// Matches compose port expressions: ${VAR:-default}:container and ${VAR}:container.
+// Groups: 1=env var name, 2=default host port, 3=container port (may be empty).
 var composePortExpr = regexp.MustCompile(
 	`^\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(\d+))?\}(?::(\d+))?$`,
 )
@@ -116,6 +119,8 @@ func buildServiceDef(name string, s composeService) ServiceDef {
 		Env:   parseEnvironment(s.Environment),
 	}
 
+	// Postgres supports template-clone for fast per-instance databases sharing one host port,
+	// so it gets logical isolation. Other services with volumes get dedicated containers.
 	if img := strings.ToLower(s.Image); strings.Contains(img, "postgres") || strings.Contains(img, "pgvector") {
 		def.Isolation = IsolationLogical
 		def.Type = "postgres"
@@ -260,6 +265,8 @@ func findComment(s string) int {
 	return -1
 }
 
+// Maps host-side default port numbers to their env var names, used by detectHoles
+// to resolve localhost:PORT references to the correct {{VAR}} template variable.
 func buildPortVarMap(services map[string]ServiceDef, processes []ProcessDef) map[string]string {
 	m := map[string]string{}
 	for _, svc := range services {
@@ -277,6 +284,9 @@ func buildPortVarMap(services map[string]ServiceDef, processes []ProcessDef) map
 	return m
 }
 
+// Scans .env.example values for localhost:PORT references and replaces them with
+// {{VAR_NAME}} template holes. Port 5432 is skipped when a logical postgres service
+// exists (it stays static; only the database name varies per instance).
 func detectHoles(envVars map[string]string, services map[string]ServiceDef, portVarMap map[string]string) map[string]string {
 	hasLogicalPostgres := false
 	for _, svc := range services {

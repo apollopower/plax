@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestBlueprintMarshalRoundTrip(t *testing.T) {
+func TestBlueprint_MarshalRoundTrip(t *testing.T) {
 	bp := &Blueprint{
 		Version:   1,
 		Name:      "test",
@@ -43,7 +43,7 @@ func TestBlueprintMarshalRoundTrip(t *testing.T) {
 	}
 }
 
-func TestBlueprintUnmarshal_UnknownFields(t *testing.T) {
+func TestBlueprint_UnknownFields(t *testing.T) {
 	input := `{"version":1,"name":"x","port_pool":{"start":3000,"end":4000},"seed":{"command":"x","workdir":"."},"env":{"template":"x","holes":{}},"unknown_field":"should_not_cause_error"}`
 	var bp Blueprint
 	if err := json.Unmarshal([]byte(input), &bp); err != nil {

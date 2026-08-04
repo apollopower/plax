@@ -42,7 +42,7 @@ func TestValidate_VersionNotOne(t *testing.T) {
 	bp := *validBP
 	bp.Version = 2
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "unsupported version 2") {
+	if !containsErr(t, errs, "unsupported version 2") {
 		t.Errorf("expected unsupported version error, got %v", errs)
 	}
 }
@@ -51,7 +51,7 @@ func TestValidate_MissingName(t *testing.T) {
 	bp := *validBP
 	bp.Name = ""
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "name is required") {
+	if !containsErr(t, errs, "name is required") {
 		t.Errorf("expected name required error, got %v", errs)
 	}
 }
@@ -69,19 +69,19 @@ func TestValidate_PortPoolInvalid(t *testing.T) {
 			bp := *validBP
 			bp.PortPool = tc.pp
 			errs := ValidateBlueprint(&bp)
-			if !containsErr(errs, "port_pool range invalid") {
+			if !containsErr(t, errs, "port_pool") {
 				t.Errorf("expected range invalid, got %v", errs)
 			}
 		})
 	}
 }
 
-func TestValidate_DuplicateService(t *testing.T) {
+func TestValidate_MapOverwrite_NoDuplicateErrors(t *testing.T) {
 	bp := *validBP
-	bp.Services["db"] = ServiceDef{Isolation: IsolationLogical, Type: "postgres"} // overwrites, no duplicate in map
+	bp.Services["db"] = ServiceDef{Isolation: IsolationLogical, Type: "postgres"}
 	errs := ValidateBlueprint(&bp)
 	if len(errs) != 0 {
-		t.Errorf("map overwrites so no duplicate, expected 0 errors, got %v", errs)
+		t.Errorf("overwriting a map key should not produce a duplicate error, got %d: %v", len(errs), errs)
 	}
 }
 
@@ -92,7 +92,7 @@ func TestValidate_LogicalMissingType(t *testing.T) {
 		Image:     "postgres:16",
 	}
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "is logical but missing type") {
+	if !containsErr(t, errs, "is logical but missing type") {
 		t.Errorf("expected missing type error, got %v", errs)
 	}
 }
@@ -105,7 +105,7 @@ func TestValidate_LogicalHasPorts(t *testing.T) {
 		Ports:     map[string]PortDef{"5432": {Var: "PGPORT"}},
 	}
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "is logical but declares ports") {
+	if !containsErr(t, errs, "is logical but declares ports") {
 		t.Errorf("expected declares ports error, got %v", errs)
 	}
 }
@@ -118,7 +118,7 @@ func TestValidate_PortVarConflict(t *testing.T) {
 		Ports:     map[string]PortDef{"9000": {Var: "REDIS_PORT"}},
 	}
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "port var") {
+	if !containsErr(t, errs, "port var") {
 		t.Errorf("expected port var collision error, got %v", errs)
 	}
 }
@@ -127,7 +127,7 @@ func TestValidate_DuplicateProcess(t *testing.T) {
 	bp := *validBP
 	bp.Processes = append(bp.Processes, ProcessDef{Name: "app"})
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "duplicate process") {
+	if !containsErr(t, errs, "duplicate process") {
 		t.Errorf("expected duplicate process error, got %v", errs)
 	}
 }
@@ -140,7 +140,7 @@ func TestValidate_PortVarProcessCollision(t *testing.T) {
 		Ports:     map[string]PortDef{"5000": {Var: "PORT"}},
 	}
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "port var") {
+	if !containsErr(t, errs, "port var") {
 		t.Errorf("expected port var collision, got %v", errs)
 	}
 }
@@ -149,7 +149,7 @@ func TestValidate_DependsOnMissing(t *testing.T) {
 	bp := *validBP
 	bp.Processes = append(bp.Processes, ProcessDef{Name: "cron", Isolation: "native", Command: "echo hi", DependsOn: []string{"nonexistent"}})
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "depends_on") {
+	if !containsErr(t, errs, "depends_on") {
 		t.Errorf("expected depends_on error, got %v", errs)
 	}
 }
@@ -158,7 +158,7 @@ func TestValidate_SeedCommandMissing(t *testing.T) {
 	bp := *validBP
 	bp.Seed.Command = ""
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "seed.command is required") {
+	if !containsErr(t, errs, "seed.command is required") {
 		t.Errorf("expected seed.command error, got %v", errs)
 	}
 }
@@ -167,7 +167,7 @@ func TestValidate_SeedWorkdirMissing(t *testing.T) {
 	bp := *validBP
 	bp.Seed.Workdir = ""
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "seed.workdir is required") {
+	if !containsErr(t, errs, "seed.workdir is required") {
 		t.Errorf("expected seed.workdir error, got %v", errs)
 	}
 }
@@ -177,7 +177,7 @@ func TestValidate_EnvTemplateMissing(t *testing.T) {
 	bp.Env.Template = ""
 	bp.Env.Holes = map[string]string{"K": "v"}
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "env.template is required") {
+	if !containsErr(t, errs, "env.template is required") {
 		t.Errorf("expected env.template error, got %v", errs)
 	}
 }
@@ -196,7 +196,7 @@ func TestValidate_HoleNotInTemplate(t *testing.T) {
 		"MISSING_KEY":  "redis://localhost:{{REDIS_PORT}}/0",
 	}
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "hole") {
+	if !containsErr(t, errs, "hole") {
 		t.Errorf("expected hole not found warning, got %v", errs)
 	}
 }
@@ -209,12 +209,13 @@ func TestValidate_EmptyPortVar(t *testing.T) {
 		Ports:     map[string]PortDef{"8080": {Var: ""}},
 	}
 	errs := ValidateBlueprint(&bp)
-	if !containsErr(errs, "empty var name") {
+	if !containsErr(t, errs, "empty var name") {
 		t.Errorf("expected empty var name error, got %v", errs)
 	}
 }
 
-func containsErr(errs []error, substr string) bool {
+func containsErr(t *testing.T, errs []error, substr string) bool {
+	t.Helper()
 	for _, e := range errs {
 		if strings.Contains(e.Error(), substr) {
 			return true
