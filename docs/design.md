@@ -80,6 +80,26 @@ for the variable list, then emits a skeleton: every service present, `dedicated`
 default, every variable present with its example value. That is a parser, and it runs
 offline.
 
+The skeleton is intentionally incomplete. `init` emits hardcoded defaults for processes
+(`app` + `workers` with `bun` commands) and a placeholder seed command, because no
+heuristic can reliably determine which `package.json` script is the dev server, which
+is the worker, and which is the test runner. The repo's own structure — monorepo layout,
+turbo or nx config, Procfile, Makefile — carries that information, but extracting it
+requires judgment a parser does not have.
+
+An AI agent does. An agent with full repo access can read `package.json`, `turbo.json`,
+`Procfile`, `Makefile`, and the scripts directory simultaneously, then fill in the gaps.
+`init` gives it a structured starting point and the agent finishes the job:
+
+```
+plax init --root . > plax.json
+# Agent reads the JSON, inspects repo, edits:
+#   - processes: add/rename processes, set correct commands
+#   - seed: fill in the actual seed command
+#   - toolchain: set to .node-version or mise.toml
+#   - isolation: fix any misclassified services
+```
+
 What is left is judgment — which services hold state, and which values have to vary per
 instance. An AI agent is good at that, and it is the intended path: an API call, or
 whatever agent CLI is at hand. No model ships inside the tool; bundling weights for this

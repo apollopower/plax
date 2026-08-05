@@ -9,3 +9,9 @@ coverage.*
 
 # Editor / OS
 .DS_Store
+
+# Temp files from atomic writes
+*.tmp
+
+# Plax runtime directory (registry, worktrees, mailboxes)
+/.plax/

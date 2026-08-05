@@ -26,7 +26,7 @@ Blueprint example (for a Next.js + Postgres + Redis repo):
 ```json
 {
   "version": 1,
-  "name": "eai",
+  "name": "sample",
   "port_pool": { "start": 3000, "end": 4000 },
   "seed": {
     "command": "bun run db fixtures",

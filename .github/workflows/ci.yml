@@ -1,0 +1,51 @@
+name: test-and-lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          check-latest: true
+
+      - name: go mod tidy check
+        run: |
+          cp go.mod go.mod.orig
+          cp go.sum go.sum.orig
+          go mod tidy
+          diff go.mod.orig go.mod || (echo "go.mod is out of sync — run 'go mod tidy'" && exit 1)
+          diff go.sum.orig go.sum || (echo "go.sum is out of sync — run 'go mod tidy'" && exit 1)
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test -race -count=1 ./...
+
+      - name: gofmt check
+        run: |
+          fmt=$(gofmt -s -l .)
+          if [ -n "$fmt" ]; then
+            echo "files not formatted; run: gofmt -s -w ."
+            echo "$fmt"
+            exit 1
+          fi
+
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
