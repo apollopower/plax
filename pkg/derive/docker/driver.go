@@ -2,13 +2,14 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
@@ -137,6 +138,12 @@ func (d *Driver) RemoveVolume(ctx context.Context, volumeName string) error {
 }
 
 func (d *Driver) pullImage(ctx context.Context, imageName string) error {
+	// Pull only when absent: unconditional pulls break offline use and add
+	// latency to every start.
+	if _, _, err := d.cli.ImageInspectWithRaw(ctx, imageName); err == nil {
+		return nil
+	}
+
 	rd, err := d.cli.ImagePull(ctx, imageName, image.PullOptions{})
 	if err != nil {
 		return fmt.Errorf("docker: pull %s: %w", imageName, err)
@@ -152,7 +159,7 @@ func (d *Driver) pullImage(ctx context.Context, imageName string) error {
 		}
 		_, err := rd.Read(buf)
 		if err != nil {
-			if err.Error() == "EOF" {
+			if errors.Is(err, io.EOF) {
 				break
 			}
 			return fmt.Errorf("docker: pull %s: read progress: %w", imageName, err)
@@ -193,5 +200,3 @@ func sanitizeName(name string) string {
 	n = strings.ReplaceAll(n, "_", "-")
 	return n
 }
-
-var _ = network.ConnectOptions{}

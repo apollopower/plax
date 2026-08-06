@@ -3,19 +3,22 @@ package postgres
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type ProvenanceRow struct {
-	Version     int    `json:"version"`
-	Source      string `json:"source"`
-	CreatedAt   string `json:"created_at"`
-	SeedCommand string `json:"seed_command"`
-	SchemaHash  string `json:"schema_hash"`
+	Version     int       `json:"version"`
+	Source      string    `json:"source"`
+	CreatedAt   time.Time `json:"created_at"`
+	SeedCommand string    `json:"seed_command"`
+	SchemaHash  string    `json:"schema_hash"`
 }
 
 const provenanceDDL = `
@@ -75,12 +78,12 @@ func ReadProvenance(ctx context.Context, pool *pgxpool.Pool) (*ProvenanceRow, er
 
 	row := &ProvenanceRow{}
 	err = pool.QueryRow(ctx, `
-		SELECT version, source, created_at::TEXT, seed_command, schema_hash
+		SELECT version, source, created_at, seed_command, schema_hash
 		FROM _plax_provenance
 		LIMIT 1
 	`).Scan(&row.Version, &row.Source, &row.CreatedAt, &row.SeedCommand, &row.SchemaHash)
 	if err != nil {
-		if err.Error() == "no rows in result set" {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("provenance: read row: %w", err)

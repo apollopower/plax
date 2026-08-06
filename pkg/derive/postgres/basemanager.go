@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -9,14 +10,23 @@ import (
 	"time"
 
 	"github.com/apollopower/plax/pkg/blueprint"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// ErrDeferredSwap marks a refresh whose staging completed but whose swap
+// could not finish because the old base stayed in use. The staged base_next
+// is left in place; a later refresh resumes the swap. The CLI maps this to
+// exit code 2.
+var ErrDeferredSwap = errors.New("swap deferred")
 
 type BaseManager struct {
 	pool     *pgxpool.Pool
 	bp       *blueprint.Blueprint
 	repoRoot string
 	baseName string
+	nextName string
 	dsn      string
 }
 
@@ -29,6 +39,13 @@ type BaseInfo struct {
 }
 
 func NewBaseManager(ctx context.Context, connString string, repoRoot string, bp *blueprint.Blueprint) (*BaseManager, error) {
+	// dsnForDB rewrites the database name by string surgery, which only
+	// works on URL-form DSNs. Reject key=value DSNs up front instead of
+	// silently connecting every per-database pool to the maintenance DB.
+	if !strings.HasPrefix(connString, "postgres://") && !strings.HasPrefix(connString, "postgresql://") {
+		return nil, fmt.Errorf("postgres: connString must be URL form (postgres://user:pass@host:port/dbname)")
+	}
+
 	pool, err := pgxpool.New(ctx, connString)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: connect: %w", err)
@@ -44,6 +61,7 @@ func NewBaseManager(ctx context.Context, connString string, repoRoot string, bp 
 		bp:       bp,
 		repoRoot: repoRoot,
 		baseName: "plax_base",
+		nextName: "plax_base_next",
 		dsn:      connString,
 	}, nil
 }
@@ -53,35 +71,35 @@ func (bm *BaseManager) Close() {
 }
 
 func (bm *BaseManager) CreateBase(ctx context.Context) error {
-	exists, _, err := bm.dbExists(ctx, bm.baseName)
+	exists, locked, err := bm.dbExists(ctx, bm.baseName)
 	if err != nil {
 		return err
 	}
 	if exists {
-		return nil
+		if locked {
+			return nil
+		}
+		return fmt.Errorf("base exists but is not locked — run 'plax base reset' to recreate")
 	}
 
 	if _, err := bm.pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", bm.baseName)); err != nil {
 		return fmt.Errorf("create base: %w", err)
 	}
 
-	baseDSN := bm.dsnForDB(bm.baseName)
-	basePool, err := pgxpool.New(ctx, baseDSN)
+	basePool, err := pgxpool.New(ctx, bm.dsnForDB(bm.baseName))
 	if err != nil {
-		_ = bm.dropDB(ctx, bm.baseName)
-		return fmt.Errorf("create base: connect to %s: %w", bm.baseName, err)
+		return errors.Join(fmt.Errorf("create base: connect to %s: %w", bm.baseName, err), bm.cleanupDB(ctx, bm.baseName))
 	}
-	defer basePool.Close()
 
 	if err := bm.runMigrate(ctx, bm.baseName); err != nil {
-		_ = bm.dropDB(ctx, bm.baseName)
-		return err
+		basePool.Close()
+		return errors.Join(err, bm.cleanupDB(ctx, bm.baseName))
 	}
 
 	schemaHash, err := ComputeSchemaHash(filepath.Join(bm.repoRoot, "src", "db", "migrations"))
 	if err != nil {
-		_ = bm.dropDB(ctx, bm.baseName)
-		return err
+		basePool.Close()
+		return errors.Join(err, bm.cleanupDB(ctx, bm.baseName))
 	}
 
 	if err := CreateProvenance(ctx, basePool, ProvenanceRow{
@@ -90,8 +108,13 @@ func (bm *BaseManager) CreateBase(ctx context.Context) error {
 		SeedCommand: bm.bp.Seed.Command,
 		SchemaHash:  schemaHash,
 	}); err != nil {
-		_ = bm.dropDB(ctx, bm.baseName)
-		return err
+		basePool.Close()
+		return errors.Join(err, bm.cleanupDB(ctx, bm.baseName))
+	}
+	basePool.Close()
+
+	if err := bm.setLock(ctx, bm.baseName, false); err != nil {
+		return errors.Join(fmt.Errorf("create base: lock: %w", err), bm.cleanupDB(ctx, bm.baseName))
 	}
 
 	return nil
@@ -106,28 +129,29 @@ func (bm *BaseManager) SeedBase(ctx context.Context) error {
 		return fmt.Errorf("base does not exist — run 'plax base create' first")
 	}
 
-	baseDSN := bm.dsnForDB(bm.baseName)
-	basePool, err := pgxpool.New(ctx, baseDSN)
-	if err != nil {
-		return fmt.Errorf("seed: connect to %s: %w", bm.baseName, err)
+	if err := bm.setLock(ctx, bm.baseName, true); err != nil {
+		return fmt.Errorf("seed: unlock base: %w", err)
 	}
-	defer basePool.Close()
+
+	basePool, err := pgxpool.New(ctx, bm.dsnForDB(bm.baseName))
+	if err != nil {
+		return errors.Join(fmt.Errorf("seed: connect to %s: %w", bm.baseName, err), bm.relock(ctx))
+	}
 
 	if err := bm.runSeed(ctx, bm.baseName); err != nil {
-		return err
+		basePool.Close()
+		return errors.Join(err, bm.relock(ctx))
 	}
 
 	prov, err := ReadProvenance(ctx, basePool)
 	if err != nil {
-		return fmt.Errorf("seed: read provenance: %w", err)
+		basePool.Close()
+		return errors.Join(fmt.Errorf("seed: read provenance: %w", err), bm.relock(ctx))
 	}
 	newVer := 1
-	if prov != nil {
-		newVer = prov.Version + 1
-	}
-
 	hash := ""
 	if prov != nil {
+		newVer = prov.Version + 1
 		hash = prov.SchemaHash
 	}
 
@@ -137,26 +161,45 @@ func (bm *BaseManager) SeedBase(ctx context.Context) error {
 		SeedCommand: bm.bp.Seed.Command,
 		SchemaHash:  hash,
 	}); err != nil {
-		return fmt.Errorf("seed: update provenance: %w", err)
+		basePool.Close()
+		return errors.Join(fmt.Errorf("seed: update provenance: %w", err), bm.relock(ctx))
 	}
+	basePool.Close()
 
-	return nil
+	return bm.relock(ctx)
 }
 
 func (bm *BaseManager) ResetBase(ctx context.Context) error {
-	if err := bm.dropDB(ctx, bm.baseName); err != nil {
-		return err
+	// Drop base_next as well as the base: it is the documented recovery path
+	// for an interrupted refresh, so reset must clear the wedge.
+	for _, name := range []string{bm.baseName, bm.nextName} {
+		exists, _, err := bm.dbExists(ctx, name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if err := bm.terminateConnections(ctx, name); err != nil {
+			return fmt.Errorf("reset: terminate connections to %s: %w", name, err)
+		}
+		if err := bm.dropDB(ctx, name); err != nil {
+			return fmt.Errorf("reset: drop %s: %w", name, err)
+		}
 	}
 	return bm.CreateBase(ctx)
 }
 
 func (bm *BaseManager) CloneBase(ctx context.Context, targetDB string) error {
-	exists, _, err := bm.dbExists(ctx, bm.baseName)
+	exists, locked, err := bm.dbExists(ctx, bm.baseName)
 	if err != nil {
 		return err
 	}
 	if !exists {
 		return fmt.Errorf("base database does not exist — run 'plax base create'")
+	}
+	if !locked {
+		return fmt.Errorf("base is not locked; clones are unsafe")
 	}
 
 	cloneExists, _, err := bm.dbExists(ctx, targetDB)
@@ -169,14 +212,16 @@ func (bm *BaseManager) CloneBase(ctx context.Context, targetDB string) error {
 
 	_, err = bm.pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s", targetDB, bm.baseName))
 	if err != nil {
-		if strings.Contains(err.Error(), "55006") || strings.Contains(err.Error(), "being accessed by other users") {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "55006" {
 			return fmt.Errorf("clone: base has active connections — is it locked?")
 		}
 		return fmt.Errorf("clone: create %s: %w", targetDB, err)
 	}
 
-	cloneDSN := bm.dsnForDB(targetDB)
-	clonePool, err := pgxpool.New(ctx, cloneDSN)
+	// Clones are born with ALLOW_CONNECTIONS true (datallowconn is not
+	// inherited from the template), so they are ready for instance use.
+	clonePool, err := pgxpool.New(ctx, bm.dsnForDB(targetDB))
 	if err != nil {
 		return fmt.Errorf("clone: connect to %s: %w", targetDB, err)
 	}
@@ -205,51 +250,49 @@ func (bm *BaseManager) RefreshBase(ctx context.Context) error {
 		return bm.CreateBase(ctx)
 	}
 
-	baseNext := "plax_base_next"
-	nextExists, _, err := bm.dbExists(ctx, baseNext)
+	nextExists, _, err := bm.dbExists(ctx, bm.nextName)
 	if err != nil {
 		return err
 	}
 	if nextExists {
-		return fmt.Errorf("'plax_base_next' exists — a previous refresh may have been interrupted. Run 'plax base reset' to clean up")
+		// A staged, locked, provenance-stamped base_next is a deferred swap
+		// from a previous refresh — resume it. Anything else is an
+		// interrupted staging that cannot be resumed safely.
+		ready, err := bm.baseNextReady(ctx)
+		if err != nil {
+			return err
+		}
+		if !ready {
+			return fmt.Errorf("'%s' exists but is incomplete — a previous refresh was interrupted. Run 'plax base reset' to clean up", bm.nextName)
+		}
+		return bm.swapBase(ctx)
 	}
 
-	if _, err := bm.pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", baseNext)); err != nil {
+	if _, err := bm.pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", bm.nextName)); err != nil {
 		return fmt.Errorf("refresh: create base_next: %w", err)
 	}
 
-	nextDSN := bm.dsnForDB(baseNext)
-	nextPool, err := pgxpool.New(ctx, nextDSN)
+	nextPool, err := pgxpool.New(ctx, bm.dsnForDB(bm.nextName))
 	if err != nil {
-		_ = bm.dropDB(ctx, baseNext)
-		return fmt.Errorf("refresh: connect to %s: %w", baseNext, err)
+		return errors.Join(fmt.Errorf("refresh: connect to %s: %w", bm.nextName, err), bm.cleanupDB(ctx, bm.nextName))
 	}
-	defer nextPool.Close()
 
-	if err := bm.runMigrate(ctx, baseNext); err != nil {
-		_ = bm.dropDB(ctx, baseNext)
-		return err
+	if err := bm.runMigrate(ctx, bm.nextName); err != nil {
+		nextPool.Close()
+		return errors.Join(err, bm.cleanupDB(ctx, bm.nextName))
 	}
 
 	schemaHash, err := ComputeSchemaHash(filepath.Join(bm.repoRoot, "src", "db", "migrations"))
 	if err != nil {
-		_ = bm.dropDB(ctx, baseNext)
-		return err
+		nextPool.Close()
+		return errors.Join(err, bm.cleanupDB(ctx, bm.nextName))
 	}
 
-	baseDSN := bm.dsnForDB(bm.baseName)
-	basePool, err := pgxpool.New(ctx, baseDSN)
+	oldProv, err := bm.readProvenance(ctx, bm.baseName)
 	if err != nil {
-		_ = bm.dropDB(ctx, baseNext)
-		return fmt.Errorf("refresh: read old provenance: %w", err)
+		nextPool.Close()
+		return errors.Join(fmt.Errorf("refresh: read old provenance: %w", err), bm.cleanupDB(ctx, bm.nextName))
 	}
-	oldProv, err := ReadProvenance(ctx, basePool)
-	basePool.Close()
-	if err != nil {
-		_ = bm.dropDB(ctx, baseNext)
-		return fmt.Errorf("refresh: read old provenance: %w", err)
-	}
-
 	newVer := 1
 	if oldProv != nil {
 		newVer = oldProv.Version + 1
@@ -261,20 +304,24 @@ func (bm *BaseManager) RefreshBase(ctx context.Context) error {
 		SeedCommand: bm.bp.Seed.Command,
 		SchemaHash:  schemaHash,
 	}); err != nil {
-		_ = bm.dropDB(ctx, baseNext)
-		return err
+		nextPool.Close()
+		return errors.Join(err, bm.cleanupDB(ctx, bm.nextName))
 	}
 
-	if err := bm.runSeed(ctx, baseNext); err != nil {
-		_ = bm.dropDB(ctx, baseNext)
-		return err
+	if err := bm.runSeed(ctx, bm.nextName); err != nil {
+		nextPool.Close()
+		return errors.Join(err, bm.cleanupDB(ctx, bm.nextName))
 	}
 
-	if err := bm.swapBase(ctx); err != nil {
-		return err
+	if err := bm.setLock(ctx, bm.nextName, false); err != nil {
+		nextPool.Close()
+		return errors.Join(fmt.Errorf("refresh: lock base_next: %w", err), bm.cleanupDB(ctx, bm.nextName))
 	}
+	// The swap renames base_next, which Postgres refuses while any
+	// connection to it is open — the pool must be closed here, not deferred.
+	nextPool.Close()
 
-	return nil
+	return bm.swapBase(ctx)
 }
 
 func (bm *BaseManager) DropInstanceDB(ctx context.Context, dbName string) error {
@@ -300,44 +347,112 @@ func (bm *BaseManager) DropInstanceDB(ctx context.Context, dbName string) error 
 func (bm *BaseManager) BaseStatus(ctx context.Context) (BaseInfo, error) {
 	info := BaseInfo{}
 
-	err := bm.pool.QueryRow(ctx, "SELECT 1 FROM pg_database WHERE datname = $1", bm.baseName).Scan(new(int))
+	exists, locked, err := bm.dbExists(ctx, bm.baseName)
 	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
-			return info, nil
-		}
 		return info, fmt.Errorf("status: query base: %w", err)
 	}
-	info.Exists = true
+	info.Exists = exists
+	info.Locked = locked
 
-	baseDSN := bm.dsnForDB(bm.baseName)
-	basePool, err := pgxpool.New(ctx, baseDSN)
-	if err == nil {
-		prov, err := ReadProvenance(ctx, basePool)
-		basePool.Close()
+	if exists {
+		prov, err := bm.readProvenance(ctx, bm.baseName)
 		if err == nil && prov != nil {
 			info.ProvenanceVer = prov.Version
-			if t, err := time.Parse(time.RFC3339Nano, prov.CreatedAt); err == nil {
-				info.CreatedAt = t
-			}
+			info.CreatedAt = prov.CreatedAt
 		}
 	}
 
-	err = bm.pool.QueryRow(ctx, "SELECT 1 FROM pg_database WHERE datname = 'plax_base_next'").Scan(new(int))
-	info.HasBaseNext = err == nil
+	nextExists, _, err := bm.dbExists(ctx, bm.nextName)
+	if err != nil {
+		return info, fmt.Errorf("status: query base_next: %w", err)
+	}
+	info.HasBaseNext = nextExists
 
 	return info, nil
 }
 
-func (bm *BaseManager) dbExists(ctx context.Context, dbName string) (exists, locked bool, err error) {
-	var one int
-	err = bm.pool.QueryRow(ctx, "SELECT 1 FROM pg_database WHERE datname = $1", dbName).Scan(&one)
+// baseNextReady reports whether base_next holds a fully staged refresh:
+// locked and provenance-stamped. Only then is it safe to resume the swap.
+func (bm *BaseManager) baseNextReady(ctx context.Context) (bool, error) {
+	_, locked, err := bm.dbExists(ctx, bm.nextName)
 	if err != nil {
-		if strings.Contains(err.Error(), "no rows") {
+		return false, err
+	}
+	if !locked {
+		return false, nil
+	}
+	prov, err := bm.readProvenance(ctx, bm.nextName)
+	if err != nil {
+		return false, err
+	}
+	return prov != nil, nil
+}
+
+// readProvenance reads the provenance row from a database that may be
+// locked, briefly allowing connections if so. The unlock window is
+// read-only; the database's lock state is restored before returning. A
+// concurrent clone colliding with the window fails with 55006, which the
+// design treats as recoverable.
+func (bm *BaseManager) readProvenance(ctx context.Context, dbName string) (*ProvenanceRow, error) {
+	_, locked, err := bm.dbExists(ctx, dbName)
+	if err != nil {
+		return nil, err
+	}
+
+	if locked {
+		if err := bm.setLock(ctx, dbName, true); err != nil {
+			return nil, fmt.Errorf("unlock %s: %w", dbName, err)
+		}
+	}
+
+	pool, err := pgxpool.New(ctx, bm.dsnForDB(dbName))
+	if err != nil {
+		if locked {
+			_ = bm.setLock(ctx, dbName, false)
+		}
+		return nil, fmt.Errorf("connect to %s: %w", dbName, err)
+	}
+	prov, readErr := ReadProvenance(ctx, pool)
+	pool.Close()
+
+	if locked {
+		if err := bm.setLock(ctx, dbName, false); err != nil {
+			return nil, fmt.Errorf("re-lock %s: %w", dbName, err)
+		}
+	}
+	if readErr != nil {
+		return nil, readErr
+	}
+	return prov, nil
+}
+
+func (bm *BaseManager) dbExists(ctx context.Context, dbName string) (exists, locked bool, err error) {
+	var allowConn bool
+	err = bm.pool.QueryRow(ctx, "SELECT datallowconn FROM pg_database WHERE datname = $1", dbName).Scan(&allowConn)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return false, false, nil
 		}
 		return false, false, fmt.Errorf("db exists %s: %w", dbName, err)
 	}
-	return true, false, nil
+	return true, !allowConn, nil
+}
+
+// setLock allows or refuses new connections to dbName. Existing connections
+// are unaffected — callers must close pools they hold before relying on the
+// lock for DDL.
+func (bm *BaseManager) setLock(ctx context.Context, dbName string, allowConnections bool) error {
+	_, err := bm.pool.Exec(ctx, fmt.Sprintf("ALTER DATABASE %s WITH ALLOW_CONNECTIONS %t", dbName, allowConnections))
+	return err
+}
+
+// relock re-locks the base after SeedBase. Returns nil when the lock
+// succeeds so it composes with errors.Join on failure paths.
+func (bm *BaseManager) relock(ctx context.Context) error {
+	if err := bm.setLock(ctx, bm.baseName, false); err != nil {
+		return fmt.Errorf("re-lock base: %w", err)
+	}
+	return nil
 }
 
 func (bm *BaseManager) dsnForDB(dbName string) string {
@@ -366,7 +481,11 @@ func (bm *BaseManager) runCommand(ctx context.Context, cmdStr string, dbName str
 
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s", strings.TrimSpace(string(out)))
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			return err
+		}
+		return fmt.Errorf("%s: %w", msg, err)
 	}
 	return nil
 }
@@ -390,6 +509,21 @@ func (bm *BaseManager) dropDB(ctx context.Context, dbName string) error {
 	return err
 }
 
+// cleanupDB removes a partially provisioned database after a failure.
+// Connections are terminated first because a pool that touched the database
+// may still hold idle connections, and Postgres refuses DROP with live
+// connections. Returns nil when cleanup succeeds so it composes with
+// errors.Join.
+func (bm *BaseManager) cleanupDB(ctx context.Context, dbName string) error {
+	if err := bm.terminateConnections(ctx, dbName); err != nil {
+		return fmt.Errorf("cleanup: terminate connections to %s: %w", dbName, err)
+	}
+	if err := bm.dropDB(ctx, dbName); err != nil {
+		return fmt.Errorf("cleanup: drop %s: %w", dbName, err)
+	}
+	return nil
+}
+
 func (bm *BaseManager) terminateConnections(ctx context.Context, dbName string) error {
 	_, err := bm.pool.Exec(ctx, fmt.Sprintf(
 		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()",
@@ -403,8 +537,6 @@ func (bm *BaseManager) swapBase(ctx context.Context) error {
 		return fmt.Errorf("swap: terminate connections: %w", err)
 	}
 
-	baseNext := "plax_base_next"
-
 	backoffs := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 400 * time.Millisecond,
 		800 * time.Millisecond, 1600 * time.Millisecond, 3200 * time.Millisecond, 6400 * time.Millisecond}
 
@@ -415,7 +547,7 @@ func (bm *BaseManager) swapBase(ctx context.Context) error {
 		}
 
 		if i == len(backoffs)-1 {
-			return fmt.Errorf("refresh: could not swap; plax_base_next is ready but the old base is still in use. Run 'plax base refresh' again or 'plax base status' for details")
+			return fmt.Errorf("%w: %s is staged and ready, but the old base is still in use. Run 'plax base refresh' again when instances are idle", ErrDeferredSwap, bm.nextName)
 		}
 
 		select {
@@ -427,7 +559,7 @@ func (bm *BaseManager) swapBase(ctx context.Context) error {
 		_ = bm.terminateConnections(ctx, bm.baseName)
 	}
 
-	_, err := bm.pool.Exec(ctx, fmt.Sprintf("ALTER DATABASE %s RENAME TO %s", baseNext, bm.baseName))
+	_, err := bm.pool.Exec(ctx, fmt.Sprintf("ALTER DATABASE %s RENAME TO %s", bm.nextName, bm.baseName))
 	if err != nil {
 		return fmt.Errorf("swap: rename: %w", err)
 	}

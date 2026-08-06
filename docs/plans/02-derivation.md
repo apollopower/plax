@@ -654,26 +654,26 @@ This test verifies the retry logic works in practice.
 
 ## Acceptance criteria
 
-- [ ] `plax base create` creates `plax_base`, runs migrations, stamps provenance v1, locks the base
-- [ ] `plax base create` is idempotent — second call in same repo exits 0 immediately
-- [ ] `plax base seed` runs the seed command, increments provenance version
-- [ ] `plax base seed` prints a warning to stderr about using `refresh` for ongoing updates
-- [ ] `plax base reset` drops and recreates the base (migrated, empty, v1)
-- [ ] `plax base refresh` creates `base_next`, seeds it, swaps it, leaves no `base_next` behind
-- [ ] `plax base refresh` with a failing seed command leaves the old base intact and drops `base_next`
-- [ ] `plax base status` prints a table with exists/locked/provenance/base_next fields
-- [ ] `plax base status --json` prints valid JSON matching `BaseInfo`
-- [ ] `CloneBase` succeeds on a locked base, fails on an unlocked base
-- [ ] `CloneBase` copies the provenance row and updates the `source` field
-- [ ] `DropInstanceDB` terminates active connections before dropping
-- [ ] `RunService` starts a container with the correct image, ports, env, volumes, and network
-- [ ] `StopService` stops a running container within 10s
-- [ ] `RemoveService` force-removes a container
-- [ ] `RemoveVolume` removes a named volume
-- [ ] `CreateNetwork` / `RemoveNetwork` create and destroy per-instance bridge networks
-- [ ] `go vet ./...` passes
-- [ ] `go test -race ./...` passes (unit tests; integration tests skipped without Postgres/Docker)
-- [ ] `golangci-lint run` passes
+- [x] `plax base create` creates `plax_base`, runs migrations, stamps provenance v1, locks the base
+- [x] `plax base create` is idempotent — second call in same repo exits 0 immediately
+- [x] `plax base seed` runs the seed command, increments provenance version
+- [x] `plax base seed` prints a warning to stderr about using `refresh` for ongoing updates
+- [x] `plax base reset` drops and recreates the base (migrated, empty, v1)
+- [x] `plax base refresh` creates `base_next`, seeds it, swaps it, leaves no `base_next` behind
+- [x] `plax base refresh` with a failing seed command leaves the old base intact and drops `base_next`
+- [x] `plax base status` prints a table with exists/locked/provenance/base_next fields
+- [x] `plax base status --json` prints valid JSON matching `BaseInfo`
+- [x] `CloneBase` succeeds on a locked base, fails on an unlocked base
+- [x] `CloneBase` copies the provenance row and updates the `source` field
+- [x] `DropInstanceDB` terminates active connections before dropping
+- [x] `RunService` starts a container with the correct image, ports, env, volumes, and network
+- [x] `StopService` stops a running container within 10s
+- [x] `RemoveService` force-removes a container
+- [x] `RemoveVolume` removes a named volume
+- [x] `CreateNetwork` / `RemoveNetwork` create and destroy per-instance bridge networks
+- [x] `go vet ./...` passes
+- [x] `go test -race ./...` passes (unit tests; integration tests skipped without Postgres/Docker)
+- [x] `golangci-lint run` passes
 
 ---
 
