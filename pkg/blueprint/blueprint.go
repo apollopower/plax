@@ -17,6 +17,7 @@ type PortPool struct {
 }
 
 type SeedConfig struct {
+	Migrate string `json:"migrate"`
 	Command string `json:"command"`
 	Workdir string `json:"workdir"`
 }

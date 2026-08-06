@@ -11,7 +11,7 @@ func TestBlueprint_MarshalRoundTrip(t *testing.T) {
 		Name:      "test",
 		PortPool:  PortPool{Start: 3000, End: 4000},
 		Toolchain: ".tool-versions",
-		Seed:      SeedConfig{Command: "bun run db fixtures", Workdir: "."},
+		Seed:      SeedConfig{Migrate: "bun run db migrate", Command: "bun run db fixtures", Workdir: "."},
 		Services: map[string]ServiceDef{
 			"web": {
 				Isolation: IsolationDedicated,
@@ -44,7 +44,7 @@ func TestBlueprint_MarshalRoundTrip(t *testing.T) {
 }
 
 func TestBlueprint_UnknownFields(t *testing.T) {
-	input := `{"version":1,"name":"x","port_pool":{"start":3000,"end":4000},"seed":{"command":"x","workdir":"."},"env":{"template":"x","holes":{}},"unknown_field":"should_not_cause_error"}`
+	input := `{"version":1,"name":"x","port_pool":{"start":3000,"end":4000},"seed":{"migrate":"x","command":"x","workdir":"."},"env":{"template":"x","holes":{}},"unknown_field":"should_not_cause_error"}`
 	var bp Blueprint
 	if err := json.Unmarshal([]byte(input), &bp); err != nil {
 		t.Fatalf("unmarshal with unknown field should not error: %v", err)

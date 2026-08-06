@@ -24,6 +24,7 @@ func InitFromRepo(root string) (*Blueprint, error) {
 		PortPool:  PortPool{Start: 3000, End: 4000},
 		Toolchain: ".tool-versions",
 		Seed: SeedConfig{
+			Migrate: "TODO: add migrate command, e.g. 'bun run db migrate'",
 			Command: "TODO: add seed command, e.g. 'bun run db fixtures'",
 			Workdir: ".",
 		},
