@@ -96,12 +96,16 @@ With `--all`: also include instances that exist in registry.
 
 Algorithm:
 1. Load current blueprint
-2. For each instance in registry:
+2. Load the user's `.env` from the repo root (secrets source)
+3. For each instance in registry:
    a. Read existing `.env` from worktree
    b. Re-apply hole substitution (preserves allocated ports and DB name)
-   c. Preserve variables that are NOT in the holes map (e.g. secrets)
+   c. Non-hole keys: use the user's `.env` value if present, else the
+      existing instance's `.env` value (which may carry a secret the user
+      has since deleted from their main `.env` — the instance keeps what
+      it was born with)
    d. Write new `.env`
-3. Print diff for each changed file
+4. Print diff for each changed file
 
 ## 4.5 `plax base refresh`
 

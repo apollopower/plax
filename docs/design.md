@@ -74,6 +74,15 @@ The blueprint is one file, checked into the repo. It says:
 
 The runtime reads this file and does what it says. It does not guess.
 
+**Secrets are not holes.** API keys, OAuth credentials, and tokens are the same
+across every instance — they vary per machine, not per instance. The blueprint
+declares the holes; the user's own `.env` (gitignored, never committed) supplies
+the secrets. Derivation merges three sources: holes get per-instance values, keys
+present in the user's `.env` get real secrets, and everything else falls through
+to the template's defaults. This means `.env.example` can keep its placeholder
+values (`"openai-api-key"`, empty strings) without breaking instances — the user's
+`.env` overrides them.
+
 **Writing the blueprint is the hard part. Running it is not.** Most of that work is
 mechanical. `plax init` parses the compose file for the service list and `.env.example`
 for the variable list, then emits a skeleton: every service present, `dedicated` by
