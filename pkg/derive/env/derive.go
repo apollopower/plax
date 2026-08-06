@@ -4,6 +4,7 @@ package env
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -33,7 +34,14 @@ var holeRe = regexp.MustCompile(`\{\{(\w+)\}\}`)
 func Derive(templatePath string, overridesPath string, holes map[string]string, values map[string]string, outputPath string) error {
 	// Load the user's overrides (e.g. the main checkout's .env with real secrets).
 	// Not an error if absent — the template is the fallback.
-	overrides, _ := ParseFile(overridesPath)
+	overrides := map[string]string{}
+	if overridesPath != "" {
+		var err error
+		overrides, err = ParseFile(overridesPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("env: load overrides: %w", err)
+		}
+	}
 
 	f, err := os.Open(templatePath)
 	if err != nil {
@@ -84,7 +92,7 @@ func Derive(templatePath string, overridesPath string, holes map[string]string, 
 	}
 
 	out := strings.Join(lines, "\n") + "\n"
-	if err := os.WriteFile(outputPath, []byte(out), 0644); err != nil {
+	if err := os.WriteFile(outputPath, []byte(out), 0600); err != nil {
 		return fmt.Errorf("env: write output: %w", err)
 	}
 
@@ -153,14 +161,20 @@ func extractKey(line string) string {
 }
 
 // extractValue returns the part after the first '=' with quotes stripped
-// and trailing comments removed.
+// and trailing comments removed. A '#' starts a comment only when preceded
+// by whitespace and never inside quotes.
 func extractValue(line string) string {
 	_, v, _ := strings.Cut(line, "=")
 	v = strings.TrimSpace(v)
 
 	// Strip surrounding quotes.
 	if len(v) >= 2 && (v[0] == '"' && v[len(v)-1] == '"' || v[0] == '\'' && v[len(v)-1] == '\'') {
-		v = v[1 : len(v)-1]
+		return v[1 : len(v)-1]
+	}
+
+	// Strip trailing comment: '#' preceded by whitespace.
+	if idx := strings.Index(v, " #"); idx >= 0 {
+		v = strings.TrimSpace(v[:idx])
 	}
 
 	return v

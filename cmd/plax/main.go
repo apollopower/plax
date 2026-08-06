@@ -371,7 +371,12 @@ func runAttach(cmd AttachCmd) error {
 }
 
 func runExec(cmd ExecCmd) error {
-	if len(cmd.Cmd) == 0 {
+	args := cmd.Cmd
+	// kong's passthrough keeps the "--" token in the args; strip it.
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	}
+	if len(args) == 0 {
 		return fmt.Errorf("exec: no command given — usage: plax exec <name> -- <cmd> [args...]")
 	}
 
@@ -390,7 +395,7 @@ func runExec(cmd ExecCmd) error {
 		return err
 	}
 
-	c := exec.Command(cmd.Cmd[0], cmd.Cmd[1:]...)
+	c := exec.Command(args[0], args[1:]...)
 	c.Dir = rec.WorktreePath
 	c.Env = envVars
 	c.Stdin = os.Stdin

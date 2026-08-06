@@ -247,6 +247,15 @@ func TestParseFile_Comments(t *testing.T) {
 	if m["PORT"] != "3000" {
 		t.Errorf("PORT = %q, want %q", m["PORT"], "3000")
 	}
+	if m["INLINE_COMMENT"] != "somevalue" {
+		t.Errorf("INLINE_COMMENT = %q, want %q", m["INLINE_COMMENT"], "somevalue")
+	}
+	if m["NO_STRIP"] != "val#no-strip" {
+		t.Errorf("NO_STRIP = %q, want %q (no whitespace before #)", m["NO_STRIP"], "val#no-strip")
+	}
+	if m["QUOTED_HASH"] != "value # not a comment" {
+		t.Errorf("QUOTED_HASH = %q, want %q (quoted # preserved)", m["QUOTED_HASH"], "value # not a comment")
+	}
 }
 
 func TestParseFile_QuotedValues(t *testing.T) {
