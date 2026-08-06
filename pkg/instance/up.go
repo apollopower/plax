@@ -83,7 +83,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 
 	// Step 3: Allocate ports.
 	fmt.Fprintf(os.Stderr, "allocating ports...\n")
-	allocated, err := allocatePorts(deps)
+	allocated, err := allocatePorts(deps, name)
 	if err != nil {
 		return err
 	}
@@ -271,7 +271,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 
 // allocatePorts allocates one port per port-bearing entity in the blueprint.
 // Returns a map of port var name → host port number.
-func allocatePorts(deps *Deps) (map[string]int, error) {
+func allocatePorts(deps *Deps, instanceName string) (map[string]int, error) {
 	allocated := map[string]int{}
 
 	for svcName, svc := range deps.Blueprint.Services {
@@ -279,7 +279,7 @@ func allocatePorts(deps *Deps) (map[string]int, error) {
 			continue
 		}
 		for _, portDef := range svc.Ports {
-			port, err := deps.Pool.Allocate(deps.RepoRoot, svcName)
+			port, err := deps.Pool.Allocate(instanceName, svcName)
 			if err != nil {
 				// Release already-allocated ports.
 				for _, p := range allocated {
@@ -295,7 +295,7 @@ func allocatePorts(deps *Deps) (map[string]int, error) {
 		if proc.PortVar == "" {
 			continue
 		}
-		port, err := deps.Pool.Allocate(deps.RepoRoot, proc.Name)
+		port, err := deps.Pool.Allocate(instanceName, proc.Name)
 		if err != nil {
 			for _, p := range allocated {
 				deps.Pool.Release(p)
