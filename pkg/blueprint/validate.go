@@ -68,6 +68,9 @@ func ValidateBlueprint(bp *Blueprint) []error {
 		}
 	}
 
+	if bp.Seed.Migrate == "" {
+		errs = append(errs, fmt.Errorf("blueprint: seed.migrate is required"))
+	}
 	if bp.Seed.Command == "" {
 		errs = append(errs, fmt.Errorf("blueprint: seed.command is required"))
 	}
