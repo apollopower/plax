@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -108,12 +109,9 @@ func runBaseCreate(cmd BaseCreateCmd) error {
 	defer bm.Close()
 
 	fmt.Fprintln(os.Stderr, "creating plax_base...")
-	if err := bm.CreateBase(ctx); err != nil {
-		return err
-	}
 	fmt.Fprintln(os.Stderr, "running migrations...")
-
-	return nil
+	fmt.Fprintln(os.Stderr, "locking...")
+	return bm.CreateBase(ctx)
 }
 
 func runBaseSeed(cmd BaseSeedCmd) error {
@@ -168,6 +166,10 @@ func runBaseRefresh(cmd BaseRefreshCmd) error {
 
 	fmt.Fprintln(os.Stderr, "refreshing plax_base...")
 	if err := bm.RefreshBase(ctx); err != nil {
+		if errors.Is(err, postgres.ErrDeferredSwap) {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
 		return err
 	}
 
@@ -236,14 +238,23 @@ func loadBlueprintAndConnString(root, pgURL string) (*blueprint.Blueprint, strin
 		return nil, "", fmt.Errorf("parsing plax.json: %w", err)
 	}
 
+	// Base commands die here rather than midway: an empty migrate command
+	// would otherwise "succeed" as a no-op and stamp provenance on a base
+	// with no schema.
+	if bp.Seed.Migrate == "" || bp.Seed.Command == "" || bp.Seed.Workdir == "" {
+		return nil, "", fmt.Errorf("plax.json: seed.migrate, seed.command, and seed.workdir are required")
+	}
+
 	if pgURL != "" {
 		return &bp, pgURL, nil
 	}
 
 	user := "postgres"
 	password := "postgres"
+	found := false
 	for _, svc := range bp.Services {
 		if svc.Isolation == blueprint.IsolationLogical && svc.Type == "postgres" {
+			found = true
 			if u, ok := svc.Env["POSTGRES_USER"]; ok && u != "" {
 				user = u
 			}
@@ -252,6 +263,9 @@ func loadBlueprintAndConnString(root, pgURL string) (*blueprint.Blueprint, strin
 			}
 			break
 		}
+	}
+	if !found {
+		return nil, "", fmt.Errorf("no logical postgres service in blueprint")
 	}
 
 	connStr := fmt.Sprintf("postgres://%s:%s@localhost:5432/postgres?sslmode=disable", user, password)
