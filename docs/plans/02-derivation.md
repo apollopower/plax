@@ -220,6 +220,19 @@ The blueprint example in `docs/plans/index.md` updates to:
 All algorithms assume the caller holds a valid `*BaseManager` constructed via
 `NewBaseManager`. Context cancellation is respected throughout.
 
+Two rules apply everywhere below:
+
+- **Temporary pools are closed by their opener.** Any step that opens a pool
+  to a specific database (`plax_base`, `plax_base_next`, a clone) closes it
+  in the same function via `defer pool.Close()`. The manager's own pool is
+  closed only by `BaseManager.Close()`.
+- **Migrate/seed commands receive `DATABASE_URL`.** The connection string
+  passed to a command's environment is built by rendering the blueprint's
+  `env.holes["DATABASE_URL"]` template with `{{DB_NAME}}` replaced by the
+  target database name. For the sample blueprint, targeting `plax_base`
+  yields `postgres://postgres:postgres@localhost:5432/plax_base`. The command
+  inherits the process environment with this one variable overridden.
+
 ### CreateBase
 
 1. Check if `plax_base` exists via `SELECT 1 FROM pg_database WHERE datname = 'plax_base'`.
@@ -234,13 +247,14 @@ All algorithms assume the caller holds a valid `*BaseManager` constructed via
    ⚠ pgx pools are per-database. Opening a second pool for `plax_base` is necessary. Close it when done with this step.
 
 4. Run migrations against `plax_base`:
-   Execute `bp.Seed.Migrate` in `bm.repoRoot` (or `filepath.Join(bm.repoRoot, bp.Seed.Workdir)`) with the `plax_base` connection string in the environment.
+   Execute `bp.Seed.Migrate` in `bm.repoRoot` (or `filepath.Join(bm.repoRoot, bp.Seed.Workdir)`) with `DATABASE_URL` rendered for `plax_base` (see rules above).
    ⚠ The command is shell-spawned — the repo's toolchain (Bun, Node) must be available on `$PATH`.
    ⚠ If the command exits non-zero, drop the database and return the error.
 
 5. Compute schema hash:
    Find migration files under `bm.repoRoot` (the migration directory is repo-specific — for the sample: `src/db/migrations/`). Sort filenames, join with newlines, SHA-256.
    ⚠ If no migration directory exists, schema_hash is empty string. This is valid for repos that don't use file-based migrations.
+   ⚠ The migrations directory is **hardcoded repo-layout knowledge for day one**. It becomes a blueprint field the day a second repo has a different layout — do not generalize it now.
 
 6. Stamp provenance:
    `CreateProvenance(ctx, pool, ProvenanceRow{Version: 1, Source: "base", SeedCommand: bp.Seed.Command, SchemaHash: hash})`
@@ -263,7 +277,7 @@ For ongoing updates with live instances, use `RefreshBase`.
 3. Open a pool connected to `plax_base`.
 
 4. Run seed command:
-   Execute `bp.Seed.Command` in `filepath.Join(bm.repoRoot, bp.Seed.Workdir)` with the `plax_base` connection string in the environment.
+   Execute `bp.Seed.Command` in `filepath.Join(bm.repoRoot, bp.Seed.Workdir)` with `DATABASE_URL` rendered for `plax_base` (see rules above).
    ⚠ If the command exits non-zero, re-lock the base (attempt), close the pool, return the error.
 
 5. Increment provenance:
@@ -416,15 +430,24 @@ plax base status   Print base health and provenance info
 
 All subcommands:
 - Require `plax.json` in the repo root (fail with exit 1 if missing).
-- Construct `BaseManager` from the blueprint's logical postgres service `env` block
-  and the current working directory as `repoRoot`.
-- Use `--root <path>` flag to override repo root (defaults to `.`).
+- Build the Postgres connection string and pass it to `NewBaseManager`:
+  user and password come from the blueprint's logical postgres service `env`
+  block (`POSTGRES_USER`, `POSTGRES_PASSWORD`); host and port default to
+  `localhost:5432` — a day-one convention, since logical services declare no
+  ports (validation rule V6). `--pg-url <dsn>` overrides the entire string.
+- Pass the resolved repo root to `NewBaseManager` as `repoRoot`. Use
+  `--root <path>` flag to override (defaults to `.`).
+
+Phase 4 also lists `plax base refresh` as a deliverable. The split: Phase 2
+ships the `plax base` CLI as the driver's test harness; Phase 4 layers the
+config-stamp side effect (registry update) on top of the same command. This
+plan is authoritative for the command's behavior.
 
 #### `plax base create`
 
 | Aspect | Value |
 |---|---|
-| Flags | `--root <path>` (optional, default `.`) |
+| Flags | `--root <path>` (optional, default `.`), `--pg-url <dsn>` (optional) |
 | Exit 0 | Base created successfully (or already exists and locked) |
 | Exit 1 | Base exists but unlocked, migration command fails, Postgres unreachable |
 | Stderr | Progress: "creating plax_base...", "running migrations...", "locking..." |
@@ -435,7 +458,7 @@ All subcommands:
 
 | Aspect | Value |
 |---|---|
-| Flags | `--root <path>` (optional, default `.`) |
+| Flags | `--root <path>` (optional, default `.`), `--pg-url <dsn>` (optional) |
 | Exit 0 | Seed command completed successfully |
 | Exit 1 | Base does not exist, seed command fails |
 | Stderr | Progress + ⚠ warning: "SeedBase is not safe while instances exist; use 'plax base refresh' for ongoing updates" |
@@ -446,7 +469,7 @@ All subcommands:
 
 | Aspect | Value |
 |---|---|
-| Flags | `--root <path>` (optional, default `.`) |
+| Flags | `--root <path>` (optional, default `.`), `--pg-url <dsn>` (optional) |
 | Exit 0 | Base dropped and recreated (migrated, empty) |
 | Exit 1 | Migration command fails, Postgres unreachable |
 | Stderr | "resetting plax_base...", "running migrations..." |
@@ -457,7 +480,7 @@ All subcommands:
 
 | Aspect | Value |
 |---|---|
-| Flags | `--root <path>` (optional, default `.`) |
+| Flags | `--root <path>` (optional, default `.`), `--pg-url <dsn>` (optional) |
 | Exit 0 | Refresh completed, new base active |
 | Exit 1 | Migration or seed fails, old base still active |
 | Exit 2 | Refresh succeeded but swap is deferred (`base_next` exists, old base still active) |
@@ -468,7 +491,7 @@ All subcommands:
 
 | Aspect | Value |
 |---|---|
-| Flags | `--root <path>` (optional, default `.`), `--json` |
+| Flags | `--root <path>` (optional, default `.`), `--pg-url <dsn>` (optional), `--json` |
 | Exit 0 | Always (status is informative) |
 | Stderr | Nothing in default mode |
 | Stdout | Table (default) or JSON (`--json`) |
@@ -533,6 +556,11 @@ Tests are skipped if `PLAX_TEST_POSTGRES_URL` is empty or connection fails.
 Docker integration tests require a running Docker daemon. Tests are skipped
 if `DOCKER_HOST` is unset and `/var/run/docker.sock` is absent. CI skips
 both integration suites (no Postgres, no Docker in standard GitHub Actions).
+
+Consequence: the derivation engine ships with no CI coverage in this phase.
+The acceptance criteria below are only considered met when the full
+integration suite has been run locally against real Postgres and Docker —
+the implementer runs it before merge and pastes the output into the PR.
 
 ### Test fixtures
 
