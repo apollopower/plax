@@ -34,6 +34,11 @@ func NewBaseManager(ctx context.Context, connString string, repoRoot string, bp 
 		return nil, fmt.Errorf("postgres: connect: %w", err)
 	}
 
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("postgres: connect: %w", err)
+	}
+
 	return &BaseManager{
 		pool:     pool,
 		bp:       bp,

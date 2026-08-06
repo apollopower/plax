@@ -24,6 +24,10 @@ func testPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	if err != nil {
 		t.Skipf("skipping: cannot connect to Postgres (%s): %v", pgTestURL(t), err)
 	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		t.Skipf("skipping: cannot connect to Postgres (%s): %v", pgTestURL(t), err)
+	}
 	t.Cleanup(func() { pool.Close() })
 	return pool
 }
