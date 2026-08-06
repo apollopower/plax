@@ -1,3 +1,4 @@
+// Network management for per-instance service isolation.
 package docker
 
 import (
