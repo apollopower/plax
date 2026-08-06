@@ -12,7 +12,7 @@ var validBP = &Blueprint{
 	Name:      "test",
 	PortPool:  PortPool{Start: 3000, End: 4000},
 	Toolchain: ".tool-versions",
-	Seed:      SeedConfig{Command: "bun run db fixtures", Workdir: "."},
+	Seed:      SeedConfig{Migrate: "bun run db migrate", Command: "bun run db fixtures", Workdir: "."},
 	Services: map[string]ServiceDef{
 		"db": {
 			Isolation: IsolationLogical,
@@ -151,6 +151,15 @@ func TestValidate_DependsOnMissing(t *testing.T) {
 	errs := ValidateBlueprint(&bp)
 	if !containsErr(t, errs, "depends_on") {
 		t.Errorf("expected depends_on error, got %v", errs)
+	}
+}
+
+func TestValidate_SeedMigrateMissing(t *testing.T) {
+	bp := *validBP
+	bp.Seed.Migrate = ""
+	errs := ValidateBlueprint(&bp)
+	if !containsErr(t, errs, "seed.migrate is required") {
+		t.Errorf("expected seed.migrate error, got %v", errs)
 	}
 }
 
