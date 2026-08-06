@@ -1,3 +1,5 @@
+// Package docker provides a Docker driver that manages containers, networks,
+// volumes, and images for per-instance Plax services.
 package docker
 
 import (
