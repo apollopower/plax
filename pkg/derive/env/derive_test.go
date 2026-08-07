@@ -278,6 +278,117 @@ func TestParseFile_EmptyValue(t *testing.T) {
 	}
 }
 
+func TestParseFile_ExportPrefix(t *testing.T) {
+	f := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(f, []byte("export EXPORTED=val\nPLAIN=x\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := ParseFile(f)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if m["EXPORTED"] != "val" {
+		t.Errorf("EXPORTED = %q, want %q (export prefix normalized)", m["EXPORTED"], "val")
+	}
+	if _, ok := m["export EXPORTED"]; ok {
+		t.Error("export prefix should not be part of the key")
+	}
+}
+
+func TestParseFile_QuotedWithTrailingComment(t *testing.T) {
+	f := filepath.Join(t.TempDir(), ".env")
+	content := `QUOTED_COMMENT="abc" # note
+QUOTED_HASH_COMMENT="abc # literal" # note
+SINGLE='single quoted' # note
+`
+	if err := os.WriteFile(f, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := ParseFile(f)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if m["QUOTED_COMMENT"] != "abc" {
+		t.Errorf("QUOTED_COMMENT = %q, want %q", m["QUOTED_COMMENT"], "abc")
+	}
+	if m["QUOTED_HASH_COMMENT"] != "abc # literal" {
+		t.Errorf("QUOTED_HASH_COMMENT = %q, want %q", m["QUOTED_HASH_COMMENT"], "abc # literal")
+	}
+	if m["SINGLE"] != "single quoted" {
+		t.Errorf("SINGLE = %q, want %q", m["SINGLE"], "single quoted")
+	}
+}
+
+func TestDerive_ExportPrefixedHole(t *testing.T) {
+	tmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(tmpl, []byte("export PORT=3000\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := Derive(tmpl, "", map[string]string{"PORT": "{{PORT}}"}, map[string]string{"PORT": "3001"}, out)
+	if err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+	if !strings.Contains(content, "PORT=3001") {
+		t.Errorf("exported hole not substituted, got:\n%s", content)
+	}
+	if strings.Contains(content, "export PORT") {
+		t.Errorf("stale export line should be replaced, got:\n%s", content)
+	}
+}
+
+func TestDerive_ExportPrefixedOverride(t *testing.T) {
+	tmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(tmpl, []byte("export API_KEY=placeholder\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	userEnv := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(userEnv, []byte("API_KEY=real-secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	if err := Derive(tmpl, userEnv, nil, nil, out); err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	if !strings.Contains(string(data), "API_KEY=real-secret") {
+		t.Errorf("override should match export-prefixed template key, got:\n%s", data)
+	}
+}
+
+func TestDerive_OverridePreservesQuoting(t *testing.T) {
+	tmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(tmpl, []byte("TOKEN=\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	userEnv := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(userEnv, []byte(`TOKEN="abc # def"`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	if err := Derive(tmpl, userEnv, nil, nil, out); err != nil {
+		t.Fatalf("Derive: %v", err)
+	}
+
+	// The derived file must re-parse to the original secret.
+	m, err := ParseFile(out)
+	if err != nil {
+		t.Fatalf("ParseFile: %v", err)
+	}
+	if m["TOKEN"] != "abc # def" {
+		t.Errorf("TOKEN round-trip = %q, want %q", m["TOKEN"], "abc # def")
+	}
+}
+
 func TestRender_Basic(t *testing.T) {
 	got, err := Render("http://localhost:{{PORT}}", map[string]string{"PORT": "3001"})
 	if err != nil {

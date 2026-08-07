@@ -102,10 +102,25 @@ func (d *Driver) RunService(ctx context.Context, cfg ServiceConfig) (string, err
 	}
 
 	if err := d.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		// The container exists at this point; remove it so a failed start
+		// does not leak a container the caller never received an ID for.
+		_ = d.cli.ContainerRemove(context.WithoutCancel(ctx), resp.ID, container.RemoveOptions{Force: true})
 		return "", fmt.Errorf("docker: start container %s: %w", containerName, err)
 	}
 
 	return resp.ID, nil
+}
+
+// ServiceRunning reports whether a container is currently running.
+func (d *Driver) ServiceRunning(ctx context.Context, containerID string) (bool, error) {
+	info, err := d.cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		if strings.Contains(err.Error(), "No such container") {
+			return false, nil
+		}
+		return false, fmt.Errorf("docker: inspect container: %w", err)
+	}
+	return info.State != nil && info.State.Running, nil
 }
 
 func (d *Driver) StopService(ctx context.Context, containerID string) error {

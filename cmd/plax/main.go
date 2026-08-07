@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/alecthomas/kong"
@@ -149,9 +151,23 @@ func runInit(cmd InitCmd) error {
 
 // --- base commands (Phase 2) ---
 
+// requireSeedConfig fails fast for commands that run migrate/seed: an empty
+// migrate command would otherwise "succeed" as a no-op and stamp provenance
+// on a base with no schema. Lifecycle commands (up/down) never run seed
+// config, so they do not require it.
+func requireSeedConfig(bp *blueprint.Blueprint) error {
+	if bp.Seed.Migrate == "" || bp.Seed.Command == "" || bp.Seed.Workdir == "" {
+		return fmt.Errorf("plax.json: seed.migrate, seed.command, and seed.workdir are required")
+	}
+	return nil
+}
+
 func runBaseCreate(cmd BaseCreateCmd) error {
 	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
 	if err != nil {
+		return err
+	}
+	if err := requireSeedConfig(bp); err != nil {
 		return err
 	}
 
@@ -173,6 +189,9 @@ func runBaseSeed(cmd BaseSeedCmd) error {
 	if err != nil {
 		return err
 	}
+	if err := requireSeedConfig(bp); err != nil {
+		return err
+	}
 
 	fmt.Fprintln(os.Stderr, "SeedBase is not safe while instances exist; use 'plax base refresh' for ongoing updates")
 
@@ -192,6 +211,9 @@ func runBaseReset(cmd BaseResetCmd) error {
 	if err != nil {
 		return err
 	}
+	if err := requireSeedConfig(bp); err != nil {
+		return err
+	}
 
 	ctx := context.Background()
 	bm, err := postgres.NewBaseManager(ctx, connStr, cmd.Root, bp)
@@ -208,6 +230,9 @@ func runBaseReset(cmd BaseResetCmd) error {
 func runBaseRefresh(cmd BaseRefreshCmd) error {
 	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
 	if err != nil {
+		return err
+	}
+	if err := requireSeedConfig(bp); err != nil {
 		return err
 	}
 
@@ -283,23 +308,54 @@ func runBaseStatus(cmd BaseStatusCmd) error {
 // --- lifecycle commands (Phase 3) ---
 
 func runUp(cmd UpCmd) error {
-	deps, err := buildDeps(cmd.Root, cmd.PgURL)
+	// Ctrl-C cancels the operation; Up's rollback runs with a non-canceled
+	// context so cleanup still completes.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	deps, err := buildDeps(ctx, cmd.Root, cmd.PgURL)
 	if err != nil {
 		return err
 	}
-	defer deps.BM.Close()
-	defer func() { _ = deps.Docker.Close() }()
+	defer deps.Close()
 
-	return instance.Up(context.Background(), deps, cmd.Name)
+	return instance.Up(ctx, deps.Deps, cmd.Name)
 }
 
 func runDown(cmd DownCmd) error {
-	deps, err := buildDeps(cmd.Root, cmd.PgURL)
+	// Down is best-effort: the registry is required, but each backend is
+	// optional. A stopped Postgres or broken Docker client must not prevent
+	// teardown of everything else.
+	//
+	// Deliberately not signal-cancellable: an interrupted down is safely
+	// re-runnable because every step tolerates missing resources.
+	reg, err := openRegistry(cmd.Root)
 	if err != nil {
 		return err
 	}
-	defer deps.BM.Close()
-	defer func() { _ = deps.Docker.Close() }()
+	absRoot, err := filepath.Abs(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("resolving repo root: %w", err)
+	}
+
+	deps := &instance.Deps{Registry: reg, RepoRoot: absRoot}
+
+	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v — skipping database teardown\n", err)
+	} else if bm, err := postgres.NewBaseManager(context.Background(), connStr, absRoot, bp); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v — skipping database teardown\n", err)
+	} else {
+		defer bm.Close()
+		deps.BM = bm
+	}
+
+	if drv, err := docker.NewDriver(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v — skipping container teardown\n", err)
+	} else {
+		defer func() { _ = drv.Close() }()
+		deps.Docker = drv
+	}
 
 	return instance.Down(context.Background(), deps, cmd.Name)
 }
@@ -407,8 +463,26 @@ func runExec(cmd ExecCmd) error {
 
 // --- helpers ---
 
-// buildDeps assembles all dependencies needed by Up and Down.
-func buildDeps(root, pgURL string) (*instance.Deps, error) {
+// cliDeps wraps instance.Deps with the concrete backends the CLI opened,
+// so they can be closed after the command finishes.
+type cliDeps struct {
+	*instance.Deps
+	bm     *postgres.BaseManager
+	docker *docker.Driver
+}
+
+func (d *cliDeps) Close() {
+	if d.bm != nil {
+		d.bm.Close()
+	}
+	if d.docker != nil {
+		_ = d.docker.Close()
+	}
+}
+
+// buildDeps assembles all dependencies needed by Up. Down does not use it:
+// teardown builds its own tolerant, partial dependencies.
+func buildDeps(ctx context.Context, root, pgURL string) (*cliDeps, error) {
 	bp, connStr, err := loadBlueprintAndConnString(root, pgURL)
 	if err != nil {
 		return nil, err
@@ -424,7 +498,6 @@ func buildDeps(root, pgURL string) (*instance.Deps, error) {
 		return nil, fmt.Errorf("resolving repo root: %w", err)
 	}
 
-	ctx := context.Background()
 	bm, err := postgres.NewBaseManager(ctx, connStr, absRoot, bp)
 	if err != nil {
 		return nil, err
@@ -438,13 +511,17 @@ func buildDeps(root, pgURL string) (*instance.Deps, error) {
 
 	pool := portpool.New(bp.PortPool.Start, bp.PortPool.End, reg)
 
-	return &instance.Deps{
-		Blueprint: bp,
-		Registry:  reg,
-		Pool:      pool,
-		BM:        bm,
-		Docker:    drv,
-		RepoRoot:  absRoot,
+	return &cliDeps{
+		Deps: &instance.Deps{
+			Blueprint: bp,
+			Registry:  reg,
+			Pool:      pool,
+			BM:        bm,
+			Docker:    drv,
+			RepoRoot:  absRoot,
+		},
+		bm:     bm,
+		docker: drv,
 	}, nil
 }
 
@@ -533,13 +610,6 @@ func loadBlueprintAndConnString(root, pgURL string) (*blueprint.Blueprint, strin
 	var bp blueprint.Blueprint
 	if err := json.Unmarshal(data, &bp); err != nil {
 		return nil, "", fmt.Errorf("parsing plax.json: %w", err)
-	}
-
-	// Base commands die here rather than midway: an empty migrate command
-	// would otherwise "succeed" as a no-op and stamp provenance on a base
-	// with no schema.
-	if bp.Seed.Migrate == "" || bp.Seed.Command == "" || bp.Seed.Workdir == "" {
-		return nil, "", fmt.Errorf("plax.json: seed.migrate, seed.command, and seed.workdir are required")
 	}
 
 	if pgURL != "" {
