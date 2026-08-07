@@ -1,0 +1,273 @@
+package doctor
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"testing"
+
+	"github.com/apollopower/plax/pkg/blueprint"
+	"github.com/apollopower/plax/pkg/derive/postgres"
+	"github.com/apollopower/plax/pkg/registry"
+)
+
+type fakeBM struct {
+	info postgres.BaseInfo
+	dbs  map[string]bool
+}
+
+func (f *fakeBM) BaseStatus(context.Context) (postgres.BaseInfo, error) {
+	return f.info, nil
+}
+
+func (f *fakeBM) InstanceDBExists(_ context.Context, dbName string) (bool, error) {
+	return f.dbs[dbName], nil
+}
+
+type fakeDocker struct {
+	containers map[string]bool
+	running    map[string]bool
+	reachable  bool
+}
+
+func (f *fakeDocker) ServiceExists(_ context.Context, containerID string) (bool, error) {
+	return f.containers[containerID], nil
+}
+
+func (f *fakeDocker) ServiceRunning(_ context.Context, containerID string) (bool, error) {
+	return f.running[containerID], nil
+}
+
+func initDoctorRepo(t *testing.T) (string, *blueprint.Blueprint, *registry.Registry) {
+	t.Helper()
+	dir := t.TempDir()
+
+	run := func(args ...string) {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", args, out)
+		}
+	}
+	run("git", "init", "-b", "main")
+	run("git", "config", "user.email", "test@test.com")
+	run("git", "config", "user.name", "Test")
+
+	files := map[string]string{
+		"docker-compose.yml": "services:\n  redis:\n    image: redis:7\n",
+		".env.example":       "PORT=3000\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	bp := &blueprint.Blueprint{
+		Version:   1,
+		Name:      "test",
+		PortPool:  blueprint.PortPool{Start: 25000, End: 25100},
+		Toolchain: "",
+		Services: map[string]blueprint.ServiceDef{
+			"redis": {Isolation: blueprint.IsolationDedicated, Image: "redis:7", Ports: map[string]blueprint.PortDef{"6379": {Var: "REDIS_PORT"}}},
+		},
+		Processes: []blueprint.ProcessDef{
+			{Name: "app", Isolation: blueprint.IsolationNative, Command: "sleep 60", Workdir: ".", PortVar: "PORT"},
+		},
+		Seed: blueprint.SeedConfig{Migrate: "echo", Command: "echo", Workdir: "."},
+		Env:  blueprint.EnvConfig{Template: ".env.example", Holes: map[string]string{}},
+	}
+
+	regPath := filepath.Join(dir, ".plax", "registry.json")
+	reg, err := registry.Open(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return dir, bp, reg
+}
+
+func TestDoctor_AllPass(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	bm := &fakeBM{
+		info: postgres.BaseInfo{Exists: true, Locked: true, ProvenanceVer: 5},
+		dbs:  map[string]bool{},
+	}
+	drv := &fakeDocker{reachable: true, containers: map[string]bool{}, running: map[string]bool{}}
+
+	deps := &Deps{
+		Blueprint: bp,
+		Registry:  reg,
+		BM:        bm,
+		Docker:    drv,
+		RepoRoot:  dir,
+	}
+
+	report := Run(context.Background(), deps)
+	if report.Failed() {
+		for _, c := range report.Checks {
+			if c.Level == Fail {
+				t.Errorf("unexpected failure: %s", c.Message)
+			}
+		}
+	}
+}
+
+func TestDoctor_PortForUnknownInstance(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+	_ = dir
+
+	reg.PortAllocations[3000] = registry.PortAllocation{Instance: "ghost", Service: "redis"}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	found := false
+	for _, c := range report.Checks {
+		if c.Level == Fail && containsStr(c.Message, "ghost") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("should report port allocated to unknown instance")
+	}
+}
+
+func TestDoctor_ComposeServiceNotInBlueprint(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	composeContent := "services:\n  redis:\n    image: redis:7\n  postgres:\n    image: postgres:16\n"
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(composeContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	found := false
+	for _, c := range report.Checks {
+		if c.Level == Warn && containsStr(c.Message, "compose service") && containsStr(c.Message, "postgres") {
+			found = true
+		}
+	}
+	if !found {
+		for _, c := range report.Checks {
+			t.Logf("[%s] %s", c.Level, c.Message)
+		}
+		t.Error("should warn that compose service postgres is not in blueprint")
+	}
+}
+
+func TestDoctor_BaseUnlocked(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+	_ = dir
+
+	bm := &fakeBM{
+		info: postgres.BaseInfo{Exists: true, Locked: false, ProvenanceVer: 5},
+		dbs:  map[string]bool{},
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, BM: bm, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	found := false
+	for _, c := range report.Checks {
+		if c.Level == Fail && containsStr(c.Message, "not locked") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("should fail when base is not locked")
+	}
+}
+
+func TestDoctor_BaseMissing(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+	_ = dir
+
+	bm := &fakeBM{
+		info: postgres.BaseInfo{Exists: false},
+		dbs:  map[string]bool{},
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, BM: bm, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	found := false
+	for _, c := range report.Checks {
+		if c.Level == Fail && containsStr(c.Message, "does not exist") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("should fail when base is missing")
+	}
+}
+
+func TestDoctor_NilBackends(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+	_ = dir
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	hasDockerFail := false
+	hasPgFail := false
+	for _, c := range report.Checks {
+		if c.Level == Fail && containsStr(c.Message, "docker") {
+			hasDockerFail = true
+		}
+		if c.Level == Fail && containsStr(c.Message, "postgres") {
+			hasPgFail = true
+		}
+	}
+	if !hasDockerFail {
+		t.Error("should report docker unreachable when nil")
+	}
+	if !hasPgFail {
+		t.Error("should report postgres unreachable when nil")
+	}
+}
+
+func TestDoctor_BaseNextStaged(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+	_ = dir
+
+	bm := &fakeBM{
+		info: postgres.BaseInfo{Exists: true, Locked: true, ProvenanceVer: 5, HasBaseNext: true},
+		dbs:  map[string]bool{},
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, BM: bm, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	found := false
+	for _, c := range report.Checks {
+		if c.Level == Warn && containsStr(c.Message, "plax_base_next") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("should warn about staged base_next")
+	}
+}
+
+func containsStr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		match := true
+		for j := 0; j < len(substr); j++ {
+			if s[i+j] != substr[j] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}

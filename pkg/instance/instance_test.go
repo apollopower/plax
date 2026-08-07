@@ -134,6 +134,17 @@ func (f *fakeDocker) ServiceRunning(context.Context, string) (bool, error) {
 	return f.running, f.runningErr
 }
 
+func (f *fakeDocker) StartService(_ context.Context, id string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.started = append(f.started, id)
+	return false, nil
+}
+
+func (f *fakeDocker) ServiceExists(_ context.Context, id string) (bool, error) {
+	return true, nil
+}
+
 // --- helpers ---
 
 func initRepo(t *testing.T) string {

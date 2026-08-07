@@ -17,9 +17,10 @@ type PortPool struct {
 }
 
 type SeedConfig struct {
-	Migrate string `json:"migrate"`
-	Command string `json:"command"`
-	Workdir string `json:"workdir"`
+	Migrate       string `json:"migrate"`
+	Command       string `json:"command"`
+	Workdir       string `json:"workdir"`
+	MigrationsDir string `json:"migrations_dir,omitempty"`
 }
 
 type ServiceDef struct {

@@ -32,9 +32,11 @@ type DockerDriver interface {
 	CreateNetwork(ctx context.Context, name string) error
 	RemoveNetwork(ctx context.Context, name string) error
 	RunService(ctx context.Context, cfg docker.ServiceConfig) (string, error)
+	StartService(ctx context.Context, containerID string) (bool, error)
 	StopService(ctx context.Context, containerID string) error
 	RemoveService(ctx context.Context, containerID string) error
 	ServiceRunning(ctx context.Context, containerID string) (bool, error)
+	ServiceExists(ctx context.Context, containerID string) (bool, error)
 }
 
 // Deps holds the dependencies for instance lifecycle operations.

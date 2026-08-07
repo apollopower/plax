@@ -113,15 +113,21 @@ func ComputeSchemaHash(migrationsDir string) (string, error) {
 		return "", nil
 	}
 
-	sort.Strings(names)
+	return HashMigrationNames(names), nil
+}
+
+func HashMigrationNames(names []string) string {
+	sorted := make([]string, len(names))
+	copy(sorted, names)
+	sort.Strings(sorted)
 
 	h := sha256.New()
-	for i, n := range names {
+	for i, n := range sorted {
 		if i > 0 {
 			h.Write([]byte("\n"))
 		}
 		h.Write([]byte(n))
 	}
 
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return fmt.Sprintf("%x", h.Sum(nil))
 }

@@ -2,8 +2,6 @@ package portpool
 
 import (
 	"fmt"
-	"net"
-	"strconv"
 
 	"github.com/apollopower/plax/pkg/registry"
 )
@@ -31,7 +29,7 @@ func (p *PortPool) Allocate(instance, service string) (int, error) {
 		if _, exists := p.registry.PortAllocations[port]; exists {
 			continue
 		}
-		if !portFree(port) {
+		if !ProbeFree(port) {
 			continue
 		}
 		if err := p.registry.AllocPort(port, instance, service); err != nil {
@@ -51,17 +49,8 @@ func (p *PortPool) Reserve(port int, instance, service string) error {
 	if _, exists := p.registry.PortAllocations[port]; exists {
 		return fmt.Errorf("portpool: port %d already allocated", port)
 	}
-	if !portFree(port) {
+	if !ProbeFree(port) {
 		return fmt.Errorf("portpool: port %d is in use on the host", port)
 	}
 	return p.registry.AllocPort(port, instance, service)
-}
-
-func portFree(port int) bool {
-	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
-	if err != nil {
-		return false
-	}
-	_ = ln.Close()
-	return true
 }

@@ -70,6 +70,13 @@ func (bm *BaseManager) Close() {
 	bm.pool.Close()
 }
 
+func (bm *BaseManager) migrationsDir() string {
+	if bm.bp.Seed.MigrationsDir != "" {
+		return filepath.Join(bm.repoRoot, bm.bp.Seed.MigrationsDir)
+	}
+	return filepath.Join(bm.repoRoot, "src", "db", "migrations")
+}
+
 func (bm *BaseManager) CreateBase(ctx context.Context) error {
 	exists, locked, err := bm.dbExists(ctx, bm.baseName)
 	if err != nil {
@@ -96,7 +103,7 @@ func (bm *BaseManager) CreateBase(ctx context.Context) error {
 		return errors.Join(err, bm.cleanupDB(ctx, bm.baseName))
 	}
 
-	schemaHash, err := ComputeSchemaHash(filepath.Join(bm.repoRoot, "src", "db", "migrations"))
+	schemaHash, err := ComputeSchemaHash(bm.migrationsDir())
 	if err != nil {
 		basePool.Close()
 		return errors.Join(err, bm.cleanupDB(ctx, bm.baseName))
@@ -293,7 +300,7 @@ func (bm *BaseManager) RefreshBase(ctx context.Context) error {
 		return errors.Join(err, bm.cleanupDB(ctx, bm.nextName))
 	}
 
-	schemaHash, err := ComputeSchemaHash(filepath.Join(bm.repoRoot, "src", "db", "migrations"))
+	schemaHash, err := ComputeSchemaHash(bm.migrationsDir())
 	if err != nil {
 		nextPool.Close()
 		return errors.Join(err, bm.cleanupDB(ctx, bm.nextName))
@@ -353,6 +360,29 @@ func (bm *BaseManager) DropInstanceDB(ctx context.Context, dbName string) error 
 	}
 
 	return nil
+}
+
+func (bm *BaseManager) InstanceProvenance(ctx context.Context, dbName string) (*ProvenanceRow, error) {
+	exists, err := bm.InstanceDBExists(ctx, dbName)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	pool, err := pgxpool.New(ctx, bm.dsnForDB(dbName))
+	if err != nil {
+		return nil, nil
+	}
+	defer pool.Close()
+
+	return ReadProvenance(ctx, pool)
+}
+
+func (bm *BaseManager) InstanceDBExists(ctx context.Context, dbName string) (bool, error) {
+	exists, _, err := bm.dbExists(ctx, dbName)
+	return exists, err
 }
 
 func (bm *BaseManager) BaseStatus(ctx context.Context) (BaseInfo, error) {
