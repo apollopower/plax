@@ -219,6 +219,16 @@ func (bm *BaseManager) CloneBase(ctx context.Context, targetDB string) error {
 		return fmt.Errorf("clone: create %s: %w", targetDB, err)
 	}
 
+	// The target database now exists. Any failure below must drop it, or an
+	// untracked database would block the next clone of the same name.
+	// WithoutCancel: cleanup must run even when ctx caused the failure.
+	complete := false
+	defer func() {
+		if !complete {
+			_ = bm.DropInstanceDB(context.WithoutCancel(ctx), targetDB)
+		}
+	}()
+
 	// Clones are born with ALLOW_CONNECTIONS true (datallowconn is not
 	// inherited from the template), so they are ready for instance use.
 	clonePool, err := pgxpool.New(ctx, bm.dsnForDB(targetDB))
@@ -238,6 +248,7 @@ func (bm *BaseManager) CloneBase(ctx context.Context, targetDB string) error {
 		}
 	}
 
+	complete = true
 	return nil
 }
 
