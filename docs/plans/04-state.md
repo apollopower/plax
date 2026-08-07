@@ -21,7 +21,7 @@ grounding it in the shipped Phase 2/3 code:
 | `base refresh` updates the registry config stamp | `base refresh` touches nothing in the registry | The stamp hashes blueprint input files (compose, template, toolchain); base staleness is already reported by the Data dimension via provenance versions. Refresh shipped in Phase 2 — Phase 4 only verifies it end-to-end |
 | Host drift compares recorded `node@X bun@Y` against the machine now | Record resolved tool versions at `up` (new `Provenance.ToolVersions`), compare against re-resolved versions at `status` | Phase 3 records the toolchain *file hash*, which cannot see a machine-side upgrade with an unchanged pin — the exact drift the design doc (§3) calls out |
 | Code drift against `main` | Against the base ref recorded at `up` (`InstanceRecord.BaseRef`); fallback chain for Phase 3 records | Instances are created from whatever HEAD the user is on, which is not always `main` |
-| Schema drift via Orchid's `_migrations` table | Hash comparison: instance provenance `schema_hash` vs migration filenames on the base ref via `git ls-tree` | The applied-migrations table name is ORM-specific. Set-difference is deferred until the blueprint declares one (see Deferred items) |
+    | Schema drift via the ORM's applied-migrations table | Hash comparison: instance provenance `schema_hash` vs migration filenames on the base ref via `git ls-tree` | The applied-migrations table name is ORM-specific. Set-difference is deferred until the blueprint declares one (see Deferred items) |
 | Migrations live at `src/db/migrations` (hardcoded in Phase 2) | New optional blueprint field `seed.migrations_dir`; empty keeps the Phase 2 default | The hardcoded path is sample-repo residue; the field makes it a contract |
 
 ---
@@ -36,7 +36,7 @@ pkg/
     resume.go                  # Resume: port probe, restart, drift report
     rederive.go                # Rederive: regenerate instance .env files
     up.go                      # Record BaseRef/BaseCommit/ToolVersions at creation
-    instance.go                # DockerDriver += StartService; export ComputeBlueprintStamp
+    instance.go                # DockerDriver += StartService
     suspend_test.go            # Suspend tests (fake Docker, real git)
     resume_test.go             # Resume tests (fake Docker/BM, real git)
     rederive_test.go           # Rederive tests (temp repos)
@@ -272,7 +272,10 @@ func DeriveMerged(templatePath string, overrides map[string]string, holes map[st
 ```
 
 `Derive` becomes a thin wrapper: parse the overrides file, call
-`DeriveMerged`.
+`DeriveMerged`. `ParseFileRaw` (exact-key, verbatim-value — exported from
+the existing private function) is added alongside it; rederive uses this
+so secrets round-trip without corruption (the existing exported
+`ParseFile` strips quotes).
 
 ### `pkg/status/status.go`
 
@@ -307,10 +310,12 @@ type Report struct {
 // Deps for status. BM may be nil — Data and Schema then report unknown.
 // Docker is not needed: drift is about declarations, not liveness.
 type Deps struct {
-    Blueprint *blueprint.Blueprint
-    Registry  *registry.Registry
-    BM        BaseManager // BaseStatus + InstanceProvenance
-    RepoRoot  string
+    Blueprint    *blueprint.Blueprint
+    Registry     *registry.Registry
+    BM           BaseManager            // BaseStatus + InstanceProvenance
+    RepoRoot     string
+    Branch       string                 // instance branch name
+    CurrentStamp registry.BlueprintStamp // pre-computed by the CLI; avoids importing instance
 }
 
 // Build computes the drift report for name. It never fails because a
@@ -365,15 +370,16 @@ type Deps struct {
 | `Suspend` | `func Suspend(ctx context.Context, deps *Deps, name string) error` | Stop processes and containers; keep DB, ports, worktree, containers. State → suspended, PIDs cleared. Idempotent. |
 | `Resume` | `func Resume(ctx context.Context, deps *Deps, name string) error` | Probe ports, start containers, respawn processes, verify liveness, state → running. All-or-nothing: failure rolls back to suspended. |
 | `Rederive` | `func Rederive(ctx context.Context, deps *Deps) error` | Regenerate `.env` for every registered instance; print a key-level diff per changed file. |
-| `ComputeBlueprintStamp` | `func ComputeBlueprintStamp(repoRoot string, bp *blueprint.Blueprint) registry.BlueprintStamp` | Exported (was private) for the stamp notice, status, and doctor. |
+| `ComputeBlueprintStamp` | (moves to `cmd/plax/main.go` as an unexported helper) | The logic (SHA-256 over compose, env template, toolchain) lives in the CLI so `status` does not import `instance`. Status gets the pre-computed stamp via `Deps.CurrentStamp`. |
 
 Per-command `Deps` needs (extends the Phase 3 table):
 
-- **Suspend**: Registry, RepoRoot. Docker optional — nil skips container
-  stops with a warning. Blueprint, Pool, BM unused.
-- **Resume**: Registry, RepoRoot, Blueprint, Docker (required when the
-  record has containers). Pool unused (ports come from the record). BM
-  unused by the mechanics; the CLI opens it tolerantly for the drift report.
+  - **Suspend**: Registry. Docker optional — nil skips container stops with a
+  warning. Blueprint, Pool, BM, RepoRoot unused (RepoRoot is in the shared
+  Deps struct for Down; suspend's path does not reference it).
+    - **Resume**: Registry, RepoRoot, Blueprint, Docker (required when the
+  record has containers). Pool unused (ports come from the record). BM unused
+  by the mechanics; the CLI opens it tolerantly for the drift report.
 - **Rederive**: Registry, RepoRoot, Blueprint. No backends at all — it is
   files only.
 - **Status**: Registry, RepoRoot, Blueprint. BM optional.
@@ -451,10 +457,11 @@ workload, and suspending must not drop data.
    spawned, clear any partial PIDs, leave `State = "suspended"`, save.
    The error is returned; resume stays retryable. Rollback uses
    `context.WithoutCancel(ctx)` for the same reason as `Up`.
-7. **Update registry.** `State → "running"`, fresh `PIDs` and `PIDStarts`.
+ 7. **Update registry.** `State → "running"`, fresh `PIDs` and `PIDStarts`.
    Save.
-8. **Print drift report.** Build the full report (`status.Build`) and
-   print it to stderr, then `instance <name> resumed`.
+ 8. **Return to the CLI.** `instance.Resume` does not import `status`. The
+   CLI (in `cmd/plax`) calls `status.Build` after `Resume` returns, prints
+   the report to stderr, then `instance <name> resumed`.
    ⚠ Resume is never silent (design §4). The report goes to stderr because
    resume has no stdout record; `plax status` owns the stdout form. If the
    report itself cannot be built (BM down, etc.) its dimensions degrade to
@@ -488,7 +495,7 @@ ref now:
    (same base resolution as Code) → `postgres.HashMigrationNames(names)`.
 3. Equal (and non-empty) → ok, `migrations match <base>`. Differ → drift,
    `database was built from a different migration set than <base> declares
-   — run 'plax base refresh' or re-migrate`. Either side empty → `unknown`.
+   — re-migrate the instance, or 'plax down' + 'plax up' to rebuild from a refreshed base`. Either side empty → `unknown`.
    ⚠ This is a hash comparison: it sees that the set changed, not which
      files, and it cannot see ad-hoc DDL applied without a migration file.
      Set-difference against an applied-migrations table is deferred (the
@@ -497,10 +504,12 @@ ref now:
 **Data** — base version the instance was built from vs the base now:
 1. `InstanceProvenance(ctx, rec.DBName).Version` vs
    `BaseStatus(ctx).ProvenanceVer`.
-2. Equal → ok, `built from base v<N> (current)`. Differ → drift,
+ 2. Equal → ok, `built from base v<N> (current)`. Differ → drift,
    `built from base v<A> — base is now v<B> (stale; 'plax down' + 'plax
    up' to rebuild from the new base)`. Nil BM → `unknown (postgres
-   unreachable)`; missing base → `unknown (base database missing)`.
+   unreachable)`; missing base → `unknown (base database missing)`;
+   provenance row absent (`Version` 0) → `unknown (no provenance row in
+   base — run 'plax base reset' to repair)`.
    ⚠ Read from the databases, not the registry: the provenance row exists
      precisely so the registry cannot lie about this (design §3).
 
@@ -516,8 +525,9 @@ ref now:
 **Config** — blueprint inputs then vs now (registry-global by design, §3:
 what drifted is the repo, so the stamp lives in the registry, not per
 instance):
-1. `instance.ComputeBlueprintStamp(repoRoot, bp)` vs
-   `deps.Registry.BlueprintStamp`, per file.
+ 1. `deps.CurrentStamp` vs `deps.Registry.BlueprintStamp`, per file.
+   (CurrentStamp is pre-computed by the CLI — same logic as the stamp
+   notice — so `status` does not import `instance`.)
 2. All equal → ok, `compose, env template, toolchain unchanged`.
    Differences → drift, one clause per file:
    `docker-compose.yml changed; .env.example changed`.
@@ -602,13 +612,16 @@ to `suspend`/`resume` to apply).
 3. For each instance in the registry (sorted by name, deterministic
    output):
    a. `values` from the record: `{DB_NAME: rec.DBName}` ∪ recorded ports.
-   b. Parse the instance's existing `.env`. Missing is not an error — the
-      instance layer is simply empty and the file is regenerated from the
-      template and user `.env` (this is what repairs a `.env` deleted
-      while suspended; resume points here).
-   c. Build merged overrides: non-hole keys of the instance `.env`, then
-      non-hole keys of the user `.env` on top. "Hole keys" means the
-      **current** blueprint's hole set.
+    b. Parse the instance's existing `.env` with `env.ParseFileRaw`
+       (exact-key, verbatim-value — exported from the existing private
+       function so secrets like `SECRET="a # b"` round-trip without
+       corruption). Missing is not an error — the instance layer is
+       simply empty and the file is regenerated from the template and
+       user `.env` (this is what repairs a `.env` deleted while
+       suspended; resume points here).
+    c. Build merged overrides: non-hole keys of the instance `.env`, then
+       non-hole keys of the user **parse** (also `ParseFileRaw`) on top.
+       "Hole keys" means the **current** blueprint's hole set.
       ⚠ Precedence: user `.env` > instance `.env` > template. A secret the
         user deleted from their `.env` survives in the instance's — the
         instance keeps what it was born with.
@@ -627,18 +640,36 @@ to `suspend`/`resume` to apply).
    `note: restart instances to apply ('plax suspend <name>' && 'plax
    resume <name>')`.
 
-### Config stamp notice
+### Tolerant blueprint load
 
-A helper in `cmd/plax/main.go`, run by every command that opens both the
-blueprint and the registry — all except `init` (no blueprint yet), `doctor`
-(it prints the details itself), and the `base` namespace (no registry):
+Commands that previously only opened the registry — `ls`, `attach`, `exec`
+— now need the blueprint for the stamp notice (and `attach` for the drift
+hint). The blueprint is loaded *tentatively*: when `plax.json` is missing or
+unparseable, the command proceeds without the notice/hint, never failing:
 
 ```go
-func stampNotice(bp *blueprint.Blueprint, reg *registry.Registry, repoRoot string)
+func loadBlueprint(repoRoot string) (*blueprint.Blueprint, error)
 ```
 
-Recompute `instance.ComputeBlueprintStamp`; when the stored stamp is
-non-empty and any file's hash differs, print one line to stderr:
+The CLI wraps this so the notice helper accepts a nil blueprint and skips
+silently. All three commands call the notice **and** `attach` calls
+`status.Build` for the drift hint — both degrade cleanly when the blueprint
+is unavailable.
+
+### Config stamp notice
+
+A helper in `cmd/plax/main.go`, run by every registry command except
+`init`, `doctor`, and the `base` namespace (those either have no registry
+or no blueprint, or print the details themselves):
+
+```go
+func computeStamp(repoRoot string, bp *blueprint.Blueprint) registry.BlueprintStamp
+func stampNotice(stamp registry.BlueprintStamp, reg *registry.Registry)
+```
+
+`computeStamp` (formerly `instance.ComputeBlueprintStamp`, now in the CLI)
+recomputes the stamp. When the stored stamp is non-empty and any file's
+hash differs, `stampNotice` prints one line to stderr:
 `note: blueprint inputs changed since last 'plax up' — run 'plax doctor'
 for details`.
 
@@ -994,3 +1025,4 @@ narrows the window, Docker and the bind error close it.
 | Readiness checks beyond the liveness sweep | When a workload needs one | The sweep catches immediate exits; "ready" is app-specific |
 | Registry file locking (`flock`) | When concurrent use is real | Single-user tool; noted since Phase 3 |
 | Per-instance config stamps | When global proves confusing | The design puts the stamp in the registry on purpose (§3) — what drifted is the repo, not the instance |
+| `index.md` and `design.md` reconciliation | When the implementation's shape stabilizes | This plan changes Schema/Host drift methods, drops `--all` from rederive, and scopes `refresh` to Phase 2 — the design doc and index still document the old sketch |
