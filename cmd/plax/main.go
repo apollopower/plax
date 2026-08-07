@@ -333,7 +333,7 @@ func runLs(cmd LsCmd) error {
 		rec := reg.Instances[name]
 		ports := formatPorts(rec.Ports)
 		age := formatAge(rec.CreatedAt)
-		fmt.Printf("%-8s %-10s %-20s %-24s %s\n", rec.ID, rec.State, rec.Branch, ports, age)
+		fmt.Printf("%-8s %-10s %-20s %-24s %s\n", name, rec.State, rec.Branch, ports, age)
 	}
 
 	return nil
