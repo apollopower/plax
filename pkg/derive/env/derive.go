@@ -33,11 +33,13 @@ var holeRe = regexp.MustCompile(`\{\{(\w+)\}\}`)
 // Hole keys absent from the template are appended.
 func Derive(templatePath string, overridesPath string, holes map[string]string, values map[string]string, outputPath string) error {
 	// Load the user's overrides (e.g. the main checkout's .env with real secrets).
+	// Values keep their raw text (quotes intact) so secrets containing '#'
+	// or whitespace survive being written back out and re-parsed.
 	// Not an error if absent — the template is the fallback.
 	overrides := map[string]string{}
 	if overridesPath != "" {
 		var err error
-		overrides, err = ParseFile(overridesPath)
+		overrides, err = parseFileRaw(overridesPath)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("env: load overrides: %w", err)
 		}
@@ -155,8 +157,12 @@ func isSkippable(line string) bool {
 }
 
 // extractKey returns the part before the first '=' in a KEY=value line.
+// An optional "export " prefix is normalized away so exported assignments
+// match the same keys as plain ones.
 func extractKey(line string) string {
 	k, _, _ := strings.Cut(line, "=")
+	k = strings.TrimSpace(k)
+	k = strings.TrimPrefix(k, "export ")
 	return strings.TrimSpace(k)
 }
 
@@ -164,18 +170,66 @@ func extractKey(line string) string {
 // and trailing comments removed. A '#' starts a comment only when preceded
 // by whitespace and never inside quotes.
 func extractValue(line string) string {
+	return unquote(rawValue(line))
+}
+
+// rawValue returns the value text after the first '=' with any trailing
+// comment removed but surrounding quotes intact.
+func rawValue(line string) string {
 	_, v, _ := strings.Cut(line, "=")
 	v = strings.TrimSpace(v)
+	return stripComment(v)
+}
 
-	// Strip surrounding quotes.
+// stripComment removes a trailing comment: '#' preceded by whitespace and
+// outside quotes.
+func stripComment(v string) string {
+	var quote byte
+	for i := 0; i < len(v); i++ {
+		switch c := v[i]; {
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '#' && i > 0 && (v[i-1] == ' ' || v[i-1] == '\t'):
+			return strings.TrimSpace(v[:i])
+		}
+	}
+	return v
+}
+
+// unquote strips one layer of surrounding quotes.
+func unquote(v string) string {
 	if len(v) >= 2 && (v[0] == '"' && v[len(v)-1] == '"' || v[0] == '\'' && v[len(v)-1] == '\'') {
 		return v[1 : len(v)-1]
 	}
+	return v
+}
 
-	// Strip trailing comment: '#' preceded by whitespace.
-	if idx := strings.Index(v, " #"); idx >= 0 {
-		v = strings.TrimSpace(v[:idx])
+// parseFileRaw reads a .env file like ParseFile but keeps each value's raw
+// text (surrounding quotes intact). Used for override files whose values
+// will be written back out.
+func parseFileRaw(path string) (map[string]string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("env: open file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	m := make(map[string]string)
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if isSkippable(line) {
+			continue
+		}
+		m[extractKey(line)] = rawValue(line)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("env: read file: %w", err)
 	}
 
-	return v
+	return m, nil
 }

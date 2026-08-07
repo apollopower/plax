@@ -2,6 +2,7 @@
 package worktree
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -64,21 +65,32 @@ func Create(repoRoot, name string) (string, error) {
 // Remove removes the worktree and force-deletes the branch.
 // Plax owns the branch — unmerged commits are the user's responsibility
 // to push before running down.
+//
+// The branch deletion runs even when worktree removal fails (e.g. the
+// worktree was deleted manually): a stranded branch blocks the next create,
+// and Down treats a missing worktree as an already-cleaned resource.
 func Remove(repoRoot, name string) error {
 	relPath := WorktreeRelPath(name)
 	branch := BranchName(name)
 
+	var wtErr error
 	cmd := exec.Command("git", "worktree", "remove", "--force", relPath)
 	cmd.Dir = repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("worktree: remove %s: %s", relPath, strings.TrimSpace(string(out)))
+		// Prune stale administrative entries so a manually deleted worktree
+		// does not wedge future operations.
+		prune := exec.Command("git", "worktree", "prune")
+		prune.Dir = repoRoot
+		_ = prune.Run()
+		wtErr = fmt.Errorf("worktree: remove %s: %s", relPath, strings.TrimSpace(string(out)))
 	}
 
 	cmd = exec.Command("git", "branch", "-D", branch)
 	cmd.Dir = repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("worktree: delete branch %s: %s", branch, strings.TrimSpace(string(out)))
+		branchErr := fmt.Errorf("worktree: delete branch %s: %s", branch, strings.TrimSpace(string(out)))
+		return errors.Join(wtErr, branchErr)
 	}
 
-	return nil
+	return wtErr
 }

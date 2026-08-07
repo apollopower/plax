@@ -98,6 +98,35 @@ func TestRemove_Success(t *testing.T) {
 	}
 }
 
+func TestRemove_MissingWorktreeStillDeletesBranch(t *testing.T) {
+	repo := initRepo(t)
+
+	absPath, err := Create(repo, "i1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	// Simulate manual cleanup outside plax: the directory and git's
+	// administrative entry are gone, but the branch remains. In this state
+	// `git worktree remove` fails — the branch must still be deleted.
+	if err := os.RemoveAll(absPath); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	prune := exec.Command("git", "worktree", "prune")
+	prune.Dir = repo
+	if out, err := prune.CombinedOutput(); err != nil {
+		t.Fatalf("prune: %s", out)
+	}
+
+	err = Remove(repo, "i1")
+	if err == nil {
+		t.Error("Remove should report the worktree removal failure")
+	}
+	if BranchExists(repo, "i1") {
+		t.Error("branch should be deleted even when the worktree is already gone")
+	}
+}
+
 func TestBranchExists_False(t *testing.T) {
 	repo := initRepo(t)
 	if BranchExists(repo, "nope") {

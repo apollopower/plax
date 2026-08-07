@@ -4,6 +4,7 @@
 package instance
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -17,28 +18,48 @@ import (
 	"github.com/apollopower/plax/pkg/registry"
 )
 
+// BaseManager is the subset of postgres.BaseManager that lifecycle
+// orchestration needs. An interface so tests can fake it.
+type BaseManager interface {
+	BaseStatus(ctx context.Context) (postgres.BaseInfo, error)
+	CloneBase(ctx context.Context, targetDB string) error
+	DropInstanceDB(ctx context.Context, dbName string) error
+}
+
+// DockerDriver is the subset of docker.Driver that lifecycle orchestration
+// needs. An interface so tests can fake it.
+type DockerDriver interface {
+	CreateNetwork(ctx context.Context, name string) error
+	RemoveNetwork(ctx context.Context, name string) error
+	RunService(ctx context.Context, cfg docker.ServiceConfig) (string, error)
+	StopService(ctx context.Context, containerID string) error
+	RemoveService(ctx context.Context, containerID string) error
+	ServiceRunning(ctx context.Context, containerID string) (bool, error)
+}
+
 // Deps holds the dependencies for instance lifecycle operations.
 // Assembled by the CLI layer and passed to Up/Down.
 //
 // Not every field is needed by every command:
 //
-//	Up:    all fields
-//	Down:  all fields
+//	Up:    all fields (nil causes a panic — do not call Up with partial Deps)
+//	Down:  Blueprint and Pool unused; BM and Docker may be nil, in which case
+//	       Down skips those resources with a warning and continues teardown
 //	ls:    Registry, RepoRoot
 //	attach/exec: Registry, RepoRoot
-//
-// The CLI layer populates only the fields each command requires.
-// Nil fields must not be dereferenced — Up and Down use all fields.
 type Deps struct {
 	Blueprint *blueprint.Blueprint
 	Registry  *registry.Registry
 	Pool      *portpool.PortPool
-	BM        *postgres.BaseManager
-	Docker    *docker.Driver
+	BM        BaseManager
+	Docker    DockerDriver
 	RepoRoot  string // absolute path to the repo root
 }
 
-var nameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+// Instance names are embedded in Postgres database names as unquoted
+// identifiers, so hyphens are not allowed even though git and Docker would
+// accept them.
+var nameRe = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // validateName checks that an instance name is safe for git branches,
 // Docker containers, Postgres databases, and filesystem paths.
@@ -47,7 +68,7 @@ func validateName(name string) error {
 		return fmt.Errorf("invalid instance name %q: must be 1-32 characters", name)
 	}
 	if !nameRe.MatchString(name) {
-		return fmt.Errorf("invalid instance name %q: must match ^[a-z][a-z0-9_-]*$", name)
+		return fmt.Errorf("invalid instance name %q: must match ^[a-z][a-z0-9_]*$", name)
 	}
 	return nil
 }

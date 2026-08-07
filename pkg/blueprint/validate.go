@@ -3,10 +3,21 @@ package blueprint
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 )
 
-func ValidateBlueprint(bp *Blueprint) []error {
+// nameCharset constrains service and process names: they become Docker
+// container names, log filenames, and map keys, so slashes and dots are
+// unsafe.
+var nameCharset = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
+
+// ValidateStructural reports errors that make a blueprint unsafe to execute:
+// bad names, collisions, missing required config. It does not check whether
+// hole keys appear in the env template — derivation appends missing holes, so
+// that condition is a warning, not a fatal error. Lifecycle commands use this
+// before producing side effects.
+func ValidateStructural(bp *Blueprint) []error {
 	var errs []error
 
 	if bp.Version != 1 {
@@ -25,7 +36,18 @@ func ValidateBlueprint(bp *Blueprint) []error {
 	}
 
 	usedPortVars := map[string]string{}
+	dockerNames := map[string]string{}
 	for svcName, svc := range bp.Services {
+		if !nameCharset.MatchString(svcName) {
+			errs = append(errs, fmt.Errorf("blueprint: service name %q must match ^[a-z0-9][a-z0-9_-]*$", svcName))
+		} else {
+			dn := dockerName(svcName)
+			if prev, ok := dockerNames[dn]; ok {
+				errs = append(errs, fmt.Errorf("blueprint: services %q and %q both map to docker name %q", prev, svcName, dn))
+			} else {
+				dockerNames[dn] = svcName
+			}
+		}
 		if svc.Isolation == IsolationLogical {
 			if svc.Type == "" {
 				errs = append(errs, fmt.Errorf("blueprint: service %q is logical but missing type", svcName))
@@ -49,6 +71,9 @@ func ValidateBlueprint(bp *Blueprint) []error {
 
 	procNames := map[string]bool{}
 	for _, proc := range bp.Processes {
+		if !nameCharset.MatchString(proc.Name) {
+			errs = append(errs, fmt.Errorf("blueprint: process name %q must match ^[a-z0-9][a-z0-9_-]*$", proc.Name))
+		}
 		if procNames[proc.Name] {
 			errs = append(errs, fmt.Errorf("blueprint: duplicate process %q", proc.Name))
 		}
@@ -81,11 +106,23 @@ func ValidateBlueprint(bp *Blueprint) []error {
 		errs = append(errs, fmt.Errorf("blueprint: env.template is required"))
 	}
 
+	return errs
+}
+
+func ValidateBlueprint(bp *Blueprint) []error {
+	errs := ValidateStructural(bp)
+
 	if bp.Env.Template != "" && len(bp.Env.Holes) > 0 {
 		errs = append(errs, checkHolesInTemplate(bp.Env.Template, bp.Env.Holes)...)
 	}
 
 	return errs
+}
+
+// dockerName mirrors the sanitization the docker driver applies to container
+// names, so collisions can be detected before any container is created.
+func dockerName(name string) string {
+	return strings.ReplaceAll(strings.ToLower(name), "_", "-")
 }
 
 func checkHolesInTemplate(templatePath string, holes map[string]string) []error {

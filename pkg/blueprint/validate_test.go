@@ -210,6 +210,57 @@ func TestValidate_HoleNotInTemplate(t *testing.T) {
 	}
 }
 
+func TestValidateStructural_IgnoresMissingHoles(t *testing.T) {
+	// Minimal fresh blueprint: other tests mutate validBP's shared maps.
+	bp := &Blueprint{
+		Version:  1,
+		Name:     "t",
+		PortPool: PortPool{Start: 3000, End: 4000},
+		Seed:     SeedConfig{Migrate: "m", Command: "c", Workdir: "."},
+		Env: EnvConfig{
+			Template: "testdata/does-not-matter.env.example",
+			Holes:    map[string]string{"MISSING_KEY": "redis://localhost:{{REDIS_PORT}}/0"},
+		},
+	}
+
+	if errs := ValidateStructural(bp); len(errs) > 0 {
+		t.Errorf("ValidateStructural should not check holes in template, got %v", errs)
+	}
+}
+
+func TestValidate_DockerNameCollision(t *testing.T) {
+	bp := *validBP
+	bp.Services["foo_bar"] = ServiceDef{Isolation: IsolationDedicated, Image: "img"}
+	bp.Services["foo-bar"] = ServiceDef{Isolation: IsolationDedicated, Image: "img"}
+
+	errs := ValidateStructural(&bp)
+	if !containsErr(t, errs, "both map to docker name") {
+		t.Errorf("expected docker name collision error, got %v", errs)
+	}
+}
+
+func TestValidate_BadServiceName(t *testing.T) {
+	for _, name := range []string{"Bad", "bad.name", "bad/name", "-bad"} {
+		bp := *validBP
+		bp.Services[name] = ServiceDef{Isolation: IsolationDedicated, Image: "img"}
+
+		errs := ValidateStructural(&bp)
+		if !containsErr(t, errs, "must match ^[a-z0-9]") {
+			t.Errorf("service %q: expected charset error, got %v", name, errs)
+		}
+	}
+}
+
+func TestValidate_BadProcessName(t *testing.T) {
+	bp := *validBP
+	bp.Processes = append(bp.Processes, ProcessDef{Name: "../escape", Command: "true", Workdir: "."})
+
+	errs := ValidateStructural(&bp)
+	if !containsErr(t, errs, "must match ^[a-z0-9]") {
+		t.Errorf("expected charset error, got %v", errs)
+	}
+}
+
 func TestValidate_EmptyPortVar(t *testing.T) {
 	bp := *validBP
 	bp.Services["bad"] = ServiceDef{

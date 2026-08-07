@@ -33,7 +33,11 @@ type InstanceRecord struct {
 	DBName       string            `json:"db_name"`
 	ContainerIDs map[string]string `json:"container_ids,omitempty"`
 	PIDs         map[string]int    `json:"pids,omitempty"`
-	Provenance   Provenance        `json:"provenance"`
+	// PIDStarts records each process's start time (clock ticks since boot)
+	// so Down can detect PGID reuse before signaling. Zero values mean the
+	// platform could not provide one; identity verification is then skipped.
+	PIDStarts  map[string]int64 `json:"pid_start_times,omitempty"`
+	Provenance Provenance       `json:"provenance"`
 }
 
 type PortAllocation struct {

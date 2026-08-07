@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/apollopower/plax/pkg/blueprint"
+	"github.com/apollopower/plax/pkg/testutil"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -37,6 +38,9 @@ func testManagerWith(t *testing.T, bp *blueprint.Blueprint) *BaseManager {
 	t.Helper()
 	ctx := context.Background()
 	url := pgTestURL(t)
+	// These tests create and drop plax_base; serialize against the cmd/plax
+	// end-to-end test, which uses the same database on the same server.
+	testutil.LockPostgres(t, url)
 	bm, err := NewBaseManager(ctx, url, ".", bp)
 	if err != nil {
 		t.Skipf("skipping: cannot connect to Postgres: %v", err)

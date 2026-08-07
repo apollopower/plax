@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,12 +17,24 @@ import (
 	"github.com/apollopower/plax/pkg/worktree"
 )
 
+// settleDelay is how long Up waits after starting workloads before checking
+// they are still alive. It catches the common failure — a bad command or
+// image exiting immediately — without pretending to be a readiness check.
+const settleDelay = 300 * time.Millisecond
+
 // Up creates a full instance: branch, worktree, network, ports, .env,
 // database, containers, processes, registry entry. Rolls back all side
 // effects on failure.
 func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	if err := validateName(name); err != nil {
 		return err
+	}
+
+	// Structural blueprint errors (duplicate processes, port-var collisions,
+	// unsafe names) must fail before any side effect. Hole warnings are not
+	// fatal: derivation appends holes missing from the template.
+	if errs := blueprint.ValidateStructural(deps.Blueprint); len(errs) > 0 {
+		return fmt.Errorf("invalid blueprint: %w", errors.Join(errs...))
 	}
 
 	// Check instance does not already exist.
@@ -47,6 +60,11 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 
 	// Rollback: each step that produces a side effect appends a cleanup
 	// function. On failure, cleanups run in reverse order.
+	//
+	// Cleanups run with a non-canceled context: when ctx cancellation (e.g.
+	// Ctrl-C) is what caused the failure, Docker and Postgres cleanup calls
+	// must still be able to complete.
+	cleanupCtx := context.WithoutCancel(ctx)
 	var cleanups []func()
 	success := false
 	defer func() {
@@ -76,7 +94,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		return err
 	}
 	cleanups = append(cleanups, func() {
-		if err := deps.Docker.RemoveNetwork(ctx, netName); err != nil {
+		if err := deps.Docker.RemoveNetwork(cleanupCtx, netName); err != nil {
 			fmt.Fprintf(os.Stderr, "rollback: remove network: %v\n", err)
 		}
 	})
@@ -102,14 +120,18 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	// Step 4: Derive .env.
 	// The user's own .env provides real secrets; the template provides
 	// structure and defaults; holes get per-instance values.
-	fmt.Fprintf(os.Stderr, "deriving .env...\n")
-	templatePath := filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)
-	overridesPath := filepath.Join(deps.RepoRoot, ".env")
+	// Skipped for blueprints without an env template — there is nothing
+	// to derive.
 	envPath := filepath.Join(worktreePath, ".env")
-	if err := env.Derive(templatePath, overridesPath, deps.Blueprint.Env.Holes, values, envPath); err != nil {
-		return err
+	if deps.Blueprint.Env.Template != "" {
+		fmt.Fprintf(os.Stderr, "deriving .env...\n")
+		templatePath := filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)
+		overridesPath := filepath.Join(deps.RepoRoot, ".env")
+		if err := env.Derive(templatePath, overridesPath, deps.Blueprint.Env.Holes, values, envPath); err != nil {
+			return err
+		}
+		// No separate cleanup — removing the worktree removes .env.
 	}
-	// No separate cleanup — removing the worktree removes .env.
 
 	// Step 5: Clone database.
 	dbName := "plax_" + name
@@ -118,7 +140,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		return fmt.Errorf("cloning database: %w", err)
 	}
 	cleanups = append(cleanups, func() {
-		if err := deps.BM.DropInstanceDB(ctx, dbName); err != nil {
+		if err := deps.BM.DropInstanceDB(cleanupCtx, dbName); err != nil {
 			fmt.Fprintf(os.Stderr, "rollback: drop database: %v\n", err)
 		}
 	})
@@ -128,7 +150,19 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	deps.Registry.BlueprintStamp = computeBlueprintStamp(deps.RepoRoot, deps.Blueprint)
 
 	// Step 7: Start dedicated containers.
+	// The cleanup is registered before the loop: closures capture the map,
+	// so the deferred rollback sees every container started before a failure.
 	containerIDs := map[string]string{}
+	cleanups = append(cleanups, func() {
+		for svcName, cid := range containerIDs {
+			if err := deps.Docker.StopService(cleanupCtx, cid); err != nil {
+				fmt.Fprintf(os.Stderr, "rollback: stop %s: %v\n", svcName, err)
+			}
+			if err := deps.Docker.RemoveService(cleanupCtx, cid); err != nil {
+				fmt.Fprintf(os.Stderr, "rollback: remove %s: %v\n", svcName, err)
+			}
+		}
+	})
 	for svcName, svc := range deps.Blueprint.Services {
 		if svc.Isolation != blueprint.IsolationDedicated {
 			continue
@@ -159,36 +193,31 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		}
 		cid, err := deps.Docker.RunService(ctx, cfg)
 		if err != nil {
-			// Stop and remove any containers started so far.
-			for _, id := range containerIDs {
-				_ = deps.Docker.StopService(ctx, id)
-				_ = deps.Docker.RemoveService(ctx, id)
-			}
 			return fmt.Errorf("starting %s: %w", svcName, err)
 		}
 		containerIDs[svcName] = cid
 	}
-	if len(containerIDs) > 0 {
-		cleanups = append(cleanups, func() {
-			for svcName, cid := range containerIDs {
-				if err := deps.Docker.StopService(ctx, cid); err != nil {
-					fmt.Fprintf(os.Stderr, "rollback: stop %s: %v\n", svcName, err)
-				}
-				if err := deps.Docker.RemoveService(ctx, cid); err != nil {
-					fmt.Fprintf(os.Stderr, "rollback: remove %s: %v\n", svcName, err)
-				}
-			}
-		})
-	}
 
 	// Step 8: Start native processes.
 	pids := map[string]int{}
+	pidStarts := map[string]int64{}
+	cleanups = append(cleanups, func() {
+		for procName, pgid := range pids {
+			if err := process.Terminate(pgid, pidStarts[procName], 5*time.Second); err != nil {
+				fmt.Fprintf(os.Stderr, "rollback: terminate %s: %v\n", procName, err)
+			}
+		}
+	})
 	if len(deps.Blueprint.Processes) > 0 {
 		logDir := filepath.Join(deps.RepoRoot, ".plax", "logs", name)
 
-		derivedEnv, err := env.ParseFile(envPath)
-		if err != nil {
-			return fmt.Errorf("parsing derived .env: %w", err)
+		derivedEnv := map[string]string{}
+		if deps.Blueprint.Env.Template != "" {
+			var err error
+			derivedEnv, err = env.ParseFile(envPath)
+			if err != nil {
+				return fmt.Errorf("parsing derived .env: %w", err)
+			}
 		}
 
 		for _, proc := range deps.Blueprint.Processes {
@@ -198,36 +227,43 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 
 			renderedCmd, err := env.Render(proc.Command, values)
 			if err != nil {
-				for _, pgid := range pids {
-					_ = process.Terminate(pgid, 5*time.Second)
-				}
 				return fmt.Errorf("process %q: %w", proc.Name, err)
 			}
 
 			procDir := filepath.Join(worktreePath, proc.Workdir)
 			logPath := filepath.Join(logDir, proc.Name+".log")
 
-			pgid, err := process.Spawn(proc.Name, renderedCmd, procEnv, procDir, logPath)
+			pgid, startTime, err := process.Spawn(proc.Name, renderedCmd, procEnv, procDir, logPath)
 			if err != nil {
-				for _, pg := range pids {
-					_ = process.Terminate(pg, 5*time.Second)
-				}
 				return err
 			}
 			pids[proc.Name] = pgid
+			pidStarts[proc.Name] = startTime
 		}
 	}
-	if len(pids) > 0 {
-		cleanups = append(cleanups, func() {
-			for procName, pgid := range pids {
-				if err := process.Terminate(pgid, 5*time.Second); err != nil {
-					fmt.Fprintf(os.Stderr, "rollback: terminate %s: %v\n", procName, err)
-				}
+
+	// Step 9: Verify the workloads stayed up. Spawn and ContainerStart only
+	// prove the workload started; a typo'd command exits immediately and must
+	// fail the whole up rather than record a "running" instance.
+	if len(containerIDs) > 0 || len(pids) > 0 {
+		time.Sleep(settleDelay)
+		for svcName, cid := range containerIDs {
+			running, err := deps.Docker.ServiceRunning(ctx, cid)
+			if err != nil {
+				return fmt.Errorf("checking %s: %w", svcName, err)
 			}
-		})
+			if !running {
+				return fmt.Errorf("service %s exited immediately after start", svcName)
+			}
+		}
+		for procName, pgid := range pids {
+			if !process.IsAlive(pgid) {
+				return fmt.Errorf("process %s exited immediately after start — see .plax/logs/%s/%s.log", procName, name, procName)
+			}
+		}
 	}
 
-	// Step 9: Write registry.
+	// Step 10: Write registry.
 	if err := deps.Registry.AddInstance(name, registry.InstanceRecord{
 		Branch:       worktree.BranchName(name),
 		WorktreePath: worktreePath,
@@ -237,6 +273,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		DBName:       dbName,
 		ContainerIDs: containerIDs,
 		PIDs:         pids,
+		PIDStarts:    pidStarts,
 		Provenance: registry.Provenance{
 			BaseVersion: baseInfo.ProvenanceVer,
 			Toolchain:   toolchainHash,
