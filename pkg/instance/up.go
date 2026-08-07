@@ -14,6 +14,7 @@ import (
 	"github.com/apollopower/plax/pkg/derive/env"
 	"github.com/apollopower/plax/pkg/process"
 	"github.com/apollopower/plax/pkg/registry"
+	"github.com/apollopower/plax/pkg/toolchain"
 	"github.com/apollopower/plax/pkg/worktree"
 )
 
@@ -147,6 +148,18 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 
 	// Step 6: Compute provenance and blueprint stamp.
 	toolchainHash := hashFile(filepath.Join(deps.RepoRoot, deps.Blueprint.Toolchain))
+	var toolVersions map[string]string
+	if deps.Blueprint.Toolchain != "" {
+		pins, err := toolchain.ParsePins(filepath.Join(deps.RepoRoot, deps.Blueprint.Toolchain))
+		if err == nil && pins != nil {
+			toolVersions = toolchain.ResolveVersions(pins)
+		}
+	}
+	baseRef, baseCommit, err := worktree.HeadRef(deps.RepoRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: recording head ref: %v\n", err)
+		baseRef, baseCommit = "", ""
+	}
 	deps.Registry.BlueprintStamp = computeBlueprintStamp(deps.RepoRoot, deps.Blueprint)
 
 	// Step 7: Start dedicated containers.
@@ -274,9 +287,12 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		ContainerIDs: containerIDs,
 		PIDs:         pids,
 		PIDStarts:    pidStarts,
+		BaseRef:      baseRef,
+		BaseCommit:   baseCommit,
 		Provenance: registry.Provenance{
-			BaseVersion: baseInfo.ProvenanceVer,
-			Toolchain:   toolchainHash,
+			BaseVersion:  baseInfo.ProvenanceVer,
+			Toolchain:    toolchainHash,
+			ToolVersions: toolVersions,
 		},
 	}); err != nil {
 		return fmt.Errorf("registry: %w", err)

@@ -183,9 +183,9 @@ func TestAllocate_CachesPort(t *testing.T) {
 	}
 }
 
-func TestPortFree_RealPort(t *testing.T) {
-	if !portFree(getFreePort(t)) {
-		t.Error("portFree should return true for free port")
+func TestProbeFree_RealPort(t *testing.T) {
+	if !ProbeFree(getFreePort(t)) {
+		t.Error("ProbeFree should return true for free port")
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,19 +20,27 @@ import (
 	"github.com/apollopower/plax/pkg/derive/docker"
 	"github.com/apollopower/plax/pkg/derive/env"
 	"github.com/apollopower/plax/pkg/derive/postgres"
+	"github.com/apollopower/plax/pkg/doctor"
 	"github.com/apollopower/plax/pkg/instance"
 	"github.com/apollopower/plax/pkg/portpool"
 	"github.com/apollopower/plax/pkg/registry"
+	"github.com/apollopower/plax/pkg/status"
+	"github.com/apollopower/plax/pkg/worktree"
 )
 
 type CLI struct {
-	Init   InitCmd   `cmd:"" help:"Scaffold a blueprint by parsing the repo's docker-compose.yml and .env.example"`
-	Base   BaseCmd   `cmd:"" help:"Manage the shared Postgres base database"`
-	Up     UpCmd     `cmd:"" help:"Create and start an instance"`
-	Down   DownCmd   `cmd:"" help:"Destroy an instance"`
-	Ls     LsCmd     `cmd:"" help:"List instances"`
-	Attach AttachCmd `cmd:"" help:"Open a shell in an instance's environment"`
-	Exec   ExecCmd   `cmd:"" help:"Run a command in an instance's environment"`
+	Init     InitCmd     `cmd:"" help:"Scaffold a blueprint by parsing the repo's docker-compose.yml and .env.example"`
+	Base     BaseCmd     `cmd:"" help:"Manage the shared Postgres base database"`
+	Up       UpCmd       `cmd:"" help:"Create and start an instance"`
+	Down     DownCmd     `cmd:"" help:"Destroy an instance"`
+	Ls       LsCmd       `cmd:"" help:"List instances"`
+	Attach   AttachCmd   `cmd:"" help:"Open a shell in an instance's environment"`
+	Exec     ExecCmd     `cmd:"" help:"Run a command in an instance's environment"`
+	Suspend  SuspendCmd  `cmd:"" help:"Suspend an instance (stop workloads, keep state)"`
+	Resume   ResumeCmd   `cmd:"" help:"Resume a suspended instance"`
+	Status   StatusCmd   `cmd:"" help:"Print a five-dimension drift report for an instance"`
+	Doctor   DoctorCmd   `cmd:"" help:"Validate repo, registry, machine, and base health"`
+	Rederive RederiveCmd `cmd:"" help:"Regenerate .env files for all instances"`
 }
 
 type InitCmd struct {
@@ -100,6 +109,34 @@ type ExecCmd struct {
 	Root string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
 }
 
+type SuspendCmd struct {
+	Name string `arg:"" help:"Instance name"`
+	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+}
+
+type ResumeCmd struct {
+	Name  string `arg:"" help:"Instance name"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (for drift report)"`
+}
+
+type StatusCmd struct {
+	Name  string `arg:"" help:"Instance name"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (for Data/Schema dimensions)"`
+	JSON  bool   `name:"json" help:"Output as JSON"`
+}
+
+type DoctorCmd struct {
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (for base health checks)"`
+	JSON  bool   `name:"json" help:"Output as JSON"`
+}
+
+type RederiveCmd struct {
+	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+}
+
 func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli,
@@ -131,6 +168,16 @@ func main() {
 		ctx.FatalIfErrorf(runAttach(cli.Attach))
 	case "exec <name> <cmd>":
 		ctx.FatalIfErrorf(runExec(cli.Exec))
+	case "suspend <name>":
+		ctx.FatalIfErrorf(runSuspend(cli.Suspend))
+	case "resume <name>":
+		ctx.FatalIfErrorf(runResume(cli.Resume))
+	case "status <name>":
+		ctx.FatalIfErrorf(runStatus(cli.Status))
+	case "doctor":
+		ctx.FatalIfErrorf(runDoctor(cli.Doctor))
+	case "rederive":
+		ctx.FatalIfErrorf(runRederive(cli.Rederive))
 	}
 }
 
@@ -308,8 +355,6 @@ func runBaseStatus(cmd BaseStatusCmd) error {
 // --- lifecycle commands (Phase 3) ---
 
 func runUp(cmd UpCmd) error {
-	// Ctrl-C cancels the operation; Up's rollback runs with a non-canceled
-	// context so cleanup still completes.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -318,6 +363,8 @@ func runUp(cmd UpCmd) error {
 		return err
 	}
 	defer deps.Close()
+
+	printStampNotice(cmd.Root, deps.Blueprint, deps.Registry)
 
 	return instance.Up(ctx, deps.Deps, cmd.Name)
 }
@@ -366,6 +413,9 @@ func runLs(cmd LsCmd) error {
 		return err
 	}
 
+	bp, _ := loadBlueprint(cmd.Root)
+	printStampNotice(cmd.Root, bp, reg)
+
 	if cmd.JSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -406,6 +456,42 @@ func runAttach(cmd AttachCmd) error {
 		return fmt.Errorf("instance %q not found", cmd.Name)
 	}
 
+	bp, _ := loadBlueprint(cmd.Root)
+	printStampNotice(cmd.Root, bp, reg)
+
+	if rec.State == "suspended" {
+		fmt.Fprintf(os.Stderr, "note: instance %s is suspended — services and processes are stopped\n", cmd.Name)
+	}
+
+	absRoot, _ := filepath.Abs(cmd.Root)
+	if bp != nil {
+		currentStamp := computeStamp(cmd.Root, bp)
+		sdeps := &status.Deps{
+			Blueprint:    bp,
+			Registry:     reg,
+			RepoRoot:     absRoot,
+			Branch:       rec.Branch,
+			CurrentStamp: currentStamp,
+		}
+		if report, err := status.Build(context.Background(), sdeps, cmd.Name); err == nil {
+			var drifted []string
+			for _, d := range []struct {
+				n   string
+				dim status.Dimension
+			}{
+				{"code", report.Code}, {"host", report.Host}, {"config", report.Config},
+			} {
+				if d.dim.Level == status.Drift {
+					drifted = append(drifted, d.n)
+				}
+			}
+			if len(drifted) > 0 {
+				fmt.Fprintf(os.Stderr, "note: drift detected (%s) — run 'plax status %s'\n",
+					strings.Join(drifted, ", "), cmd.Name)
+			}
+		}
+	}
+
 	envVars, err := loadInstanceEnv(rec.WorktreePath)
 	if err != nil {
 		return err
@@ -428,7 +514,6 @@ func runAttach(cmd AttachCmd) error {
 
 func runExec(cmd ExecCmd) error {
 	args := cmd.Cmd
-	// kong's passthrough keeps the "--" token in the args; strip it.
 	if len(args) > 0 && args[0] == "--" {
 		args = args[1:]
 	}
@@ -444,6 +529,13 @@ func runExec(cmd ExecCmd) error {
 	rec, found := reg.GetInstance(cmd.Name)
 	if !found {
 		return fmt.Errorf("instance %q not found", cmd.Name)
+	}
+
+	bp, _ := loadBlueprint(cmd.Root)
+	printStampNotice(cmd.Root, bp, reg)
+
+	if rec.State == "suspended" {
+		fmt.Fprintf(os.Stderr, "note: instance %s is suspended — services and processes are stopped\n", cmd.Name)
 	}
 
 	envVars, err := loadInstanceEnv(rec.WorktreePath)
@@ -637,4 +729,339 @@ func loadBlueprintAndConnString(root, pgURL string) (*blueprint.Blueprint, strin
 
 	connStr := fmt.Sprintf("postgres://%s:%s@localhost:5432/postgres?sslmode=disable", user, password)
 	return &bp, connStr, nil
+}
+
+func loadBlueprint(root string) (*blueprint.Blueprint, error) {
+	plaxPath := filepath.Join(root, "plax.json")
+	data, err := os.ReadFile(plaxPath)
+	if err != nil {
+		return nil, err
+	}
+	var bp blueprint.Blueprint
+	if err := json.Unmarshal(data, &bp); err != nil {
+		return nil, err
+	}
+	return &bp, nil
+}
+
+func computeStamp(repoRoot string, bp *blueprint.Blueprint) registry.BlueprintStamp {
+	hashFile := func(path string) string {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return ""
+		}
+		h := sha256.Sum256(data)
+		return fmt.Sprintf("%x", h[:])
+	}
+	return registry.BlueprintStamp{
+		ComposeHash:    hashFile(filepath.Join(repoRoot, "docker-compose.yml")),
+		EnvExampleHash: hashFile(filepath.Join(repoRoot, bp.Env.Template)),
+		ToolchainHash:  hashFile(filepath.Join(repoRoot, bp.Toolchain)),
+	}
+}
+
+func stampNotice(stamp registry.BlueprintStamp, reg *registry.Registry) {
+	stored := reg.BlueprintStamp
+	if stored.ComposeHash == "" && stored.EnvExampleHash == "" && stored.ToolchainHash == "" {
+		return
+	}
+	if stored.ComposeHash != stamp.ComposeHash ||
+		stored.EnvExampleHash != stamp.EnvExampleHash ||
+		stored.ToolchainHash != stamp.ToolchainHash {
+		fmt.Fprintln(os.Stderr, "note: blueprint inputs changed since last 'plax up' — run 'plax doctor' for details")
+	}
+}
+
+func printStampNotice(root string, bp *blueprint.Blueprint, reg *registry.Registry) {
+	if bp == nil {
+		return
+	}
+	current := computeStamp(root, bp)
+	stampNotice(current, reg)
+}
+
+func runSuspend(cmd SuspendCmd) error {
+	absRoot, err := filepath.Abs(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("resolving repo root: %w", err)
+	}
+
+	reg, err := openRegistry(cmd.Root)
+	if err != nil {
+		return err
+	}
+
+	bp, _ := loadBlueprint(cmd.Root)
+	printStampNotice(cmd.Root, bp, reg)
+
+	deps := &instance.Deps{Registry: reg, RepoRoot: absRoot}
+
+	if drv, err := docker.NewDriver(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	} else {
+		defer func() { _ = drv.Close() }()
+		deps.Docker = drv
+	}
+
+	return instance.Suspend(context.Background(), deps, cmd.Name)
+}
+
+func runResume(cmd ResumeCmd) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	absRoot, err := filepath.Abs(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("resolving repo root: %w", err)
+	}
+
+	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	if err != nil {
+		return err
+	}
+
+	reg, err := openRegistry(cmd.Root)
+	if err != nil {
+		return err
+	}
+
+	printStampNotice(cmd.Root, bp, reg)
+
+	deps := &instance.Deps{Blueprint: bp, Registry: reg, RepoRoot: absRoot}
+
+	if drv, err := docker.NewDriver(); err != nil {
+		if rec, found := reg.GetInstance(cmd.Name); found && len(rec.ContainerIDs) > 0 {
+			return fmt.Errorf("docker unavailable — cannot start %d container(s); fix Docker and retry", len(rec.ContainerIDs))
+		}
+	} else {
+		defer func() { _ = drv.Close() }()
+		deps.Docker = drv
+	}
+
+	if err := instance.Resume(ctx, deps, cmd.Name); err != nil {
+		return err
+	}
+
+	bm, err := postgres.NewBaseManager(ctx, connStr, absRoot, bp)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: postgres unavailable — drift report skipped\n")
+		fmt.Fprintf(os.Stderr, "instance %s resumed\n", cmd.Name)
+		return nil
+	}
+	defer bm.Close()
+
+	currentStamp := computeStamp(cmd.Root, bp)
+	sdeps := &status.Deps{
+		Blueprint:    bp,
+		Registry:     reg,
+		BM:           bm,
+		RepoRoot:     absRoot,
+		Branch:       worktree.BranchName(cmd.Name),
+		CurrentStamp: currentStamp,
+	}
+	report, err := status.Build(ctx, sdeps, cmd.Name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "note: drift report unavailable: %v\n", err)
+	} else {
+		printReportStderr(report)
+	}
+
+	fmt.Fprintf(os.Stderr, "instance %s resumed\n", cmd.Name)
+	return nil
+}
+
+func runStatus(cmd StatusCmd) error {
+	absRoot, err := filepath.Abs(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("resolving repo root: %w", err)
+	}
+
+	reg, err := openRegistry(cmd.Root)
+	if err != nil {
+		return err
+	}
+
+	rec, found := reg.GetInstance(cmd.Name)
+	if !found {
+		return fmt.Errorf("instance %q not found", cmd.Name)
+	}
+
+	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	if err != nil {
+		bp = nil
+		connStr = ""
+	}
+
+	var bm *postgres.BaseManager
+	if bp != nil && connStr != "" {
+		bm, err = postgres.NewBaseManager(context.Background(), connStr, absRoot, bp)
+		if err != nil {
+			bm = nil
+		}
+		if bm != nil {
+			defer bm.Close()
+		}
+	}
+
+	if bp == nil {
+		bp = &blueprint.Blueprint{}
+	}
+
+	currentStamp := computeStamp(cmd.Root, bp)
+	sdeps := &status.Deps{
+		Blueprint:    bp,
+		Registry:     reg,
+		BM:           bm,
+		RepoRoot:     absRoot,
+		Branch:       rec.Branch,
+		CurrentStamp: currentStamp,
+	}
+
+	report, err := status.Build(context.Background(), sdeps, cmd.Name)
+	if err != nil {
+		return err
+	}
+
+	if cmd.JSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(report)
+	}
+
+	printReportTable(os.Stdout, report)
+	return nil
+}
+
+func runDoctor(cmd DoctorCmd) error {
+	absRoot, err := filepath.Abs(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("resolving repo root: %w", err)
+	}
+
+	bp, err := loadBlueprint(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("parsing plax.json: %w", err)
+	}
+
+	reg, err := openRegistry(cmd.Root)
+	if err != nil {
+		return err
+	}
+
+	ddeps := &doctor.Deps{
+		Blueprint: bp,
+		Registry:  reg,
+		RepoRoot:  absRoot,
+	}
+
+	pgURL := cmd.PgURL
+	if pgURL == "" {
+		pgURL, _ = deriveConnString(bp)
+	}
+	if pgURL != "" {
+		bm, err := postgres.NewBaseManager(context.Background(), pgURL, absRoot, bp)
+		if err == nil {
+			defer bm.Close()
+			ddeps.BM = bm
+		}
+	}
+
+	if drv, err := docker.NewDriver(); err == nil {
+		defer func() { _ = drv.Close() }()
+		ddeps.Docker = drv
+	}
+
+	report := doctor.Run(context.Background(), ddeps)
+
+	if cmd.JSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(report)
+	}
+
+	area := ""
+	for _, c := range report.Checks {
+		if c.Area != area {
+			if area != "" {
+				fmt.Println()
+			}
+			fmt.Printf("%s:\n", c.Area)
+			area = c.Area
+		}
+		fmt.Printf("  [%s] %s\n", c.Level, c.Message)
+	}
+
+	if report.Failed() {
+		os.Exit(1)
+	}
+	return nil
+}
+
+func runRederive(cmd RederiveCmd) error {
+	absRoot, err := filepath.Abs(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("resolving repo root: %w", err)
+	}
+
+	bp, err := loadBlueprint(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("plax.json not found at %s — run 'plax init' first", filepath.Join(cmd.Root, "plax.json"))
+	}
+
+	reg, err := openRegistry(cmd.Root)
+	if err != nil {
+		return err
+	}
+
+	deps := &instance.Deps{Blueprint: bp, Registry: reg, RepoRoot: absRoot}
+	return instance.Rederive(context.Background(), deps)
+}
+
+func printReportStderr(r *status.Report) {
+	for _, d := range []struct {
+		n   string
+		dim status.Dimension
+	}{
+		{"code", r.Code}, {"schema", r.Schema}, {"data", r.Data},
+		{"host", r.Host}, {"config", r.Config},
+	} {
+		if d.dim.Level != status.OK && d.dim.Level != status.Unknown {
+			fmt.Fprintf(os.Stderr, "  %s: [%s] %s\n", d.n, d.dim.Level, d.dim.Detail)
+		}
+	}
+}
+
+func printReportTable(w *os.File, r *status.Report) {
+	_, _ = fmt.Fprintf(w, "%-8s %-12s %-10s %s\n", "NAME", "DIMENSION", "STATUS", "DETAIL")
+	for _, d := range []struct {
+		n   string
+		dim status.Dimension
+	}{
+		{"code", r.Code}, {"schema", r.Schema}, {"data", r.Data},
+		{"host", r.Host}, {"config", r.Config},
+	} {
+		_, _ = fmt.Fprintf(w, "%-8s %-12s %-10s %s\n", r.Instance, d.n, d.dim.Level, d.dim.Detail)
+	}
+}
+
+func deriveConnString(bp *blueprint.Blueprint) (string, error) {
+	user := "postgres"
+	password := "postgres"
+	found := false
+	for _, svc := range bp.Services {
+		if svc.Isolation == blueprint.IsolationLogical && svc.Type == "postgres" {
+			found = true
+			if u, ok := svc.Env["POSTGRES_USER"]; ok && u != "" {
+				user = u
+			}
+			if p, ok := svc.Env["POSTGRES_PASSWORD"]; ok && p != "" {
+				password = p
+			}
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("no logical postgres service in blueprint")
+	}
+	return fmt.Sprintf("postgres://%s:%s@localhost:5432/postgres?sslmode=disable", user, password), nil
 }
