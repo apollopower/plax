@@ -708,26 +708,10 @@ func loadBlueprintAndConnString(root, pgURL string) (*blueprint.Blueprint, strin
 		return &bp, pgURL, nil
 	}
 
-	user := "postgres"
-	password := "postgres"
-	found := false
-	for _, svc := range bp.Services {
-		if svc.Isolation == blueprint.IsolationLogical && svc.Type == "postgres" {
-			found = true
-			if u, ok := svc.Env["POSTGRES_USER"]; ok && u != "" {
-				user = u
-			}
-			if p, ok := svc.Env["POSTGRES_PASSWORD"]; ok && p != "" {
-				password = p
-			}
-			break
-		}
+	connStr, err := pgConnString(&bp)
+	if err != nil {
+		return nil, "", err
 	}
-	if !found {
-		return nil, "", fmt.Errorf("no logical postgres service in blueprint")
-	}
-
-	connStr := fmt.Sprintf("postgres://%s:%s@localhost:5432/postgres?sslmode=disable", user, password)
 	return &bp, connStr, nil
 }
 
@@ -1037,7 +1021,7 @@ func printReportTable(w *os.File, r *status.Report) {
 	}
 }
 
-func deriveConnString(bp *blueprint.Blueprint) (string, error) {
+func pgConnString(bp *blueprint.Blueprint) (string, error) {
 	user := "postgres"
 	password := "postgres"
 	found := false
@@ -1057,4 +1041,8 @@ func deriveConnString(bp *blueprint.Blueprint) (string, error) {
 		return "", fmt.Errorf("no logical postgres service in blueprint")
 	}
 	return fmt.Sprintf("postgres://%s:%s@localhost:5432/postgres?sslmode=disable", user, password), nil
+}
+
+func deriveConnString(bp *blueprint.Blueprint) (string, error) {
+	return pgConnString(bp)
 }
