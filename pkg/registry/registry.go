@@ -50,7 +50,7 @@ type PortAllocation struct {
 type Provenance struct {
 	BaseVersion  int               `json:"base_version"`
 	Toolchain    string            `json:"toolchain"`
-	ToolVersions map[string]string `json:"tool_versions,omitempty"`
+	ToolVersions map[string]string `json:"tool_versions"`
 }
 
 // Opens an existing registry file or returns an empty, ready-to-use registry

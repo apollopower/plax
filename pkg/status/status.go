@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/apollopower/plax/pkg/blueprint"
@@ -47,7 +48,6 @@ type Deps struct {
 	Registry     *registry.Registry
 	BM           BaseManager
 	RepoRoot     string
-	Branch       string
 	CurrentStamp registry.BlueprintStamp
 }
 
@@ -83,7 +83,7 @@ func Build(ctx context.Context, deps *Deps, name string) (*Report, error) {
 	}
 
 	report.Schema = schemaDrift(deps.RepoRoot, base, migrationsDir, deps.BM, &rec, prov)
-	report.Data = dataDrift(deps.BM, &rec, prov)
+	report.Data = dataDrift(ctx, deps.BM, &rec, prov)
 
 	return report, nil
 }
@@ -151,10 +151,15 @@ func hostDrift(repoRoot string, bp *blueprint.Blueprint, rec *registry.InstanceR
 	current := toolchain.ResolveVersions(pins)
 	diffs := toolchain.CompareVersions(rec.Provenance.ToolVersions, current)
 	if len(diffs) == 0 {
+		var tools []string
+		for t := range pins {
+			tools = append(tools, t)
+		}
+		sort.Strings(tools)
 		var parts []string
-		for _, pin := range pins {
-			if ver, ok := current[pin]; ok {
-				parts = append(parts, fmt.Sprintf("%s@%s", pin, ver))
+		for _, t := range tools {
+			if ver, ok := current[t]; ok {
+				parts = append(parts, fmt.Sprintf("%s@%s", t, ver))
 			}
 		}
 		d.Level = OK
@@ -211,15 +216,31 @@ func schemaDrift(repoRoot, base, migrationsDir string, bm BaseManager, rec *regi
 	d := Dimension{Name: "schema"}
 	if bm == nil || prov == nil || prov.SchemaHash == "" {
 		d.Level = Unknown
-		if bm == nil {
+		switch {
+		case bm == nil:
 			d.Detail = "postgres unreachable"
+		case prov == nil:
+			d.Detail = "no provenance row"
+		default:
+			d.Detail = "no schema hash recorded"
 		}
+		return d
+	}
+
+	if base == "" {
+		d.Level = Unknown
+		d.Detail = "no base ref to compare against"
 		return d
 	}
 
 	names, err := worktree.SchemaFilesAtRef(repoRoot, base, migrationsDir)
 	if err != nil || len(names) == 0 {
 		d.Level = Unknown
+		if err != nil {
+			d.Detail = fmt.Sprintf("git ls-tree: %v", err)
+		} else {
+			d.Detail = fmt.Sprintf("no migration files at %s on %s", migrationsDir, base)
+		}
 		return d
 	}
 	repoHash := postgres.HashMigrationNames(names)
@@ -234,7 +255,7 @@ func schemaDrift(repoRoot, base, migrationsDir string, bm BaseManager, rec *regi
 	return d
 }
 
-func dataDrift(bm BaseManager, rec *registry.InstanceRecord, prov *postgres.ProvenanceRow) Dimension {
+func dataDrift(ctx context.Context, bm BaseManager, rec *registry.InstanceRecord, prov *postgres.ProvenanceRow) Dimension {
 	d := Dimension{Name: "data"}
 	if bm == nil {
 		d.Level = Unknown
@@ -249,7 +270,7 @@ func dataDrift(bm BaseManager, rec *registry.InstanceRecord, prov *postgres.Prov
 		return d
 	}
 
-	info, err := bm.BaseStatus(context.Background())
+	info, err := bm.BaseStatus(ctx)
 	if err != nil {
 		d.Level = Unknown
 		d.Detail = fmt.Sprintf("base status: %v", err)

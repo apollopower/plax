@@ -16,6 +16,15 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
+func hashFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	h := sha256.Sum256(data)
+	return fmt.Sprintf("%x", h[:])
+}
+
 type Level string
 
 const (
@@ -87,7 +96,9 @@ func runBlueprintVsRepo(r *Report, deps *Deps) {
 
 	composePath := filepath.Join(deps.RepoRoot, "docker-compose.yml")
 	data, composeErr := os.ReadFile(composePath)
-	if composeErr == nil {
+	if composeErr != nil {
+		r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: "docker-compose.yml missing or unreadable"})
+	} else {
 		var parsed map[string]any
 		if yamlErr := yaml.Unmarshal(data, &parsed); yamlErr == nil {
 			services, _ := parsed["services"].(map[string]any)
@@ -126,7 +137,11 @@ func runBlueprintVsRepo(r *Report, deps *Deps) {
 
 	stored := deps.Registry.BlueprintStamp
 	if stored.ComposeHash != "" || stored.EnvExampleHash != "" || stored.ToolchainHash != "" {
-		current := computeStamp(deps.RepoRoot, deps.Blueprint)
+		current := registry.BlueprintStamp{
+			ComposeHash:    hashFile(filepath.Join(deps.RepoRoot, "docker-compose.yml")),
+			EnvExampleHash: hashFile(filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)),
+			ToolchainHash:  hashFile(filepath.Join(deps.RepoRoot, deps.Blueprint.Toolchain)),
+		}
 		if stored.ComposeHash != current.ComposeHash {
 			r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: "docker-compose.yml changed since the last 'plax up' — recheck the blueprint"})
 		}
@@ -212,13 +227,17 @@ func runBlueprintVsRegistry(ctx context.Context, r *Report, deps *Deps) {
 				if deps.Docker != nil {
 					running, err := deps.Docker.ServiceRunning(ctx, cid)
 					if err == nil && !running {
-						r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: fmt.Sprintf("%s: %s is not running but state is \"running\" — crashed? 'plax suspend' then 'plax resume' to restart", name, svcName)})
+						r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: fmt.Sprintf("%s: %s container is not running but state is \"running\" — crashed? 'plax suspend' then 'plax resume' to restart", name, svcName)})
 					}
 				}
 			}
 			for procName, pgid := range rec.PIDs {
-				if !process.IsAlive(pgid) {
-					r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: fmt.Sprintf("%s: %s is not running but state is \"running\" — crashed? 'plax suspend' then 'plax resume' to restart", name, procName)})
+				dead := !process.IsAlive(pgid)
+				if !dead && rec.PIDStarts[procName] != 0 {
+					dead = process.StartTime(pgid) != rec.PIDStarts[procName]
+				}
+				if dead {
+					r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: fmt.Sprintf("%s: %s process is not running but state is \"running\" — crashed? 'plax suspend' then 'plax resume' to restart", name, procName)})
 				}
 			}
 		}
@@ -235,7 +254,11 @@ func runRepoVsMachine(r *Report, deps *Deps) {
 	if deps.Blueprint.Toolchain != "" {
 		tcPath := filepath.Join(deps.RepoRoot, deps.Blueprint.Toolchain)
 		pins, err := toolchain.ParsePins(tcPath)
-		if err == nil && pins != nil {
+		if err != nil {
+			r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: fmt.Sprintf("toolchain file %s: %v", deps.Blueprint.Toolchain, err)})
+		} else if pins == nil {
+			r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: "no toolchain file — skipped"})
+		} else {
 			resolved := toolchain.ResolveVersions(pins)
 			for tool, pin := range pins {
 				ver, ok := resolved[tool]
@@ -293,21 +316,4 @@ func runBase(ctx context.Context, r *Report, deps *Deps) {
 	if info.HasBaseNext {
 		r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: "staged plax_base_next exists — a refresh swap was deferred; run 'plax base refresh' to finish it or 'plax base reset' to discard"})
 	}
-}
-
-func computeStamp(repoRoot string, bp *blueprint.Blueprint) registry.BlueprintStamp {
-	return registry.BlueprintStamp{
-		ComposeHash:    hashFile(filepath.Join(repoRoot, "docker-compose.yml")),
-		EnvExampleHash: hashFile(filepath.Join(repoRoot, bp.Env.Template)),
-		ToolchainHash:  hashFile(filepath.Join(repoRoot, bp.Toolchain)),
-	}
-}
-
-func hashFile(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	h := sha256.Sum256(data)
-	return fmt.Sprintf("%x", h[:])
 }

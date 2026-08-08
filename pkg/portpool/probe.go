@@ -45,6 +45,10 @@ func findInode(hexPort string) uint64 {
 			if len(fields) < 10 {
 				continue
 			}
+			st := fields[3]
+			if st != "0A" {
+				continue
+			}
 			local := fields[1]
 			idx := strings.LastIndex(local, ":")
 			if idx < 0 {

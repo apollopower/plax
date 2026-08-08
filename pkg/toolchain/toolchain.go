@@ -64,19 +64,26 @@ func ResolveVersions(pins map[string]string) map[string]string {
 	resolved := make(map[string]string)
 	for name := range pins {
 		binary, flag := binaryInfo(name)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		cmd := exec.CommandContext(ctx, binary, flag)
-		out, err := cmd.Output()
-		cancel()
-		if err != nil {
-			continue
+		ver := tryFlag(name, binary, flag)
+		if ver == "" && flag == "--version" {
+			ver = tryFlag(name, binary, "version")
 		}
-		first := strings.TrimSpace(firstLine(string(out)))
-		if first != "" {
-			resolved[name] = first
+		if ver != "" {
+			resolved[name] = ver
 		}
 	}
 	return resolved
+}
+
+func tryFlag(name, binary, flag string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, flag)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(firstLine(string(out)))
 }
 
 type Diff struct {
