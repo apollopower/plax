@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 
 	"github.com/apollopower/plax/pkg/blueprint"
@@ -84,13 +83,4 @@ func hashFile(path string) string {
 	}
 	h := sha256.Sum256(data)
 	return fmt.Sprintf("%x", h)
-}
-
-// computeBlueprintStamp hashes the files that the blueprint was derived from.
-func computeBlueprintStamp(repoRoot string, bp *blueprint.Blueprint) registry.BlueprintStamp {
-	return registry.BlueprintStamp{
-		ComposeHash:    hashFile(filepath.Join(repoRoot, "docker-compose.yml")),
-		EnvExampleHash: hashFile(filepath.Join(repoRoot, bp.Env.Template)),
-		ToolchainHash:  hashFile(filepath.Join(repoRoot, bp.Toolchain)),
-	}
 }

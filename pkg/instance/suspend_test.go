@@ -4,12 +4,12 @@ import (
 	"context"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
-	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/process"
 )
 
@@ -75,11 +75,6 @@ func TestSuspend_NotFound(t *testing.T) {
 
 func TestSuspend_NilDocker(t *testing.T) {
 	deps, _, drv := testDeps(t, testBlueprint())
-	bp := testBlueprint()
-	bp.Services = map[string]blueprint.ServiceDef{
-		"db": {Isolation: blueprint.IsolationLogical, Type: "postgres"},
-	}
-	deps.Blueprint = bp
 
 	if err := Up(context.Background(), deps, "i1"); err != nil {
 		t.Fatalf("Up: %v", err)
@@ -207,6 +202,10 @@ func TestResume_PortTaken(t *testing.T) {
 }
 
 func TestUp_RecordsBaseRefAndToolVersions(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go not on PATH — cannot resolve toolchain versions")
+	}
+
 	deps, _, _ := testDeps(t, testBlueprint())
 
 	if err := Up(context.Background(), deps, "i1"); err != nil {

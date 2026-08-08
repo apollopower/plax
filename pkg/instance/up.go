@@ -160,7 +160,6 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		fmt.Fprintf(os.Stderr, "warning: recording head ref: %v\n", err)
 		baseRef, baseCommit = "", ""
 	}
-	deps.Registry.BlueprintStamp = computeBlueprintStamp(deps.RepoRoot, deps.Blueprint)
 
 	// Step 7: Start dedicated containers.
 	// The cleanup is registered before the loop: closures capture the map,

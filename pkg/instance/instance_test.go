@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +20,22 @@ import (
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/worktree"
 )
+
+func hashStamp(repoRoot string, bp *blueprint.Blueprint) registry.BlueprintStamp {
+	hashFile := func(path string) string {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return ""
+		}
+		h := sha256.Sum256(data)
+		return fmt.Sprintf("%x", h[:])
+	}
+	return registry.BlueprintStamp{
+		ComposeHash:    hashFile(filepath.Join(repoRoot, "docker-compose.yml")),
+		EnvExampleHash: hashFile(filepath.Join(repoRoot, bp.Env.Template)),
+		ToolchainHash:  hashFile(filepath.Join(repoRoot, bp.Toolchain)),
+	}
+}
 
 // --- fakes ---
 
@@ -219,6 +236,8 @@ func testDeps(t *testing.T, bp *blueprint.Blueprint) (*Deps, *fakeBM, *fakeDocke
 
 	bm := &fakeBM{info: postgres.BaseInfo{Exists: true, Locked: true, ProvenanceVer: 3}}
 	drv := &fakeDocker{running: true}
+
+	reg.BlueprintStamp = hashStamp(repo, bp)
 
 	deps := &Deps{
 		Blueprint: bp,

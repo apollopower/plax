@@ -130,7 +130,6 @@ func TestBuild_AllOK(t *testing.T) {
 		Registry:     reg,
 		BM:           bm,
 		RepoRoot:     dir,
-		Branch:       branch,
 		CurrentStamp: reg.BlueprintStamp,
 	}
 
@@ -182,7 +181,6 @@ func TestBuild_DataUnknown_NoBM(t *testing.T) {
 		Blueprint:    bp,
 		Registry:     reg,
 		RepoRoot:     dir,
-		Branch:       "plax/i1",
 		CurrentStamp: reg.BlueprintStamp,
 	}
 
@@ -213,7 +211,6 @@ func TestBuild_HostUnknown_Phase3Record(t *testing.T) {
 		Blueprint:    bp,
 		Registry:     reg,
 		RepoRoot:     dir,
-		Branch:       "plax/i1",
 		CurrentStamp: reg.BlueprintStamp,
 	}
 
@@ -249,7 +246,6 @@ func TestBuild_ConfigDrift(t *testing.T) {
 		Blueprint:    bp,
 		Registry:     reg,
 		RepoRoot:     dir,
-		Branch:       "plax/i1",
 		CurrentStamp: currentStamp,
 	}
 

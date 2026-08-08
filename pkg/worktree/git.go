@@ -30,7 +30,7 @@ func HeadRef(repoRoot string) (ref, commit string, err error) {
 }
 
 func RefExists(repoRoot, ref string) bool {
-	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+ref)
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", ref)
 	cmd.Dir = repoRoot
 	return cmd.Run() == nil
 }
@@ -55,7 +55,7 @@ func AheadBehind(repoRoot, baseRef, branch string) (ahead, behind int, err error
 }
 
 func SchemaFilesAtRef(repoRoot, ref, dir string) ([]string, error) {
-	cmd := exec.Command("git", "ls-tree", "--name-only", ref, "--", dir+"/")
+	cmd := exec.Command("git", "ls-tree", ref, "--", dir+"/")
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
 	if err != nil {
@@ -68,8 +68,15 @@ func SchemaFilesAtRef(repoRoot, ref, dir string) ([]string, error) {
 		if line == "" {
 			continue
 		}
-		name := strings.TrimPrefix(line, prefix)
-		if name == "" || name == line {
+		parts := strings.Fields(line)
+		if len(parts) < 4 {
+			continue
+		}
+		if parts[1] != "blob" {
+			continue
+		}
+		name := strings.TrimPrefix(parts[3], prefix)
+		if name == "" || name == parts[3] {
 			continue
 		}
 		names = append(names, name)

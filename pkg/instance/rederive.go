@@ -94,18 +94,27 @@ func Rederive(ctx context.Context, deps *Deps) error {
 		}
 
 		fmt.Printf("%s:\n", name)
-		for k, newVal := range newEnv {
-			oldVal, existed := oldEnv[k]
-			if !existed {
-				fmt.Printf("  + %s=%s\n", k, newVal)
-			} else if oldVal != newVal {
-				fmt.Printf("  - %s=%s\n", k, oldVal)
-				fmt.Printf("  + %s=%s\n", k, newVal)
+		allKeys := make([]string, 0, len(newEnv)+len(oldEnv))
+		for k := range newEnv {
+			allKeys = append(allKeys, k)
+		}
+		for k := range oldEnv {
+			if _, ok := newEnv[k]; !ok {
+				allKeys = append(allKeys, k)
 			}
 		}
-		for k, oldVal := range oldEnv {
-			if _, stillExists := newEnv[k]; !stillExists {
+		sort.Strings(allKeys)
+		for _, k := range allKeys {
+			newVal, inNew := newEnv[k]
+			oldVal, inOld := oldEnv[k]
+			switch {
+			case !inOld:
+				fmt.Printf("  + %s=%s\n", k, newVal)
+			case !inNew:
 				fmt.Printf("  - %s=%s\n", k, oldVal)
+			case oldVal != newVal:
+				fmt.Printf("  - %s=%s\n", k, oldVal)
+				fmt.Printf("  + %s=%s\n", k, newVal)
 			}
 		}
 

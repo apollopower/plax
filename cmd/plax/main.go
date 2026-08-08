@@ -25,7 +25,6 @@ import (
 	"github.com/apollopower/plax/pkg/portpool"
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/status"
-	"github.com/apollopower/plax/pkg/worktree"
 )
 
 type CLI struct {
@@ -366,6 +365,8 @@ func runUp(cmd UpCmd) error {
 
 	printStampNotice(cmd.Root, deps.Blueprint, deps.Registry)
 
+	deps.Registry.BlueprintStamp = computeStamp(cmd.Root, deps.Blueprint)
+
 	return instance.Up(ctx, deps.Deps, cmd.Name)
 }
 
@@ -470,7 +471,6 @@ func runAttach(cmd AttachCmd) error {
 			Blueprint:    bp,
 			Registry:     reg,
 			RepoRoot:     absRoot,
-			Branch:       rec.Branch,
 			CurrentStamp: currentStamp,
 		}
 		if report, err := status.Build(context.Background(), sdeps, cmd.Name); err == nil {
@@ -856,7 +856,6 @@ func runResume(cmd ResumeCmd) error {
 		Registry:     reg,
 		BM:           bm,
 		RepoRoot:     absRoot,
-		Branch:       worktree.BranchName(cmd.Name),
 		CurrentStamp: currentStamp,
 	}
 	report, err := status.Build(ctx, sdeps, cmd.Name)
@@ -881,8 +880,7 @@ func runStatus(cmd StatusCmd) error {
 		return err
 	}
 
-	rec, found := reg.GetInstance(cmd.Name)
-	if !found {
+	if _, found := reg.GetInstance(cmd.Name); !found {
 		return fmt.Errorf("instance %q not found", cmd.Name)
 	}
 
@@ -890,17 +888,6 @@ func runStatus(cmd StatusCmd) error {
 	if err != nil {
 		bp = nil
 		connStr = ""
-	}
-
-	var bm *postgres.BaseManager
-	if bp != nil && connStr != "" {
-		bm, err = postgres.NewBaseManager(context.Background(), connStr, absRoot, bp)
-		if err != nil {
-			bm = nil
-		}
-		if bm != nil {
-			defer bm.Close()
-		}
 	}
 
 	if bp == nil {
@@ -911,10 +898,16 @@ func runStatus(cmd StatusCmd) error {
 	sdeps := &status.Deps{
 		Blueprint:    bp,
 		Registry:     reg,
-		BM:           bm,
 		RepoRoot:     absRoot,
-		Branch:       rec.Branch,
 		CurrentStamp: currentStamp,
+	}
+
+	if connStr != "" {
+		bm, err := postgres.NewBaseManager(context.Background(), connStr, absRoot, bp)
+		if err == nil {
+			defer bm.Close()
+			sdeps.BM = bm
+		}
 	}
 
 	report, err := status.Build(context.Background(), sdeps, cmd.Name)

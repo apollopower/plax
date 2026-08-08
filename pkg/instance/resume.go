@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/apollopower/plax/pkg/derive/env"
@@ -66,7 +67,10 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 			fmt.Fprintf(os.Stderr, "starting %s...\n", svcName)
 			alreadyRunning, err := deps.Docker.StartService(ctx, cid)
 			if err != nil {
-				return fmt.Errorf("container for %q no longer exists — run 'plax down %s' then 'plax up %s' to rebuild: %w", svcName, name, name, err)
+				if strings.Contains(err.Error(), "No such container") {
+					return fmt.Errorf("container for %q no longer exists — run 'plax down %s' then 'plax up %s' to rebuild: %w", svcName, name, name, err)
+				}
+				return fmt.Errorf("starting %s: %w", svcName, err)
 			}
 			if !alreadyRunning {
 				startedContainers[svcName] = cid
