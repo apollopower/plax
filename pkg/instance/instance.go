@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 
 	"github.com/apollopower/plax/pkg/blueprint"
@@ -32,9 +31,11 @@ type DockerDriver interface {
 	CreateNetwork(ctx context.Context, name string) error
 	RemoveNetwork(ctx context.Context, name string) error
 	RunService(ctx context.Context, cfg docker.ServiceConfig) (string, error)
+	StartService(ctx context.Context, containerID string) (bool, error)
 	StopService(ctx context.Context, containerID string) error
 	RemoveService(ctx context.Context, containerID string) error
 	ServiceRunning(ctx context.Context, containerID string) (bool, error)
+	ServiceExists(ctx context.Context, containerID string) (bool, error)
 }
 
 // Deps holds the dependencies for instance lifecycle operations.
@@ -82,13 +83,4 @@ func hashFile(path string) string {
 	}
 	h := sha256.Sum256(data)
 	return fmt.Sprintf("%x", h)
-}
-
-// computeBlueprintStamp hashes the files that the blueprint was derived from.
-func computeBlueprintStamp(repoRoot string, bp *blueprint.Blueprint) registry.BlueprintStamp {
-	return registry.BlueprintStamp{
-		ComposeHash:    hashFile(filepath.Join(repoRoot, "docker-compose.yml")),
-		EnvExampleHash: hashFile(filepath.Join(repoRoot, bp.Env.Template)),
-		ToolchainHash:  hashFile(filepath.Join(repoRoot, bp.Toolchain)),
-	}
 }

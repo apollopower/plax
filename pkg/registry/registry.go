@@ -38,6 +38,8 @@ type InstanceRecord struct {
 	// platform could not provide one; identity verification is then skipped.
 	PIDStarts  map[string]int64 `json:"pid_start_times,omitempty"`
 	Provenance Provenance       `json:"provenance"`
+	BaseRef    string           `json:"base_ref,omitempty"`
+	BaseCommit string           `json:"base_commit,omitempty"`
 }
 
 type PortAllocation struct {
@@ -46,8 +48,9 @@ type PortAllocation struct {
 }
 
 type Provenance struct {
-	BaseVersion int    `json:"base_version"`
-	Toolchain   string `json:"toolchain"`
+	BaseVersion  int               `json:"base_version"`
+	Toolchain    string            `json:"toolchain"`
+	ToolVersions map[string]string `json:"tool_versions"`
 }
 
 // Opens an existing registry file or returns an empty, ready-to-use registry

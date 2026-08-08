@@ -134,6 +134,31 @@ func (d *Driver) StopService(ctx context.Context, containerID string) error {
 	return nil
 }
 
+func (d *Driver) StartService(ctx context.Context, containerID string) (alreadyRunning bool, err error) {
+	info, err := d.cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return false, fmt.Errorf("docker: inspect container: %w", err)
+	}
+	if info.State != nil && info.State.Running {
+		return true, nil
+	}
+	if err := d.cli.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
+		return false, fmt.Errorf("docker: start container: %w", err)
+	}
+	return false, nil
+}
+
+func (d *Driver) ServiceExists(ctx context.Context, containerID string) (bool, error) {
+	_, err := d.cli.ContainerInspect(ctx, containerID)
+	if err != nil {
+		if strings.Contains(err.Error(), "No such container") {
+			return false, nil
+		}
+		return false, fmt.Errorf("docker: inspect container: %w", err)
+	}
+	return true, nil
+}
+
 func (d *Driver) RemoveService(ctx context.Context, containerID string) error {
 	if err := d.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
 		if strings.Contains(err.Error(), "No such container") {

@@ -13,36 +13,10 @@ import (
 
 var holeRe = regexp.MustCompile(`\{\{(\w+)\}\}`)
 
-// Derive reads the env template file, substitutes holes with rendered
-// values, and writes the result to outputPath.
-//
-// templatePath: absolute path to the env template (e.g. .env.example).
-// overridesPath: absolute path to the user's own .env file (may not exist).
-//
-//	Non-hole values from this file take precedence over the template.
-//
-// holes: KEY → template string with {{VAR}} placeholders (from blueprint).
-// values: VAR → resolved value (e.g. "DB_NAME" → "plax_i1", "REDIS_PORT" → "6380").
-// outputPath: absolute path where the derived .env is written.
-//
-// Precedence for each key:
-//  1. Hole keys → rendered template (per-instance values)
-//  2. Keys in overrides file → user's value (secrets, machine-specific config)
-//  3. Template lines → copied verbatim (defaults, comments)
-//
-// Hole keys absent from the template are appended.
-func Derive(templatePath string, overridesPath string, holes map[string]string, values map[string]string, outputPath string) error {
-	// Load the user's overrides (e.g. the main checkout's .env with real secrets).
-	// Values keep their raw text (quotes intact) so secrets containing '#'
-	// or whitespace survive being written back out and re-parsed.
-	// Not an error if absent — the template is the fallback.
-	overrides := map[string]string{}
-	if overridesPath != "" {
-		var err error
-		overrides, err = parseFileRaw(overridesPath)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("env: load overrides: %w", err)
-		}
+func DeriveMerged(templatePath string, overrides map[string]string, holes map[string]string, values map[string]string, outputPath string) error {
+	merged := make(map[string]string, len(overrides))
+	for k, v := range overrides {
+		merged[k] = v
 	}
 
 	f, err := os.Open(templatePath)
@@ -71,7 +45,7 @@ func Derive(templatePath string, overridesPath string, holes map[string]string, 
 			}
 			lines = append(lines, key+"="+rendered)
 			found[key] = true
-		} else if userVal, ok := overrides[key]; ok {
+		} else if userVal, ok := merged[key]; ok {
 			lines = append(lines, key+"="+userVal)
 		} else {
 			lines = append(lines, line)
@@ -81,7 +55,6 @@ func Derive(templatePath string, overridesPath string, holes map[string]string, 
 		return fmt.Errorf("env: read template: %w", err)
 	}
 
-	// Append holes that were not present in the template.
 	for key, tmpl := range holes {
 		if found[key] {
 			continue
@@ -99,6 +72,42 @@ func Derive(templatePath string, overridesPath string, holes map[string]string, 
 	}
 
 	return nil
+}
+
+// ParseFileRaw reads a .env file keeping each value's raw text (quotes
+// intact). For rederive so secrets round-trip without corruption.
+func ParseFileRaw(path string) (map[string]string, error) {
+	return parseFileRaw(path)
+}
+
+// Derive reads the env template file, substitutes holes with rendered
+// values, and writes the result to outputPath.
+//
+// templatePath: absolute path to the env template (e.g. .env.example).
+// overridesPath: absolute path to the user's own .env file (may not exist).
+//
+//	Non-hole values from this file take precedence over the template.
+//
+// holes: KEY → template string with {{VAR}} placeholders (from blueprint).
+// values: VAR → resolved value (e.g. "DB_NAME" → "plax_i1", "REDIS_PORT" → "6380").
+// outputPath: absolute path where the derived .env is written.
+//
+// Precedence for each key:
+//  1. Hole keys → rendered template (per-instance values)
+//  2. Keys in overrides file → user's value (secrets, machine-specific config)
+//  3. Template lines → copied verbatim (defaults, comments)
+//
+// Hole keys absent from the template are appended.
+func Derive(templatePath string, overridesPath string, holes map[string]string, values map[string]string, outputPath string) error {
+	overrides := map[string]string{}
+	if overridesPath != "" {
+		var err error
+		overrides, err = parseFileRaw(overridesPath)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("env: load overrides: %w", err)
+		}
+	}
+	return DeriveMerged(templatePath, overrides, holes, values, outputPath)
 }
 
 // ParseFile reads a .env file and returns key-value pairs.
