@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/apollopower/plax/pkg/derive/env"
 )
@@ -93,7 +94,6 @@ func Rederive(ctx context.Context, deps *Deps) error {
 			continue
 		}
 
-		fmt.Printf("%s:\n", name)
 		allKeys := make([]string, 0, len(newEnv)+len(oldEnv))
 		for k := range newEnv {
 			allKeys = append(allKeys, k)
@@ -104,18 +104,24 @@ func Rederive(ctx context.Context, deps *Deps) error {
 			}
 		}
 		sort.Strings(allKeys)
+		var diffs strings.Builder
 		for _, k := range allKeys {
 			newVal, inNew := newEnv[k]
 			oldVal, inOld := oldEnv[k]
 			switch {
 			case !inOld:
-				fmt.Printf("  + %s=%s\n", k, newVal)
+				fmt.Fprintf(&diffs, "  + %s=%s\n", k, newVal)
 			case !inNew:
-				fmt.Printf("  - %s=%s\n", k, oldVal)
+				fmt.Fprintf(&diffs, "  - %s=%s\n", k, oldVal)
 			case oldVal != newVal:
-				fmt.Printf("  - %s=%s\n", k, oldVal)
-				fmt.Printf("  + %s=%s\n", k, newVal)
+				fmt.Fprintf(&diffs, "  - %s=%s\n", k, oldVal)
+				fmt.Fprintf(&diffs, "  + %s=%s\n", k, newVal)
 			}
+		}
+		if diffs.Len() == 0 {
+			fmt.Fprintf(os.Stderr, "%s: formatting only — no key-level changes\n", name)
+		} else {
+			fmt.Printf("%s:\n%s", name, diffs.String())
 		}
 
 		if err := os.Rename(tmpPath, instEnvPath); err != nil {

@@ -16,15 +16,6 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-func hashFile(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	h := sha256.Sum256(data)
-	return fmt.Sprintf("%x", h[:])
-}
-
 type Level string
 
 const (
@@ -137,10 +128,18 @@ func runBlueprintVsRepo(r *Report, deps *Deps) {
 
 	stored := deps.Registry.BlueprintStamp
 	if stored.ComposeHash != "" || stored.EnvExampleHash != "" || stored.ToolchainHash != "" {
+		hf := func(path string) string {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return ""
+			}
+			h := sha256.Sum256(data)
+			return fmt.Sprintf("%x", h[:])
+		}
 		current := registry.BlueprintStamp{
-			ComposeHash:    hashFile(filepath.Join(deps.RepoRoot, "docker-compose.yml")),
-			EnvExampleHash: hashFile(filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)),
-			ToolchainHash:  hashFile(filepath.Join(deps.RepoRoot, deps.Blueprint.Toolchain)),
+			ComposeHash:    hf(filepath.Join(deps.RepoRoot, "docker-compose.yml")),
+			EnvExampleHash: hf(filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)),
+			ToolchainHash:  hf(filepath.Join(deps.RepoRoot, deps.Blueprint.Toolchain)),
 		}
 		if stored.ComposeHash != current.ComposeHash {
 			r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: "docker-compose.yml changed since the last 'plax up' — recheck the blueprint"})

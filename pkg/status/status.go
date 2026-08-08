@@ -264,8 +264,11 @@ func dataDrift(ctx context.Context, bm BaseManager, rec *registry.InstanceRecord
 	}
 	if prov == nil || prov.Version == 0 {
 		d.Level = Unknown
-		if prov == nil {
+		switch prov {
+		case nil:
 			d.Detail = "no provenance row in base — run 'plax base reset' to repair"
+		default:
+			d.Detail = "no provenance version recorded"
 		}
 		return d
 	}
