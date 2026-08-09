@@ -1037,9 +1037,13 @@ func runSend(cmd SendCmd) error {
 		return fmt.Errorf("instance %q not found", cmd.Name)
 	}
 
-	body := strings.Join(cmd.Body, " ")
+	parts := cmd.Body
+	for len(parts) > 0 && parts[0] == "--" {
+		parts = parts[1:]
+	}
+	body := strings.Join(parts, " ")
 	if body == "" {
-		return fmt.Errorf("send: body is required; use '-- <text>'")
+		return fmt.Errorf("send: body is required")
 	}
 
 	from := cmd.From
