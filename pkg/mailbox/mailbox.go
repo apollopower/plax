@@ -4,7 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,10 +12,10 @@ import (
 )
 
 type Message struct {
-	From      string `json:"from,omitempty"`
+	From      string `json:"from"`
 	Subject   string `json:"subject,omitempty"`
 	Body      string `json:"body"`
-	Timestamp string `json:"timestamp,omitempty"`
+	Timestamp string `json:"timestamp"`
 }
 
 func Dir(root, name string) string {
@@ -31,33 +30,49 @@ func RemoveDir(root, name string) error {
 	return os.RemoveAll(Dir(root, name))
 }
 
-func Send(root, name string, msg Message) error {
+func Send(root, name string, msg Message) (string, error) {
 	dir := Dir(root, name)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("mailbox: mkdir: %w", err)
+	ok, err := exists(dir)
+	if err != nil {
+		return "", fmt.Errorf("mailbox: stat dir: %w", err)
+	}
+	if !ok {
+		return "", fmt.Errorf("mailbox: directory %s does not exist", dir)
+	}
+
+	if msg.Body == "" {
+		return "", fmt.Errorf("mailbox: message must have a body")
 	}
 
 	if msg.Timestamp == "" {
-		msg.Timestamp = time.Now().UTC().Format(time.RFC3339)
+		msg.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
 
-	suffix := make([]byte, 6)
-	if _, err := rand.Read(suffix); err != nil {
-		return fmt.Errorf("mailbox: rand: %w", err)
+	nonce := make([]byte, 8)
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("mailbox: rand: %w", err)
 	}
-	filename := fmt.Sprintf("%d_%x.json", time.Now().UnixNano(), suffix)
+	filename := fmt.Sprintf("%d_%x.json", time.Now().UnixNano(), nonce)
 	path := filepath.Join(dir, filename)
 
 	data, err := json.Marshal(msg)
 	if err != nil {
-		return fmt.Errorf("mailbox: marshal: %w", err)
+		return "", fmt.Errorf("mailbox: marshal: %w", err)
 	}
 
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		return fmt.Errorf("mailbox: write: %w", err)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
+	if err != nil {
+		return "", fmt.Errorf("mailbox: write: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return "", fmt.Errorf("mailbox: write: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return "", fmt.Errorf("mailbox: write: %w", err)
 	}
 
-	return nil
+	return filename, nil
 }
 
 func Recv(root, name string, count int) ([]Message, error) {
@@ -81,21 +96,31 @@ func recvFile(root, name string, count int, all bool) ([]Message, error) {
 		files = files[:count]
 	}
 
-	messages := make([]Message, 0, len(files))
+	var messages []Message
+	var removed []string
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "recv: skipping %s: %v\n", filepath.Base(f), err)
 			continue
 		}
 		var msg Message
 		if err := json.Unmarshal(data, &msg); err != nil {
+			fmt.Fprintf(os.Stderr, "recv: skipping %s: %v\n", filepath.Base(f), err)
 			continue
 		}
 		messages = append(messages, msg)
+		removed = append(removed, f)
 	}
 
-	for _, f := range files {
-		_ = os.Remove(f)
+	for _, f := range removed {
+		if err := os.Remove(f); err != nil {
+			fmt.Fprintf(os.Stderr, "recv: remove %s: %v\n", filepath.Base(f), err)
+		}
+	}
+
+	if len(messages) == 0 && len(files) > 0 {
+		return nil, fmt.Errorf("recv: all %d messages unreadable", len(files))
 	}
 
 	return messages, nil
@@ -131,13 +156,13 @@ func listFiles(root, name string) ([]string, error) {
 	return files, nil
 }
 
-type CountWriter struct {
-	io.Writer
-	N int
-}
-
-func (cw *CountWriter) Write(p []byte) (int, error) {
-	n, err := cw.Writer.Write(p)
-	cw.N += n
-	return n, err
+func exists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
 }

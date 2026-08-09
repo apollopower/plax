@@ -140,19 +140,19 @@ type RederiveCmd struct {
 }
 
 type SendCmd struct {
-	Name    string `arg:"" help:"Instance name"`
-	Root    string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
-	From    string `name:"from" help:"Sender (defaults to current git user)"`
-	Subject string `name:"subject" short:"s" help:"Message subject"`
-	Body    string `arg:"" optional:"" help:"Message body"`
-	JSON    bool   `name:"json" help:"Output as JSON"`
+	Name    string   `arg:"" help:"Instance name"`
+	Root    string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	From    string   `name:"from" help:"Sender (defaults to PLAX_INSTANCE env)"`
+	Subject string   `name:"subject" short:"s" help:"Message subject"`
+	Body    []string `arg:"" optional:"" passthrough:"" help:"Message body (use -- to separate from flags)"`
+	JSON    bool     `name:"json" help:"Output as JSON"`
 }
 
 type RecvCmd struct {
 	Name  string `arg:"" help:"Instance name"`
 	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
-	All   bool   `name:"all" short:"a" help:"Read and remove all messages"`
-	Count int    `name:"count" short:"n" default:"1" help:"Number of messages to read"`
+	All   bool   `name:"all" short:"a" xor:"count" help:"Read and remove all messages"`
+	Count int    `name:"count" short:"n" default:"1" xor:"all" help:"Number of messages to read"`
 	JSON  bool   `name:"json" help:"Output as JSON"`
 }
 
@@ -197,7 +197,7 @@ func main() {
 		ctx.FatalIfErrorf(runDoctor(cli.Doctor))
 	case "rederive":
 		ctx.FatalIfErrorf(runRederive(cli.Rederive))
-	case "send <name>":
+	case "send <name>", "send <name> <body>":
 		ctx.FatalIfErrorf(runSend(cli.Send))
 	case "recv <name>":
 		ctx.FatalIfErrorf(runRecv(cli.Recv))
@@ -448,11 +448,11 @@ func runLs(cmd LsCmd) error {
 	}
 
 	if len(reg.Instances) == 0 {
-		fmt.Printf("%-8s %-10s %-20s %5s %-24s %s\n", "NAME", "STATE", "BRANCH", "MAIL", "PORTS", "CREATED")
+		fmt.Printf("%-8s %-10s %-20s %-5s %-24s %s\n", "NAME", "STATE", "BRANCH", "MAIL", "PORTS", "CREATED")
 		return nil
 	}
 
-	fmt.Printf("%-8s %-10s %-20s %5s %-24s %s\n", "NAME", "STATE", "BRANCH", "MAIL", "PORTS", "CREATED")
+	fmt.Printf("%-8s %-10s %-20s %-5s %-24s %s\n", "NAME", "STATE", "BRANCH", "MAIL", "PORTS", "CREATED")
 
 	names := make([]string, 0, len(reg.Instances))
 	for name := range reg.Instances {
@@ -464,12 +464,12 @@ func runLs(cmd LsCmd) error {
 		rec := reg.Instances[name]
 		ports := formatPorts(rec.Ports)
 		age := formatAge(rec.CreatedAt)
-		mailCount, _ := mailbox.Count(cmd.Root, name)
+		mailCount, mailErr := mailbox.Count(cmd.Root, name)
 		mailStr := fmt.Sprintf("%d", mailCount)
-		if mailCount == 0 {
-			mailStr = "-"
+		if mailErr != nil {
+			mailStr = "?"
 		}
-		fmt.Printf("%-8s %-10s %-20s %5s %-24s %s\n", name, rec.State, rec.Branch, mailStr, ports, age)
+		fmt.Printf("%-8s %-10s %-20s %-5s %-24s %s\n", name, rec.State, rec.Branch, mailStr, ports, age)
 	}
 
 	return nil
@@ -1037,30 +1037,37 @@ func runSend(cmd SendCmd) error {
 		return fmt.Errorf("instance %q not found", cmd.Name)
 	}
 
+	body := strings.Join(cmd.Body, " ")
+	if body == "" {
+		return fmt.Errorf("send: body is required; use '-- <text>'")
+	}
+
 	from := cmd.From
 	if from == "" {
-		if u := os.Getenv("USER"); u != "" {
-			from = u
-		}
+		from = os.Getenv("PLAX_INSTANCE")
+	}
+	if from == "" {
+		fmt.Fprintf(os.Stderr, "send: no sender set — pass --from or set PLAX_INSTANCE\n")
 	}
 
 	msg := mailbox.Message{
 		From:    from,
 		Subject: cmd.Subject,
-		Body:    cmd.Body,
+		Body:    body,
 	}
 
-	if err := mailbox.Send(cmd.Root, cmd.Name, msg); err != nil {
+	filename, err := mailbox.Send(cmd.Root, cmd.Name, msg)
+	if err != nil {
 		return err
 	}
 
 	if cmd.JSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(map[string]string{"status": "sent", "instance": cmd.Name})
+		return enc.Encode(map[string]string{"status": "sent", "instance": cmd.Name, "file": filename})
 	}
 
-	fmt.Fprintf(os.Stderr, "message sent to %s\n", cmd.Name)
+	fmt.Fprintf(os.Stderr, "message written: %s\n", filename)
 	return nil
 }
 
@@ -1097,7 +1104,7 @@ func runRecv(cmd RecvCmd) error {
 
 	for i, msg := range msgs {
 		if i > 0 {
-			fmt.Println("---")
+			fmt.Println()
 		}
 		if msg.From != "" {
 			fmt.Printf("From: %s\n", msg.From)
@@ -1105,7 +1112,7 @@ func runRecv(cmd RecvCmd) error {
 		if msg.Subject != "" {
 			fmt.Printf("Subject: %s\n", msg.Subject)
 		}
-		fmt.Printf("---\n%s\n", msg.Body)
+		fmt.Printf("---\n%s\n---\n", msg.Body)
 	}
 
 	remaining, _ := mailbox.Count(cmd.Root, cmd.Name)
