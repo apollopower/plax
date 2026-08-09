@@ -151,8 +151,8 @@ type SendCmd struct {
 type RecvCmd struct {
 	Name  string `arg:"" help:"Instance name"`
 	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
-	All   bool   `name:"all" short:"a" xor:"count" help:"Read and remove all messages"`
-	Count int    `name:"count" short:"n" default:"1" xor:"all" help:"Number of messages to read"`
+	All   bool   `name:"all" short:"a" xor:"mode" help:"Read and remove all messages"`
+	Count int    `name:"count" short:"n" xor:"mode" help:"Number of messages to read (default 1)"`
 	JSON  bool   `name:"json" help:"Output as JSON"`
 }
 
@@ -1085,17 +1085,28 @@ func runRecv(cmd RecvCmd) error {
 		return fmt.Errorf("instance %q not found", cmd.Name)
 	}
 
+	n := cmd.Count
+	if n < 0 {
+		return fmt.Errorf("recv: --count must be positive")
+	}
+	if !cmd.All && n == 0 {
+		n = 1
+	}
+
 	var msgs []mailbox.Message
 	if cmd.All {
 		msgs, err = mailbox.RecvAll(cmd.Root, cmd.Name)
 	} else {
-		msgs, err = mailbox.Recv(cmd.Root, cmd.Name, cmd.Count)
+		msgs, err = mailbox.Recv(cmd.Root, cmd.Name, n)
 	}
 	if err != nil {
 		return err
 	}
 
 	if cmd.JSON {
+		if msgs == nil {
+			msgs = []mailbox.Message{}
+		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(msgs)
