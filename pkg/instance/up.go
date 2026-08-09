@@ -12,6 +12,7 @@ import (
 	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/derive/docker"
 	"github.com/apollopower/plax/pkg/derive/env"
+	"github.com/apollopower/plax/pkg/mailbox"
 	"github.com/apollopower/plax/pkg/process"
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/toolchain"
@@ -88,7 +89,17 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		}
 	})
 
-	// Step 2: Create Docker network.
+	// Step 2: Create mailbox directory.
+	if err := mailbox.CreateDir(deps.RepoRoot, name); err != nil {
+		return fmt.Errorf("mailbox: creating directory: %w", err)
+	}
+	cleanups = append(cleanups, func() {
+		if err := mailbox.RemoveDir(deps.RepoRoot, name); err != nil {
+			fmt.Fprintf(os.Stderr, "rollback: remove mailbox: %v\n", err)
+		}
+	})
+
+	// Step 3: Create Docker network.
 	netName := "plax-" + name + "-net"
 	fmt.Fprintf(os.Stderr, "creating network %s...\n", netName)
 	if err := deps.Docker.CreateNetwork(ctx, netName); err != nil {
