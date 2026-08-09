@@ -359,32 +359,32 @@ otherwise, holds the advisory lock):
 
 ## Acceptance criteria
 
-- [ ] `plax send i2 --subject "hello" --from i1 -- hi there` writes a
+- [x] `plax send i2 --subject "hello" --from i1 -- hi there` writes a
   message file; `plax ls` shows `MAIL: 1` for i2
-- [ ] `plax recv i2` prints the message with From/Subject/Body and the
+- [x] `plax recv i2` prints the message with From/Subject/Body and the
   remaining count; the file is removed
-- [ ] `plax recv i2 --json` prints a valid JSON array (empty or populated)
-- [ ] `plax recv i2 --all` reads every message; subsequent `recv` prints
+- [x] `plax recv i2 --json` prints a valid JSON array (empty or populated)
+- [x] `plax recv i2 --all` reads every message; subsequent `recv` prints
   `no messages`
-- [ ] `plax recv i2 --count 2` reads exactly 2 messages
-- [ ] `plax ls` table output includes a `MAIL` column between `BRANCH` and
+- [x] `plax recv i2 --count 2` reads exactly 2 messages
+- [x] `plax ls` table output includes a `MAIL` column between `BRANCH` and
   `PORTS`; `--json` output is backward-compatible (unchanged structure)
-- [ ] `plax attach i1` with unread mail prints `note: <N> unread
+- [x] `plax attach i1` with unread mail prints `note: <N> unread
   message(s) — run 'plax recv <name>' to read`
-- [ ] `plax exec` does NOT print a mailbox notification
-- [ ] Mail survives `suspend` / `resume`: messages sent before suspend are
+- [x] `plax exec` does NOT print a mailbox notification
+- [x] Mail survives `suspend` / `resume`: messages sent before suspend are
   readable after resume
-- [ ] `plax down` removes the mailbox directory cleanly
-- [ ] `plax send` to a suspended instance succeeds; the instance does not
+- [x] `plax down` removes the mailbox directory cleanly
+- [x] `plax send` to a suspended instance succeeds; the instance does not
   need to be running
-- [ ] Sending with an empty `--from` and no `PLAX_INSTANCE` prints a
+- [x] Sending with an empty `--from` and no `PLAX_INSTANCE` prints a
   warning but succeeds with `"from": ""`
-- [ ] Concurrent `plax send` calls to the same instance from two terminals
+- [x] Concurrent `plax send` calls to the same instance from two terminals
   create two distinct files with no collision
-- [ ] `plax send` with empty body (no `-- <text>`) exits 1 with a clear
+- [x] `plax send` with empty body (no `-- <text>`) exits 1 with a clear
   error
-- [ ] `plax recv nonexistent` exits 1 with a clear error
-- [ ] `gofmt -s`, `go vet ./...`, `go test -race -count=1 ./...`, and
+- [x] `plax recv nonexistent` exits 1 with a clear error
+- [x] `gofmt -s`, `go vet ./...`, `go test -race -count=1 ./...`, and
   `golangci-lint run` all pass
 - [ ] End-to-end mailbox test passes with `go test -race ./cmd/plax/ -run
   TestEndToEnd_Mailbox -count=1` (skipped without Postgres/Docker)
