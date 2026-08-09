@@ -20,7 +20,7 @@ pkg/
     mailbox_test.go             # Read/write round-trip, ordering, concurrent write
   instance/
     up.go                       # Create .plax/mail/<name>/ on up
-    down.go                     # Remove .plax/mail/<name>/ on down (best-effort, after DB drop)
+    down.go                     # Remove .plax/mail/<name>/ on down (best-effort, after worktree removal)
 ```
 
 Mailbox is filesystem-only. No new registry fields — the unread count is a
@@ -47,15 +47,15 @@ type Message struct {
 
 // Write atomically creates a new message file in dir. The filename is
 // <unixnanos>_<base64url_nonce>.json so concurrent senders never collide
-// (O_CREATE, not O_WRONLY) and default lexical sort is chronological.
-// Returns the filename written so callers can echo it.
+// (O_CREATE|O_EXCL|O_WRONLY via os.OpenFile) and default lexical sort is
+// chronological. Returns the filename written so callers can echo it.
 func Write(dir string, msg *Message) (filename string, err error)
 
 // ReadOldest returns the N oldest messages in dir (lexicographic sort on
 // filenames, which are nanosecond timestamps). Files are removed after
 // being read. A partial failure (one file unreadable) continues with the
-// rest. Returns the number actually read and removed.
-func ReadOldest(dir string, n int) ([]Message, int, error)
+// rest. len(result) gives the number actually read and removed.
+func ReadOldest(dir string, n int) ([]Message, error)
 
 // ReadAll reads and removes every message in dir.
 func ReadAll(dir string) ([]Message, error)
@@ -75,9 +75,8 @@ prevents two writes in the same nanosecond from colliding.
 | # | Rule | Error |
 |---|---|---|
 | M1 | `dir` must be an existing directory | `mailbox: directory <dir> does not exist` |
-| M2 | `msg.From` must be non-empty | `mailbox: message must have a sender ("from" field)` |
-| M3 | `msg.Body` must be non-empty | `mailbox: message must have a body` |
-| M4 | `msg.Timestamp` if empty is set to `time.Now().UTC().Format(time.RFC3339)` by `Write` | — |
+| M2 | `msg.Body` must be non-empty | `mailbox: message must have a body` |
+| M3 | `msg.Timestamp` if empty is set to `time.Now().UTC().Format(time.RFC3339)` by `Write` | — |
 
 On-disk format:
 
@@ -90,7 +89,7 @@ On-disk format:
 }
 ```
 
-Every field except `body` and `from` may be empty. `subject` is optional.
+Every field except `body` may be empty. `subject` is optional.
 No size limit is enforced — this is the machine's own filesystem.
 
 ### `pkg/instance` changes
@@ -100,7 +99,7 @@ No new types. `up.go` creates the mailbox directory; `down.go` removes it.
 | Function | Change |
 |---|---|
 | `Up` | After port/branch setup, before process spawn: `os.MkdirAll(".plax/mail/<name>", 0755)`. Error fails `up`. |
-| `Down` | After DB drop, before port release: remove `".plax/mail/<name>/"` (`os.RemoveAll`). Best-effort — os.RemoveAll on a missing dir is a no-op, and the directory is inside `.plax/` which already gets cleaned. |
+| `Down` | After worktree removal (step 6), before registry removal (step 7): remove `".plax/mail/<name>/"` (`os.RemoveAll`). Best-effort — os.RemoveAll on a missing dir is a no-op. |
 
 ---
 
@@ -121,8 +120,9 @@ No new types. `up.go` creates the mailbox directory; `down.go` removes it.
    ⚠ Empty `from` is allowed but logged as a warning to stderr:
      `send: no sender set — pass --from or set PLAX_INSTANCE`.
 
-3. **Validate** M2 and M3. `from` empty → warning only (not an error; the
-   receiver can inspect the filename for origin). `body` empty → error
+3. **Validate** M2. `from` empty → warning only (not an error; the
+   receiver can inspect the filename for origin, and the design doc expects
+   prose as the first message format). `body` empty → error
    `send: body is required; use '-- <text>'`.
 
 4. **Write.** `mailbox.Write(mailDir, msg)`. The directory was created by
@@ -173,7 +173,7 @@ No new types. `up.go` creates the mailbox directory; `down.go` removes it.
    instances sorted by name.
 2. For each instance: `mailbox.Count(".plax/mail/<name>")`.
 3. The table header and rows gain a `MAIL` column between `BRANCH` and
-   `PORTS`:
+   `PORTS`. Format: `%-8s %-10s %-20s %-5s %-24s %s`.
 
    ```
    NAME     STATE     BRANCH               MAIL  PORTS                    CREATED
@@ -201,7 +201,7 @@ commands, not interactive sessions.
 | Event | Action |
 |---|---|
 | `plax up` | `os.MkdirAll(".plax/mail/<name>", 0755)` after worktree/branch setup |
-| `plax down` | `os.RemoveAll(".plax/mail/<name>")` before port release, best-effort |
+| `plax down` | `os.RemoveAll(".plax/mail/<name>")` after worktree removal, best-effort |
 | `plax suspend` | No action — mail survives (it's files on disk) |
 | `plax resume` | No action — directory already exists |
 | `plax base refresh` | No action — mailbox is per-instance, not per-base |
@@ -270,7 +270,7 @@ plax recv <name> [--all | --count <N>] [--json]
 | `send` with empty body | `len(body) == 0` | `send: body is required; use '-- <text>'`. Exit 1. |
 | `send` with empty from | `cmd.From == "" && os.Getenv("PLAX_INSTANCE") == ""` | Warning to stderr, continue. Message written with `"from": ""`. |
 | `send` to missing mailbox dir | `os.Stat` → `ErrNotExist` | `mailbox for "<name>" missing — instance may have been created before Phase 5`. Exit 1. |
-| `send` with write failure | `os.Create` / `json.Encode` error | `send: write: <err>`. Exit 1. No partial file (atomic create). |
+| `send` with write failure | `os.OpenFile` / `json.Encode` error | `send: write: <err>`. Exit 1. No partial file (O_EXCL ensures atomic create). |
 | `recv` on unknown instance | `GetInstance` false | `instance "<name>" not found`. Exit 1. |
 | `recv` on empty mailbox | `Count` returns 0 | `no messages`. Exit 0. |
 | `recv` file unreadable (permission, corrupt JSON) | `os.ReadFile` / `json.Decode` error | Warning to stderr: `recv: skipping <file>: <err>`. Continue with remaining files. |
@@ -279,7 +279,7 @@ plax recv <name> [--all | --count <N>] [--json]
 | `ls` count failure | `Count` error | Show `?` in the MAIL column. Continue listing other instances. |
 | `attach` count failure | `Count` error | Silently skip the notification. Attach proceeds. |
 | `up` mailbox creation failure | `os.MkdirAll` error | `mailbox: create: <err>`. Exit 1. Rollback as normal. |
-| `down` mailbox removal failure | `os.RemoveAll` error | Warning to stderr. Continue. The directory is inside `.plax/` and gets swept with it. |
+| `down` mailbox removal failure | `os.RemoveAll` error | Warning to stderr. Continue. The mailbox directory is at the repo root and is not swept by worktree removal, but rm errors are non-fatal. |
 
 ---
 
@@ -298,7 +298,7 @@ They run everywhere.
 - `TestWrite_Success` — write a message, file exists, content deserializes
   back to the same struct
 - `TestWrite_FillsTimestamp` — empty timestamp is set by Write
-- `TestWrite_EmptyBody` — returns error (M3)
+- `TestWrite_EmptyBody` — returns error (M2)
 - `TestWrite_EmptyFrom` — succeeds (warning is the CLI's job);
   `"from": ""` in the serialized JSON
 - `TestWrite_NonExistentDir` — returns error (M1)
@@ -400,7 +400,7 @@ is already in `go.mod`:
 |---|---|---|
 | CLI framework | `github.com/alecthomas/kong` | `main.go` |
 | JSON marshal/unmarshal | `encoding/json` | `blueprint`, `registry`, `status` |
-| Atomic file create | `os.Create` (O_CREAT|O_EXCL via file open) | — |
+| Atomic file create | `os.OpenFile` (O_CREATE\|O_EXCL\|O_WRONLY) | — |
 | Random nonce | `crypto/rand` | — |
 | Directory listing | `os.ReadDir` | — |
 | File I/O | `os`, `io` | everywhere |
@@ -415,11 +415,11 @@ are standard library — no module changes.
 ## Concurrency note
 
 Two concurrent `send` calls write to the same mailbox directory. The
-filename format (`<unix_nanos>_<base64url_nonce>.json`) and `O_CREATE`
-semantics prevent collision: in the same nanosecond, the random suffix
-guarantees a unique filename. Two processes writing the same nanosecond
-is a 1-in-2^64 chance per byte of nonce; 8 random bytes makes it
-effectively impossible.
+filename format (`<unix_nanos>_<base64url_nonce>.json`) and `O_CREATE|O_EXCL`
+semantics prevent collision: `O_EXCL` fails if the file already exists, and
+in the same nanosecond the random suffix guarantees a unique filename. Two
+processes writing the same nanosecond is a 1-in-2^64 chance per byte of
+nonce; 8 random bytes makes it effectively impossible.
 
 Reading and removing is not locked. `recv` removes each file after
 reading it, so a concurrent `recv` from two terminals may race (each
