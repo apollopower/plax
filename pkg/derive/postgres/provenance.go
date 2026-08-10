@@ -1,3 +1,5 @@
+// Package postgres derives per-instance logical databases and validates
+// database provenance against the blueprint.
 package postgres
 
 import (

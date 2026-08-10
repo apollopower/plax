@@ -1,3 +1,5 @@
+// Package blueprint defines the schema for a repo's plax.json
+// configuration, declaring services, processes, and isolation rules.
 package blueprint
 
 type Blueprint struct {

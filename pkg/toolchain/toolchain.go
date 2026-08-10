@@ -1,3 +1,4 @@
+// Package toolchain detects and validates available language toolchains.
 package toolchain
 
 import (
