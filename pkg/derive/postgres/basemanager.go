@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -57,14 +58,21 @@ func NewBaseManager(ctx context.Context, connString string, repoRoot string, bp 
 		return nil, fmt.Errorf("postgres: connect: %w", err)
 	}
 
-	return &BaseManager{
+	bm := &BaseManager{
 		pool:     pool,
 		bp:       bp,
 		repoRoot: repoRoot,
 		baseName: "plax_base",
 		nextName: "plax_base_next",
 		dsn:      connString,
-	}, nil
+	}
+
+	if prefix := os.Getenv("PLAX_BASE_NAME"); prefix != "" {
+		bm.baseName = prefix
+		bm.nextName = prefix + "_next"
+	}
+
+	return bm, nil
 }
 
 func (bm *BaseManager) Close() {

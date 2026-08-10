@@ -30,6 +30,9 @@ func TestEndToEnd_TwoInstances(t *testing.T) {
 	bin := buildPlax(t)
 	repo := initFixtureRepo(t)
 
+	suffix := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(t.Name(), "/", "_"), "#", "_"))
+	t.Setenv("PLAX_BASE_NAME", "plax_e2e_"+suffix)
+
 	// Base database.
 	stdout, stderr, err := runPlax(bin, repo, "base", "reset", "--pg-url", pgURL)
 	if err != nil {
@@ -404,7 +407,11 @@ func dropBaseDB(t *testing.T, pgURL string) {
 		return
 	}
 	defer func() { _ = conn.Close(context.Background()) }()
-	for _, db := range []string{"plax_base", "plax_base_next"} {
+	prefix := os.Getenv("PLAX_BASE_NAME")
+	if prefix == "" {
+		prefix = "plax_base"
+	}
+	for _, db := range []string{prefix, prefix + "_next"} {
 		_, _ = conn.Exec(context.Background(),
 			"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()", db)
 		_, _ = conn.Exec(context.Background(), fmt.Sprintf("DROP DATABASE IF EXISTS %s", db))
