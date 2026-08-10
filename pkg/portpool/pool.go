@@ -1,3 +1,4 @@
+// Package portpool allocates ports for services from a configurable range.
 package portpool
 
 import (

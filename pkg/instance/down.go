@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/apollopower/plax/pkg/mailbox"
 	"github.com/apollopower/plax/pkg/process"
 	"github.com/apollopower/plax/pkg/worktree"
 )
@@ -85,7 +86,12 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 		fmt.Fprintf(os.Stderr, "warning: remove worktree: %v\n", err)
 	}
 
-	// Step 7: Remove registry entry. Always runs — even if earlier steps
+	// Step 7: Remove mailbox directory.
+	if err := mailbox.RemoveDir(deps.RepoRoot, name); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: remove mailbox: %v\n", err)
+	}
+
+	// Step 8: Remove registry entry. Always runs — even if earlier steps
 	// failed — because the registry is the source of truth for what exists.
 	if err := deps.Registry.RemoveInstance(name); err != nil {
 		return fmt.Errorf("registry: %w", err)

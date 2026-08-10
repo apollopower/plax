@@ -22,6 +22,7 @@ import (
 	"github.com/apollopower/plax/pkg/derive/postgres"
 	"github.com/apollopower/plax/pkg/doctor"
 	"github.com/apollopower/plax/pkg/instance"
+	"github.com/apollopower/plax/pkg/mailbox"
 	"github.com/apollopower/plax/pkg/portpool"
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/status"
@@ -40,6 +41,8 @@ type CLI struct {
 	Status   StatusCmd   `cmd:"" help:"Print a five-dimension drift report for an instance"`
 	Doctor   DoctorCmd   `cmd:"" help:"Validate repo, registry, machine, and base health"`
 	Rederive RederiveCmd `cmd:"" help:"Regenerate .env files for all instances"`
+	Send     SendCmd     `cmd:"" help:"Send a message to an instance's mailbox"`
+	Recv     RecvCmd     `cmd:"" help:"Read and remove messages from an instance's mailbox"`
 }
 
 type InitCmd struct {
@@ -136,6 +139,23 @@ type RederiveCmd struct {
 	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
 }
 
+type SendCmd struct {
+	Name    string   `arg:"" help:"Instance name"`
+	Root    string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	From    string   `name:"from" help:"Sender (defaults to PLAX_INSTANCE env)"`
+	Subject string   `name:"subject" short:"s" help:"Message subject"`
+	Body    []string `arg:"" optional:"" passthrough:"" help:"Message body (use -- to separate from flags)"`
+	JSON    bool     `name:"json" help:"Output as JSON"`
+}
+
+type RecvCmd struct {
+	Name  string `arg:"" help:"Instance name"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	All   bool   `name:"all" short:"a" xor:"mode" help:"Read and remove all messages"`
+	Count int    `name:"count" short:"n" xor:"mode" help:"Number of messages to read (default 1)"`
+	JSON  bool   `name:"json" help:"Output as JSON"`
+}
+
 func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli,
@@ -177,6 +197,10 @@ func main() {
 		ctx.FatalIfErrorf(runDoctor(cli.Doctor))
 	case "rederive":
 		ctx.FatalIfErrorf(runRederive(cli.Rederive))
+	case "send <name>", "send <name> <body>":
+		ctx.FatalIfErrorf(runSend(cli.Send))
+	case "recv <name>":
+		ctx.FatalIfErrorf(runRecv(cli.Recv))
 	}
 }
 
@@ -424,11 +448,11 @@ func runLs(cmd LsCmd) error {
 	}
 
 	if len(reg.Instances) == 0 {
-		fmt.Printf("%-8s %-10s %-20s %-24s %s\n", "NAME", "STATE", "BRANCH", "PORTS", "CREATED")
+		fmt.Printf("%-8s %-10s %-20s %-5s %-24s %s\n", "NAME", "STATE", "BRANCH", "MAIL", "PORTS", "CREATED")
 		return nil
 	}
 
-	fmt.Printf("%-8s %-10s %-20s %-24s %s\n", "NAME", "STATE", "BRANCH", "PORTS", "CREATED")
+	fmt.Printf("%-8s %-10s %-20s %-5s %-24s %s\n", "NAME", "STATE", "BRANCH", "MAIL", "PORTS", "CREATED")
 
 	names := make([]string, 0, len(reg.Instances))
 	for name := range reg.Instances {
@@ -440,7 +464,12 @@ func runLs(cmd LsCmd) error {
 		rec := reg.Instances[name]
 		ports := formatPorts(rec.Ports)
 		age := formatAge(rec.CreatedAt)
-		fmt.Printf("%-8s %-10s %-20s %-24s %s\n", name, rec.State, rec.Branch, ports, age)
+		mailCount, mailErr := mailbox.Count(cmd.Root, name)
+		mailStr := fmt.Sprintf("%d", mailCount)
+		if mailErr != nil {
+			mailStr = "?"
+		}
+		fmt.Printf("%-8s %-10s %-20s %-5s %-24s %s\n", name, rec.State, rec.Branch, mailStr, ports, age)
 	}
 
 	return nil
@@ -462,6 +491,10 @@ func runAttach(cmd AttachCmd) error {
 
 	if rec.State == "suspended" {
 		fmt.Fprintf(os.Stderr, "note: instance %s is suspended — services and processes are stopped\n", cmd.Name)
+	}
+
+	if n, err := mailbox.Count(cmd.Root, cmd.Name); err == nil && n > 0 {
+		fmt.Fprintf(os.Stderr, "note: %d unread message(s) — run 'plax recv %s' to read\n", n, cmd.Name)
 	}
 
 	absRoot, _ := filepath.Abs(cmd.Root)
@@ -992,6 +1025,117 @@ func runRederive(cmd RederiveCmd) error {
 
 	deps := &instance.Deps{Blueprint: bp, Registry: reg, RepoRoot: absRoot}
 	return instance.Rederive(context.Background(), deps)
+}
+
+func runSend(cmd SendCmd) error {
+	reg, err := openRegistry(cmd.Root)
+	if err != nil {
+		return err
+	}
+
+	if _, found := reg.GetInstance(cmd.Name); !found {
+		return fmt.Errorf("instance %q not found", cmd.Name)
+	}
+
+	parts := cmd.Body
+	for len(parts) > 0 && parts[0] == "--" {
+		parts = parts[1:]
+	}
+	body := strings.Join(parts, " ")
+	if body == "" {
+		return fmt.Errorf("send: body is required")
+	}
+
+	from := cmd.From
+	if from == "" {
+		from = os.Getenv("PLAX_INSTANCE")
+	}
+	if from == "" {
+		fmt.Fprintf(os.Stderr, "send: no sender set — pass --from or set PLAX_INSTANCE\n")
+	}
+
+	msg := mailbox.Message{
+		From:    from,
+		Subject: cmd.Subject,
+		Body:    body,
+	}
+
+	filename, err := mailbox.Send(cmd.Root, cmd.Name, msg)
+	if err != nil {
+		return err
+	}
+
+	if cmd.JSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(map[string]string{"status": "sent", "instance": cmd.Name, "file": filename})
+	}
+
+	fmt.Fprintf(os.Stderr, "message written: %s\n", filename)
+	return nil
+}
+
+func runRecv(cmd RecvCmd) error {
+	reg, err := openRegistry(cmd.Root)
+	if err != nil {
+		return err
+	}
+
+	if _, found := reg.GetInstance(cmd.Name); !found {
+		return fmt.Errorf("instance %q not found", cmd.Name)
+	}
+
+	n := cmd.Count
+	if n < 0 {
+		return fmt.Errorf("recv: --count must be positive")
+	}
+	if !cmd.All && n == 0 {
+		n = 1
+	}
+
+	var msgs []mailbox.Message
+	if cmd.All {
+		msgs, err = mailbox.RecvAll(cmd.Root, cmd.Name)
+	} else {
+		msgs, err = mailbox.Recv(cmd.Root, cmd.Name, n)
+	}
+	if err != nil {
+		return err
+	}
+
+	if cmd.JSON {
+		if msgs == nil {
+			msgs = []mailbox.Message{}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(msgs)
+	}
+
+	if len(msgs) == 0 {
+		fmt.Fprintln(os.Stderr, "no messages")
+		return nil
+	}
+
+	for i, msg := range msgs {
+		if i > 0 {
+			fmt.Println()
+		}
+		if msg.From != "" {
+			fmt.Printf("From: %s\n", msg.From)
+		}
+		if msg.Subject != "" {
+			fmt.Printf("Subject: %s\n", msg.Subject)
+		}
+		fmt.Printf("---\n%s\n---\n", msg.Body)
+	}
+
+	remaining, _ := mailbox.Count(cmd.Root, cmd.Name)
+	if remaining > 0 {
+		fmt.Fprintf(os.Stderr, "%d message(s) remaining\n", remaining)
+	}
+
+	return nil
 }
 
 func printReportStderr(r *status.Report) {
