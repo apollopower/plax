@@ -188,6 +188,9 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	})
 	for svcName, svc := range deps.Blueprint.Services {
 		if svc.Isolation != blueprint.IsolationDedicated {
+			if svc.Isolation != blueprint.IsolationLogical {
+				fmt.Fprintf(os.Stderr, "skipping %s (isolation %q not implemented)\n", svcName, svc.Isolation)
+			}
 			continue
 		}
 		fmt.Fprintf(os.Stderr, "starting %s...\n", svcName)
