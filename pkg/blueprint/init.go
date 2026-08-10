@@ -156,6 +156,7 @@ func buildPorts(ports []any, svcName string) map[string]PortDef {
 			defaultHostPort = m[2]
 			containerPort = m[3]
 		} else if m := barePortExpr.FindStringSubmatch(portStr); m != nil {
+			defaultHostPort = m[1]
 			containerPort = m[2]
 		} else if _, err := fmt.Sscanf(portStr, "%d", new(int)); err == nil {
 			containerPort = portStr

@@ -274,6 +274,53 @@ func TestValidate_EmptyPortVar(t *testing.T) {
 	}
 }
 
+func TestValidate_UnknownServiceIsolation(t *testing.T) {
+	bp := *validBP
+	bp.Services["bad"] = ServiceDef{
+		Isolation: "dedicatd",
+		Image:     "img",
+	}
+	errs := ValidateStructural(&bp)
+	if !containsErr(t, errs, "unknown isolation") {
+		t.Errorf("expected unknown isolation error, got %v", errs)
+	}
+}
+
+func TestValidate_UnknownProcessIsolation(t *testing.T) {
+	bp := *validBP
+	bp.Processes = append(bp.Processes, ProcessDef{
+		Name:      "bad",
+		Isolation: "container",
+		Command:   "true",
+		Workdir:   ".",
+	})
+	errs := ValidateStructural(&bp)
+	if !containsErr(t, errs, "unknown isolation") {
+		t.Errorf("expected unknown isolation error, got %v", errs)
+	}
+}
+
+func TestValidate_AllKnownServiceIsolations(t *testing.T) {
+	for _, iso := range []ServiceIsolation{IsolationLogical, IsolationDedicated, IsolationShared, IsolationExternal} {
+		bp := &Blueprint{
+			Version:  1,
+			Name:     "t",
+			PortPool: PortPool{Start: 3000, End: 4000},
+			Seed:     SeedConfig{Migrate: "m", Command: "c", Workdir: "."},
+			Services: map[string]ServiceDef{
+				"svc": {Isolation: iso, Type: "postgres", Image: "img"},
+			},
+			Env: EnvConfig{Template: ".env.example", Holes: map[string]string{}},
+		}
+		errs := ValidateStructural(bp)
+		for _, e := range errs {
+			if strings.Contains(e.Error(), "unknown isolation") {
+				t.Errorf("isolation %q should be valid, got: %v", iso, e)
+			}
+		}
+	}
+}
+
 func containsErr(t *testing.T, errs []error, substr string) bool {
 	t.Helper()
 	for _, e := range errs {
