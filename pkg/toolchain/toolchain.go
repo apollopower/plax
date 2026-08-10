@@ -80,11 +80,32 @@ func tryFlag(name, binary, flag string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, flag)
-	out, err := cmd.Output()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(firstLine(string(out)))
+}
+
+type PinMatch int
+
+const (
+	PinMatchYes PinMatch = iota
+	PinMatchNo
+	PinMatchUnverifiable
+)
+
+func (m PinMatch) String() string {
+	switch m {
+	case PinMatchYes:
+		return "yes"
+	case PinMatchNo:
+		return "no"
+	case PinMatchUnverifiable:
+		return "unverifiable"
+	default:
+		return "unknown"
+	}
 }
 
 type Diff struct {
@@ -113,23 +134,27 @@ func CompareVersions(recorded, current map[string]string) []Diff {
 	return diffs
 }
 
-func MatchesPin(pin, resolved string) bool {
+func MatchesPin(pin, resolved string) PinMatch {
 	lower := strings.ToLower(pin)
 	if lower == "lts" || lower == "latest" {
-		return false
+		return PinMatchUnverifiable
 	}
+
+	pin = strings.TrimPrefix(pin, "v")
+	pin = strings.TrimPrefix(pin, "go")
+
 	tokens := strings.Fields(resolved)
 	for _, tok := range tokens {
 		tok = strings.TrimPrefix(tok, "v")
 		tok = strings.TrimPrefix(tok, "go")
 		if tok == pin {
-			return true
+			return PinMatchYes
 		}
 		if strings.HasPrefix(tok, pin+".") {
-			return true
+			return PinMatchYes
 		}
 	}
-	return false
+	return PinMatchNo
 }
 
 func firstLine(s string) string {

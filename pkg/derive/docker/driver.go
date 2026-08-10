@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/go-connections/nat"
 )
 
@@ -90,7 +91,7 @@ func (d *Driver) RunService(ctx context.Context, cfg ServiceConfig) (string, err
 
 	resp, err := d.cli.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, containerName)
 	if err != nil {
-		if strings.Contains(err.Error(), "Conflict") {
+		if errdefs.IsConflict(err) {
 			_ = d.cli.ContainerRemove(ctx, containerName, container.RemoveOptions{Force: true})
 			resp, err = d.cli.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, containerName)
 			if err != nil {
@@ -115,7 +116,7 @@ func (d *Driver) RunService(ctx context.Context, cfg ServiceConfig) (string, err
 func (d *Driver) ServiceRunning(ctx context.Context, containerID string) (bool, error) {
 	info, err := d.cli.ContainerInspect(ctx, containerID)
 	if err != nil {
-		if strings.Contains(err.Error(), "No such container") {
+		if errdefs.IsNotFound(err) {
 			return false, nil
 		}
 		return false, fmt.Errorf("docker: inspect container: %w", err)
@@ -126,7 +127,7 @@ func (d *Driver) ServiceRunning(ctx context.Context, containerID string) (bool, 
 func (d *Driver) StopService(ctx context.Context, containerID string) error {
 	timeout := 10
 	if err := d.cli.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
-		if strings.Contains(err.Error(), "No such container") {
+		if errdefs.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("docker: stop container: %w", err)
@@ -151,7 +152,7 @@ func (d *Driver) StartService(ctx context.Context, containerID string) (alreadyR
 func (d *Driver) ServiceExists(ctx context.Context, containerID string) (bool, error) {
 	_, err := d.cli.ContainerInspect(ctx, containerID)
 	if err != nil {
-		if strings.Contains(err.Error(), "No such container") {
+		if errdefs.IsNotFound(err) {
 			return false, nil
 		}
 		return false, fmt.Errorf("docker: inspect container: %w", err)
@@ -161,7 +162,7 @@ func (d *Driver) ServiceExists(ctx context.Context, containerID string) (bool, e
 
 func (d *Driver) RemoveService(ctx context.Context, containerID string) error {
 	if err := d.cli.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
-		if strings.Contains(err.Error(), "No such container") {
+		if errdefs.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("docker: remove container: %w", err)
@@ -171,7 +172,7 @@ func (d *Driver) RemoveService(ctx context.Context, containerID string) error {
 
 func (d *Driver) RemoveVolume(ctx context.Context, volumeName string) error {
 	if err := d.cli.VolumeRemove(ctx, volumeName, true); err != nil {
-		if strings.Contains(err.Error(), "No such volume") {
+		if errdefs.IsNotFound(err) {
 			return nil
 		}
 		return fmt.Errorf("docker: remove volume: %w", err)

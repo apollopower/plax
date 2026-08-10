@@ -493,7 +493,7 @@ func runAttach(cmd AttachCmd) error {
 	bp, _ := loadBlueprint(cmd.Root)
 	printStampNotice(cmd.Root, bp, reg)
 
-	if rec.State == "suspended" {
+	if rec.State == registry.StateSuspended {
 		fmt.Fprintf(os.Stderr, "note: instance %s is suspended — services and processes are stopped\n", cmd.Name)
 	}
 
@@ -571,7 +571,7 @@ func runExec(cmd ExecCmd) error {
 	bp, _ := loadBlueprint(cmd.Root)
 	printStampNotice(cmd.Root, bp, reg)
 
-	if rec.State == "suspended" {
+	if rec.State == registry.StateSuspended {
 		fmt.Fprintf(os.Stderr, "note: instance %s is suspended — services and processes are stopped\n", cmd.Name)
 	}
 

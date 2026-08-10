@@ -54,30 +54,32 @@ func Send(root, name string, msg Message) (string, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return "", fmt.Errorf("mailbox: rand: %w", err)
 	}
-	filename := fmt.Sprintf("%d_%x.json", time.Now().UnixNano(), nonce)
-	path := filepath.Join(dir, filename)
+	now := time.Now().UnixNano()
+	tmpName := fmt.Sprintf(".tmp_%d_%x.json", now, nonce)
+	tmpPath := filepath.Join(dir, tmpName)
+	finalName := fmt.Sprintf("%d_%x.json", now, nonce)
+	finalPath := filepath.Join(dir, finalName)
 
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return "", fmt.Errorf("mailbox: marshal: %w", err)
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
-	if err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return "", fmt.Errorf("mailbox: write: %w", err)
 	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return "", fmt.Errorf("mailbox: write: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return "", fmt.Errorf("mailbox: write: %w", err)
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("mailbox: rename: %w", err)
 	}
 
-	return filename, nil
+	return finalName, nil
 }
 
 func Recv(root, name string, count int) ([]Message, error) {
+	if count < 1 {
+		return nil, fmt.Errorf("mailbox: recv count must be >= 1, got %d", count)
+	}
 	return recvFile(root, name, count, false)
 }
 

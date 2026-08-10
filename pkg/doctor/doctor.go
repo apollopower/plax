@@ -223,7 +223,7 @@ func runBlueprintVsRegistry(ctx context.Context, r *Report, deps *Deps) {
 				}
 			}
 		}
-		if rec.State == "running" {
+		if rec.State == registry.StateRunning {
 			for svcName, cid := range rec.ContainerIDs {
 				if deps.Docker != nil {
 					running, err := deps.Docker.ServiceRunning(ctx, cid)
@@ -265,10 +265,15 @@ func runRepoVsMachine(r *Report, deps *Deps) {
 				ver, ok := resolved[tool]
 				if !ok {
 					r.Checks = append(r.Checks, Check{Area: area, Level: Fail, Message: fmt.Sprintf("%s: pin %s but not installed", tool, pin)})
-				} else if !toolchain.MatchesPin(pin, ver) {
-					r.Checks = append(r.Checks, Check{Area: area, Level: Fail, Message: fmt.Sprintf("%s: pinned %s, installed %s", tool, pin, ver)})
 				} else {
-					r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: fmt.Sprintf("%s %s (pinned %s)", tool, ver, pin)})
+					switch toolchain.MatchesPin(pin, ver) {
+					case toolchain.PinMatchNo:
+						r.Checks = append(r.Checks, Check{Area: area, Level: Fail, Message: fmt.Sprintf("%s: pinned %s, installed %s", tool, pin, ver)})
+					case toolchain.PinMatchUnverifiable:
+						r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: fmt.Sprintf("%s: pinned %s, installed %s (unverifiable pin)", tool, pin, ver)})
+					default:
+						r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: fmt.Sprintf("%s %s (pinned %s)", tool, ver, pin)})
+					}
 				}
 			}
 		}

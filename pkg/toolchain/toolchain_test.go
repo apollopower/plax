@@ -96,20 +96,53 @@ func TestCompareVersions(t *testing.T) {
 func TestMatchesPin(t *testing.T) {
 	tests := []struct {
 		pin, resolved string
-		want          bool
+		want          PinMatch
 	}{
-		{"22.19.0", "v22.19.0", true},
-		{"1.26", "go version go1.26.5 linux/amd64", true},
-		{"1.26", "go1.26.0", true},
-		{"1.2", "11.2.3", false},
-		{"lts", "v20.0.0", false},
-		{"latest", "v20.0.0", false},
-		{"22.19.0", "v22.20.0", false},
+		{"22.19.0", "v22.19.0", PinMatchYes},
+		{"1.26", "go version go1.26.5 linux/amd64", PinMatchYes},
+		{"1.26", "go1.26.0", PinMatchYes},
+		{"1.2", "11.2.3", PinMatchNo},
+		{"22.19.0", "v22.20.0", PinMatchNo},
 	}
 	for _, tt := range tests {
 		got := MatchesPin(tt.pin, tt.resolved)
 		if got != tt.want {
 			t.Errorf("MatchesPin(%q, %q) = %v, want %v", tt.pin, tt.resolved, got, tt.want)
 		}
+	}
+}
+
+func TestMatchesPin_VPrefixedPin(t *testing.T) {
+	got := MatchesPin("v22.19.0", "v22.19.0")
+	if got != PinMatchYes {
+		t.Errorf("MatchesPin(v22.19.0, v22.19.0) = %v, want PinMatchYes", got)
+	}
+}
+
+func TestMatchesPin_LTS(t *testing.T) {
+	got := MatchesPin("lts", "v20.0.0")
+	if got != PinMatchUnverifiable {
+		t.Errorf("MatchesPin(lts, v20.0.0) = %v, want PinMatchUnverifiable", got)
+	}
+}
+
+func TestMatchesPin_Latest(t *testing.T) {
+	got := MatchesPin("latest", "v20.0.0")
+	if got != PinMatchUnverifiable {
+		t.Errorf("MatchesPin(latest, v20.0.0) = %v, want PinMatchUnverifiable", got)
+	}
+}
+
+func TestTryFlag_StderrOutput(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "stderr-test")
+	script := "#!/bin/sh\necho 'version 1.2.3' >&2\nexit 0"
+	if err := os.WriteFile(binary, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	ver := tryFlag("test", binary, "--version")
+	if ver != "version 1.2.3" {
+		t.Errorf("tryFlag with stderr output = %q, want 'version 1.2.3'", ver)
 	}
 }

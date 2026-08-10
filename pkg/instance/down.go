@@ -37,6 +37,8 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 		switch {
 		case errors.Is(err, process.ErrStaleProcess):
 			fmt.Fprintf(os.Stderr, "note: %s already gone (pgid %d reused by another process)\n", procName, pgid)
+		case errors.Is(err, process.ErrGroupSurvivors):
+			fmt.Fprintf(os.Stderr, "warning: %s process leader died but children survived (pgid %d) — teardown continuing\n", procName, pgid)
 		case err != nil:
 			fmt.Fprintf(os.Stderr, "warning: terminate %s (pgid %d): %v\n", procName, pgid, err)
 		}

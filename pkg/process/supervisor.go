@@ -19,6 +19,12 @@ import (
 // wrong process, so callers must treat this as "already gone".
 var ErrStaleProcess = errors.New("process: pgid reused by another process")
 
+// ErrGroupSurvivors marks a process group whose leader has exited but
+// whose members (children) are still alive. The children could not be
+// terminated because they inherited a different parent and are no longer
+// in the original process group.
+var ErrGroupSurvivors = errors.New("process: group leader dead but children survive")
+
 // Spawn starts command as a detached process group leader.
 // The command runs in dir with the given environment (merged over os.Environ
 // by the caller). Stdout and stderr are appended to logPath.
@@ -100,11 +106,22 @@ func StartTime(pid int) int64 {
 // only signaled if its leader still has that start time; a mismatch returns
 // ErrStaleProcess and nothing is signaled, so a reused PGID is never killed.
 // Pass 0 on platforms without /proc to skip identity verification.
+func leaderDead(pgid int, startTime int64) bool {
+	return startTime != 0 && StartTime(pgid) != startTime
+}
+
 func Terminate(pgid int, startTime int64, timeout time.Duration) error {
+	if pgid <= 0 {
+		return fmt.Errorf("process: invalid pgid %d", pgid)
+	}
 	if startTime != 0 {
 		switch cur := StartTime(pgid); cur {
 		case 0:
-			return nil // already dead
+			// Leader is dead but children may survive — check.
+			if !IsAlive(pgid) {
+				return nil
+			}
+			// Group still has members; fall through to SIGKILL.
 		case startTime:
 			// identity confirmed
 		default:
@@ -130,6 +147,15 @@ func Terminate(pgid int, startTime int64, timeout time.Duration) error {
 		time.Sleep(50 * time.Millisecond)
 	}
 
+	// Before SIGKILL, check whether the group leader has died. If the leader
+	// is gone but the group is still alive, children survived — report it.
+	if leaderDead(pgid, startTime) {
+		if IsAlive(pgid) {
+			return ErrGroupSurvivors
+		}
+		return nil
+	}
+
 	// The original process may have died and its PGID been reused while we
 	// waited; never SIGKILL a group whose identity we cannot confirm.
 	if !aliveAs(pgid, startTime) {
@@ -147,16 +173,27 @@ func Terminate(pgid int, startTime int64, timeout time.Duration) error {
 
 // IsAlive reports whether a process group exists.
 func IsAlive(pgid int) bool {
+	if pgid <= 0 {
+		return false
+	}
 	// Signal 0 checks for existence without sending a signal.
 	err := syscall.Kill(-pgid, 0)
 	return err == nil
 }
 
-// aliveAs reports whether the group exists and, when startTime is nonzero,
-// still belongs to the process that was originally recorded.
+// aliveAs reports whether the group exists and, when startTime is nonzero and
+// the leader is still alive, still belongs to the process that was originally
+// recorded. When the leader is dead but the group still has members (orphaned
+// children), aliveAs falls back to IsAlive so the wait loop does not exit
+// prematurely.
 func aliveAs(pgid int, startTime int64) bool {
-	if startTime != 0 {
-		return StartTime(pgid) == startTime
+	if startTime == 0 {
+		return IsAlive(pgid)
 	}
-	return IsAlive(pgid)
+	cur := StartTime(pgid)
+	if cur == 0 {
+		// Leader dead — check if the group still has members.
+		return IsAlive(pgid)
+	}
+	return cur == startTime
 }
