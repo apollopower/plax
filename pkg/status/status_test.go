@@ -32,7 +32,7 @@ func (f *fakeBM) InstanceProvenance(context.Context, string) (*postgres.Provenan
 	return f.prov, nil
 }
 
-func initStatusRepo(t *testing.T) (string, *blueprint.Blueprint, *registry.Registry) {
+func initStatusRepo(t *testing.T) (repoRoot string, bp *blueprint.Blueprint, reg *registry.Registry, wtPath string) {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -60,9 +60,12 @@ func initStatusRepo(t *testing.T) (string, *blueprint.Blueprint, *registry.Regis
 	run("git", "add", ".")
 	run("git", "commit", "-m", "init")
 
-	run("git", "branch", "plax/i1")
+	wtPath, err := worktree.Create(dir, "i1")
+	if err != nil {
+		t.Fatalf("create worktree: %v", err)
+	}
 
-	bp := &blueprint.Blueprint{
+	bp = &blueprint.Blueprint{
 		Version:   1,
 		Name:      "test",
 		PortPool:  blueprint.PortPool{Start: 25000, End: 25100},
@@ -73,7 +76,7 @@ func initStatusRepo(t *testing.T) (string, *blueprint.Blueprint, *registry.Regis
 	}
 
 	regPath := filepath.Join(dir, ".plax", "registry.json")
-	reg, err := registry.Open(regPath)
+	reg, err = registry.Open(regPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +84,7 @@ func initStatusRepo(t *testing.T) (string, *blueprint.Blueprint, *registry.Regis
 	stamp := hashStamp(dir, bp)
 	reg.BlueprintStamp = stamp
 
-	return dir, bp, reg
+	return dir, bp, reg, wtPath
 }
 
 func hashStamp(dir string, bp *blueprint.Blueprint) registry.BlueprintStamp {
@@ -101,7 +104,7 @@ func hashStamp(dir string, bp *blueprint.Blueprint) registry.BlueprintStamp {
 }
 
 func TestBuild_AllOK(t *testing.T) {
-	dir, bp, reg := initStatusRepo(t)
+	dir, bp, reg, wtPath := initStatusRepo(t)
 
 	bm := &fakeBM{
 		info: postgres.BaseInfo{Exists: true, Locked: true, ProvenanceVer: 1},
@@ -110,11 +113,12 @@ func TestBuild_AllOK(t *testing.T) {
 
 	branch := worktree.BranchName("i1")
 	rec := registry.InstanceRecord{
-		ID:      "i1",
-		Branch:  branch,
-		State:   registry.StateRunning,
-		DBName:  "plax_i1",
-		BaseRef: "main",
+		ID:           "i1",
+		Branch:       branch,
+		WorktreePath: wtPath,
+		State:        registry.StateRunning,
+		DBName:       "plax_i1",
+		BaseRef:      "main",
 		Provenance: registry.Provenance{
 			BaseVersion:  1,
 			Toolchain:    "abc",
@@ -151,8 +155,67 @@ func TestBuild_AllOK(t *testing.T) {
 	}
 }
 
+func TestBuild_CodeDifferentBranch(t *testing.T) {
+	dir, bp, reg, wtPath := initStatusRepo(t)
+
+	run := func(args ...string) {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", args, out)
+		}
+	}
+
+	run("git", "branch", "review/pr-123", "main")
+	run("git", "-C", wtPath, "checkout", "review/pr-123")
+	run("git", "-C", wtPath, "commit", "--allow-empty", "-m", "pr commit")
+
+	bm := &fakeBM{
+		info: postgres.BaseInfo{Exists: true, Locked: true, ProvenanceVer: 1},
+		prov: &postgres.ProvenanceRow{Version: 1, SchemaHash: ""},
+	}
+
+	branch := worktree.BranchName("i1")
+	rec := registry.InstanceRecord{
+		ID:           "i1",
+		Branch:       branch,
+		WorktreePath: wtPath,
+		State:        registry.StateRunning,
+		DBName:       "plax_i1",
+		BaseRef:      "main",
+		Provenance: registry.Provenance{
+			BaseVersion:  1,
+			Toolchain:    "abc",
+			ToolVersions: map[string]string{"nodejs": "v22.19.0"},
+		},
+	}
+	if err := reg.AddInstance("i1", rec); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{
+		Blueprint:    bp,
+		Registry:     reg,
+		BM:           bm,
+		RepoRoot:     dir,
+		CurrentStamp: reg.BlueprintStamp,
+	}
+
+	report, err := Build(context.Background(), deps, "i1")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if report.Code.Level != Drift {
+		t.Errorf("code = %s, want drift: %s", report.Code.Level, report.Code.Detail)
+	}
+	if want := "ahead 1, behind 0 (on review/pr-123)"; report.Code.Detail != want {
+		t.Errorf("code detail = %q, want %q", report.Code.Detail, want)
+	}
+}
+
 func TestBuild_NotFound(t *testing.T) {
-	_, bp, reg := initStatusRepo(t)
+	_, bp, reg, _ := initStatusRepo(t)
 	deps := &Deps{Blueprint: bp, Registry: reg, CurrentStamp: registry.BlueprintStamp{}}
 	_, err := Build(context.Background(), deps, "nope")
 	if err == nil {
@@ -161,13 +224,14 @@ func TestBuild_NotFound(t *testing.T) {
 }
 
 func TestBuild_DataUnknown_NoBM(t *testing.T) {
-	dir, bp, reg := initStatusRepo(t)
+	dir, bp, reg, wtPath := initStatusRepo(t)
 	rec := registry.InstanceRecord{
-		ID:      "i1",
-		Branch:  "plax/i1",
-		State:   registry.StateRunning,
-		DBName:  "plax_i1",
-		BaseRef: "main",
+		ID:           "i1",
+		Branch:       "plax/i1",
+		WorktreePath: wtPath,
+		State:        registry.StateRunning,
+		DBName:       "plax_i1",
+		BaseRef:      "main",
 		Provenance: registry.Provenance{
 			BaseVersion:  1,
 			ToolVersions: map[string]string{"nodejs": "v22.19.0"},
@@ -194,14 +258,15 @@ func TestBuild_DataUnknown_NoBM(t *testing.T) {
 }
 
 func TestBuild_HostUnknown_Phase3Record(t *testing.T) {
-	dir, bp, reg := initStatusRepo(t)
+	dir, bp, reg, wtPath := initStatusRepo(t)
 	rec := registry.InstanceRecord{
-		ID:         "i1",
-		Branch:     "plax/i1",
-		State:      registry.StateRunning,
-		DBName:     "plax_i1",
-		BaseRef:    "main",
-		Provenance: registry.Provenance{BaseVersion: 1},
+		ID:           "i1",
+		Branch:       "plax/i1",
+		WorktreePath: wtPath,
+		State:        registry.StateRunning,
+		DBName:       "plax_i1",
+		BaseRef:      "main",
+		Provenance:   registry.Provenance{BaseVersion: 1},
 	}
 	if err := reg.AddInstance("i1", rec); err != nil {
 		t.Fatal(err)
@@ -224,12 +289,13 @@ func TestBuild_HostUnknown_Phase3Record(t *testing.T) {
 }
 
 func TestBuild_ConfigDrift(t *testing.T) {
-	dir, bp, reg := initStatusRepo(t)
+	dir, bp, reg, wtPath := initStatusRepo(t)
 	rec := registry.InstanceRecord{
-		ID:      "i1",
-		Branch:  "plax/i1",
-		State:   registry.StateRunning,
-		BaseRef: "main",
+		ID:           "i1",
+		Branch:       "plax/i1",
+		WorktreePath: wtPath,
+		State:        registry.StateRunning,
+		BaseRef:      "main",
 		Provenance: registry.Provenance{
 			BaseVersion:  1,
 			ToolVersions: map[string]string{"nodejs": "v22.19.0"},

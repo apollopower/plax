@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-func HeadRef(repoRoot string) (ref, commit string, err error) {
+func gitHeadAt(dir string) (ref, commit string, err error) {
 	cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-	cmd.Dir = repoRoot
+	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
 		return "", "", fmt.Errorf("worktree: head ref: %w", err)
@@ -18,15 +18,22 @@ func HeadRef(repoRoot string) (ref, commit string, err error) {
 		ref = ""
 	}
 
-	var commitOut []byte
 	commitCmd := exec.Command("git", "rev-parse", "HEAD")
-	commitCmd.Dir = repoRoot
-	commitOut, err = commitCmd.Output()
+	commitCmd.Dir = dir
+	commitOut, err := commitCmd.Output()
 	if err != nil {
 		return ref, "", fmt.Errorf("worktree: head commit: %w", err)
 	}
 	commit = strings.TrimSpace(string(commitOut))
 	return ref, commit, nil
+}
+
+func HeadRef(repoRoot string) (ref, commit string, err error) {
+	return gitHeadAt(repoRoot)
+}
+
+func WorktreeHead(worktreePath string) (ref, commit string, err error) {
+	return gitHeadAt(worktreePath)
 }
 
 func RefExists(repoRoot, ref string) bool {

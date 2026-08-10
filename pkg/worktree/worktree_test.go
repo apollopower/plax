@@ -151,3 +151,54 @@ func TestBranchExists_True(t *testing.T) {
 		t.Error("BranchExists should return true after Create")
 	}
 }
+
+func TestWorktreeHead_NormalBranch(t *testing.T) {
+	repo := initRepo(t)
+	wtPath, err := Create(repo, "i1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	ref, commit, err := WorktreeHead(wtPath)
+	if err != nil {
+		t.Fatalf("WorktreeHead: %v", err)
+	}
+	if ref != "plax/i1" {
+		t.Errorf("ref = %q, want %q", ref, "plax/i1")
+	}
+	if commit == "" {
+		t.Error("commit should not be empty")
+	}
+}
+
+func TestWorktreeHead_DetachedHead(t *testing.T) {
+	repo := initRepo(t)
+	wtPath, err := Create(repo, "i1")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	cmd := exec.Command("git", "checkout", "--detach", "HEAD")
+	cmd.Dir = wtPath
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("checkout --detach: %s", out)
+	}
+
+	ref, commit, err := WorktreeHead(wtPath)
+	if err != nil {
+		t.Fatalf("WorktreeHead: %v", err)
+	}
+	if ref != "" {
+		t.Errorf("ref for detached HEAD should be empty, got %q", ref)
+	}
+	if commit == "" {
+		t.Error("commit should not be empty for detached HEAD")
+	}
+}
+
+func TestWorktreeHead_MissingPath(t *testing.T) {
+	_, _, err := WorktreeHead("/nonexistent/path")
+	if err == nil {
+		t.Fatal("expected error for missing worktree path")
+	}
+}
