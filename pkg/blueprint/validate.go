@@ -35,9 +35,21 @@ func ValidateStructural(bp *Blueprint) []error {
 		errs = append(errs, fmt.Errorf("blueprint: port_pool.start (%d) must be less than end (%d)", bp.PortPool.Start, bp.PortPool.End))
 	}
 
+	validServiceIsolations := map[ServiceIsolation]bool{
+		IsolationLogical:   true,
+		IsolationDedicated: true,
+		IsolationShared:    true,
+		IsolationExternal:  true,
+	}
+
 	usedPortVars := map[string]string{}
 	dockerNames := map[string]string{}
 	for svcName, svc := range bp.Services {
+		if !validServiceIsolations[svc.Isolation] {
+			errs = append(errs, fmt.Errorf(
+				"blueprint: service %q: unknown isolation %q (want logical, dedicated, shared, or external)",
+				svcName, svc.Isolation))
+		}
 		if !nameCharset.MatchString(svcName) {
 			errs = append(errs, fmt.Errorf("blueprint: service name %q must match ^[a-z0-9][a-z0-9_-]*$", svcName))
 		} else {
@@ -71,6 +83,11 @@ func ValidateStructural(bp *Blueprint) []error {
 
 	procNames := map[string]bool{}
 	for _, proc := range bp.Processes {
+		if proc.Isolation != IsolationNative {
+			errs = append(errs, fmt.Errorf(
+				"blueprint: process %q: unknown isolation %q (want native)",
+				proc.Name, proc.Isolation))
+		}
 		if !nameCharset.MatchString(proc.Name) {
 			errs = append(errs, fmt.Errorf("blueprint: process name %q must match ^[a-z0-9][a-z0-9_-]*$", proc.Name))
 		}

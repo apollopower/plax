@@ -111,6 +111,9 @@ services:
 	if pd.Var != "WEB_PORT" {
 		t.Errorf("bare port should get WEB_PORT (derived from svc name), got %q", pd.Var)
 	}
+	if pd.Default != "8080" {
+		t.Errorf("bare port should get Default 8080 (from host port), got %q", pd.Default)
+	}
 }
 
 func TestInit_ComposePortsEnvVarDefault(t *testing.T) {

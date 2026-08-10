@@ -205,7 +205,11 @@ func main() {
 }
 
 func runInit(cmd InitCmd) error {
-	bp, err := blueprint.InitFromRepo(cmd.Root)
+	absRoot, err := filepath.Abs(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("init: resolving root: %w", err)
+	}
+	bp, err := blueprint.InitFromRepo(absRoot)
 	if err != nil {
 		return fmt.Errorf("init: %w", err)
 	}
@@ -986,7 +990,13 @@ func runDoctor(cmd DoctorCmd) error {
 	if cmd.JSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
-		return enc.Encode(report)
+		if err := enc.Encode(report); err != nil {
+			return err
+		}
+		if report.Failed() {
+			os.Exit(1)
+		}
+		return nil
 	}
 
 	area := ""
