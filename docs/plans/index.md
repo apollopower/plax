@@ -119,6 +119,7 @@ JSON, checked into the repo root as `plax.json`. No comments.
 | 7 | [`07-robustness.md`](07-robustness.md) | Harden against failure modes: process survivors, mailbox atomicity, Docker errdefs, DSN parsing, pin validation, registry versioning |
 | 8 | [`08-architecture.md`](08-architecture.md) | CSP concurrency, registry file locking, thin CLI shell, atomic env writes |
 | 9 | [`09-polish.md`](09-polish.md) | Doc comments, dead code removal, stderr layering, test hygiene, naming conventions |
+| 10 | [`10-status-worktree-head.md`](10-status-worktree-head.md) | Fix status drift: measure worktree HEAD instead of recorded branch |
 
 ---
 
