@@ -118,15 +118,13 @@ func codeDrift(repoRoot, base string, rec *registry.InstanceRecord) Dimension {
 	rhs := rec.Branch
 	var detailSuffix string
 
-	wtRef, wtCommit, err := worktree.WorktreeHead(rec.WorktreePath)
-	if err != nil {
-		detailSuffix = " (worktree path missing, using recorded branch)"
-	} else {
-		if wtRef != "" && wtRef == rec.Branch {
+	if rec.WorktreePath != "" {
+		wtRef, wtCommit, err := worktree.WorktreeHead(rec.WorktreePath)
+		if err != nil {
+			detailSuffix = " (worktree path missing, using recorded branch)"
+		} else if wtRef != "" && wtRef == rec.Branch {
 			// Fast path: worktree is on the recorded branch.
 		} else {
-			// Check if the commit matches (user might be on a different branch
-			// pointing at the same commit, or detached).
 			branchCmd := exec.Command("git", "rev-parse", rec.Branch)
 			branchCmd.Dir = repoRoot
 			branchOut, branchErr := branchCmd.Output()
@@ -144,6 +142,8 @@ func codeDrift(repoRoot, base string, rec *registry.InstanceRecord) Dimension {
 				detailSuffix = fmt.Sprintf(" (detached at %s)", short)
 			}
 		}
+	} else {
+		detailSuffix = " (no worktree path)"
 	}
 
 	ahead, behind, err := worktree.AheadBehind(repoRoot, base, rhs)
@@ -265,13 +265,14 @@ func schemaDrift(repoRoot, base, migrationsDir string, bm BaseManager, rec *regi
 	}
 
 	ref := base
-	var detailSuffix string
+	usingWorktreeHead := false
 
-	_, wtCommit, err := worktree.WorktreeHead(rec.WorktreePath)
-	if err == nil && wtCommit != "" {
-		ref = wtCommit
-	} else {
-		detailSuffix = " (worktree path missing, using base ref)"
+	if rec.WorktreePath != "" {
+		_, wtCommit, err := worktree.WorktreeHead(rec.WorktreePath)
+		if err == nil && wtCommit != "" {
+			ref = wtCommit
+			usingWorktreeHead = true
+		}
 	}
 
 	names, err := worktree.SchemaFilesAtRef(repoRoot, ref, migrationsDir)
@@ -280,7 +281,7 @@ func schemaDrift(repoRoot, base, migrationsDir string, bm BaseManager, rec *regi
 		if err != nil {
 			d.Detail = fmt.Sprintf("git ls-tree: %v", err)
 		} else {
-			d.Detail = fmt.Sprintf("no migration files at %s on %s%s", migrationsDir, ref, detailSuffix)
+			d.Detail = fmt.Sprintf("no migration files at %s on %s", migrationsDir, ref)
 		}
 		return d
 	}
@@ -288,11 +289,18 @@ func schemaDrift(repoRoot, base, migrationsDir string, bm BaseManager, rec *regi
 
 	if prov.SchemaHash == repoHash {
 		d.Level = OK
-		d.Detail = fmt.Sprintf("migrations match worktree HEAD%s", detailSuffix)
+		if usingWorktreeHead {
+			d.Detail = "migrations match worktree HEAD"
+		} else {
+			d.Detail = fmt.Sprintf("migrations match %s", base)
+		}
 	} else {
 		d.Level = Drift
-		detail := "database was built from a different migration set than worktree HEAD declares — re-migrate the instance, or 'plax down' + 'plax up' to rebuild from a refreshed base"
-		d.Detail = detail + detailSuffix
+		if usingWorktreeHead {
+			d.Detail = "database was built from a different migration set than worktree HEAD declares — re-migrate the instance, or 'plax down' + 'plax up' to rebuild from a refreshed base"
+		} else {
+			d.Detail = fmt.Sprintf("database was built from a different migration set than %s declares — re-migrate the instance, or 'plax down' + 'plax up' to rebuild from a refreshed base", base)
+		}
 	}
 	return d
 }
