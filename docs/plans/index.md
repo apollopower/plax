@@ -120,6 +120,8 @@ JSON, checked into the repo root as `plax.json`. No comments.
 | 8 | [`08-architecture.md`](08-architecture.md) | CSP concurrency, registry file locking, thin CLI shell, atomic env writes |
 | 9 | [`09-polish.md`](09-polish.md) | Doc comments, dead code removal, stderr layering, test hygiene, naming conventions |
 | 10 | [`10-status-worktree-head.md`](10-status-worktree-head.md) | Fix status drift: measure worktree HEAD instead of recorded branch |
+| 11 | [`11-multi-database.md`](11-multi-database.md) | Multiple databases per logical Postgres service: clone, migrate, drop, and detect orphans |
+| 12 | [`12-up-ref-flag.md`](12-up-ref-flag.md) | `plax up --ref` flag: build instances from branches, PRs, tags, or commits |
 
 ---
 
