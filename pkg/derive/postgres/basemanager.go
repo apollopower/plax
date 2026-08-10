@@ -517,7 +517,19 @@ func (bm *BaseManager) runCommand(ctx context.Context, cmdStr string, dbName str
 	cmd.Dir = filepath.Join(bm.repoRoot, bm.bp.Seed.Workdir)
 
 	env := cmd.Environ()
-	env = append(env, fmt.Sprintf("DATABASE_URL=%s", bm.dsnForDB(dbName)))
+	key := "DATABASE_URL="
+	val := key + bm.dsnForDB(dbName)
+	found := false
+	for i, e := range env {
+		if strings.HasPrefix(e, key) {
+			env[i] = val
+			found = true
+			break
+		}
+	}
+	if !found {
+		env = append(env, val)
+	}
 	cmd.Env = env
 
 	out, err := cmd.CombinedOutput()
@@ -566,10 +578,10 @@ func (bm *BaseManager) cleanupDB(ctx context.Context, dbName string) error {
 }
 
 func (bm *BaseManager) terminateConnections(ctx context.Context, dbName string) error {
-	_, err := bm.pool.Exec(ctx, fmt.Sprintf(
-		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '%s' AND pid <> pg_backend_pid()",
+	_, err := bm.pool.Exec(ctx,
+		"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()",
 		dbName,
-	))
+	)
 	return err
 }
 
