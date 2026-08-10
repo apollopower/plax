@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/apollopower/plax/pkg/process"
+	"github.com/apollopower/plax/pkg/registry"
 )
 
 func Suspend(ctx context.Context, deps *Deps, name string) error {
@@ -16,7 +17,7 @@ func Suspend(ctx context.Context, deps *Deps, name string) error {
 		return fmt.Errorf("instance %q not found", name)
 	}
 
-	if rec.State == "suspended" {
+	if rec.State == registry.StateSuspended {
 		fmt.Fprintf(os.Stderr, "instance %s is already suspended\n", name)
 		return nil
 	}
@@ -27,6 +28,8 @@ func Suspend(ctx context.Context, deps *Deps, name string) error {
 		switch {
 		case errors.Is(err, process.ErrStaleProcess):
 			fmt.Fprintf(os.Stderr, "note: %s already gone (pgid %d reused by another process)\n", procName, pgid)
+		case errors.Is(err, process.ErrGroupSurvivors):
+			fmt.Fprintf(os.Stderr, "warning: %s process leader died but children survived (pgid %d) — suspend continuing\n", procName, pgid)
 		case err != nil:
 			fmt.Fprintf(os.Stderr, "warning: terminate %s (pgid %d): %v\n", procName, pgid, err)
 		}
@@ -43,7 +46,7 @@ func Suspend(ctx context.Context, deps *Deps, name string) error {
 		fmt.Fprintf(os.Stderr, "warning: docker unavailable — skipping container stops for %d service(s)\n", len(rec.ContainerIDs))
 	}
 
-	rec.State = "suspended"
+	rec.State = registry.StateSuspended
 	rec.PIDs = nil
 	rec.PIDStarts = nil
 	deps.Registry.Instances[name] = rec

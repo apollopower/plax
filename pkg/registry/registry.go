@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+type State string
+
+const (
+	StateRunning   State = "running"
+	StateSuspended State = "suspended"
+)
+
 type Registry struct {
 	Version         int                       `json:"version"`
 	BlueprintStamp  BlueprintStamp            `json:"blueprint_stamp"`
@@ -30,7 +37,7 @@ type InstanceRecord struct {
 	Branch       string            `json:"branch"`
 	WorktreePath string            `json:"worktree_path"`
 	CreatedAt    time.Time         `json:"created_at"`
-	State        string            `json:"state"`
+	State        State             `json:"state"`
 	Ports        map[string]int    `json:"ports"`
 	DBName       string            `json:"db_name"`
 	ContainerIDs map[string]string `json:"container_ids,omitempty"`
@@ -77,6 +84,10 @@ func Open(path string) (*Registry, error) {
 
 	if err := json.Unmarshal(data, r); err != nil {
 		return nil, fmt.Errorf("registry: parsing %s: %w", path, err)
+	}
+
+	if r.Version != 1 {
+		return nil, fmt.Errorf("registry: unsupported version %d (want 1)", r.Version)
 	}
 
 	if r.Instances == nil {

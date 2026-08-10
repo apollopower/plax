@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/apollopower/plax/pkg/process"
+	"github.com/apollopower/plax/pkg/registry"
 )
 
 func TestSuspend_Success(t *testing.T) {
@@ -30,7 +31,7 @@ func TestSuspend_Success(t *testing.T) {
 	if !found {
 		t.Fatal("instance not in registry")
 	}
-	if rec.State != "suspended" {
+	if rec.State != registry.StateSuspended {
 		t.Errorf("state = %s, want suspended", rec.State)
 	}
 	if len(rec.PIDs) != 0 {
@@ -59,7 +60,7 @@ func TestSuspend_AlreadySuspended(t *testing.T) {
 	}
 
 	rec, _ := deps.Registry.GetInstance("i1")
-	if rec.State != "suspended" {
+	if rec.State != registry.StateSuspended {
 		t.Errorf("state = %s, want suspended", rec.State)
 	}
 }
@@ -87,7 +88,7 @@ func TestSuspend_NilDocker(t *testing.T) {
 	}
 
 	rec, _ := deps.Registry.GetInstance("i1")
-	if rec.State != "suspended" {
+	if rec.State != registry.StateSuspended {
 		t.Errorf("state = %s, want suspended", rec.State)
 	}
 
@@ -123,7 +124,7 @@ func TestResume_Success(t *testing.T) {
 	if !found {
 		t.Fatal("instance not in registry")
 	}
-	if rec.State != "running" {
+	if rec.State != registry.StateRunning {
 		t.Errorf("state = %s, want running", rec.State)
 	}
 	for k, v := range firstPorts {

@@ -112,7 +112,7 @@ func TestBuild_AllOK(t *testing.T) {
 	rec := registry.InstanceRecord{
 		ID:      "i1",
 		Branch:  branch,
-		State:   "running",
+		State:   registry.StateRunning,
 		DBName:  "plax_i1",
 		BaseRef: "main",
 		Provenance: registry.Provenance{
@@ -137,7 +137,7 @@ func TestBuild_AllOK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if report.State != "running" {
+	if report.State != string(registry.StateRunning) {
 		t.Errorf("state = %s, want running", report.State)
 	}
 	if report.Code.Level != OK {
@@ -165,7 +165,7 @@ func TestBuild_DataUnknown_NoBM(t *testing.T) {
 	rec := registry.InstanceRecord{
 		ID:      "i1",
 		Branch:  "plax/i1",
-		State:   "running",
+		State:   registry.StateRunning,
 		DBName:  "plax_i1",
 		BaseRef: "main",
 		Provenance: registry.Provenance{
@@ -198,7 +198,7 @@ func TestBuild_HostUnknown_Phase3Record(t *testing.T) {
 	rec := registry.InstanceRecord{
 		ID:         "i1",
 		Branch:     "plax/i1",
-		State:      "running",
+		State:      registry.StateRunning,
 		DBName:     "plax_i1",
 		BaseRef:    "main",
 		Provenance: registry.Provenance{BaseVersion: 1},
@@ -228,7 +228,7 @@ func TestBuild_ConfigDrift(t *testing.T) {
 	rec := registry.InstanceRecord{
 		ID:      "i1",
 		Branch:  "plax/i1",
-		State:   "running",
+		State:   registry.StateRunning,
 		BaseRef: "main",
 		Provenance: registry.Provenance{
 			BaseVersion:  1,

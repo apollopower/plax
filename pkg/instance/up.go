@@ -291,7 +291,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		Branch:       worktree.BranchName(name),
 		WorktreePath: worktreePath,
 		CreatedAt:    time.Now(),
-		State:        "running",
+		State:        registry.StateRunning,
 		Ports:        allocated,
 		DBName:       dbName,
 		ContainerIDs: containerIDs,

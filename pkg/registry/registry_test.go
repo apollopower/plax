@@ -3,6 +3,7 @@ package registry
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -38,7 +39,7 @@ func TestOpen_ExistingFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	r1.Instances["i1"] = InstanceRecord{ID: "i1", State: "running", CreatedAt: time.Now()}
+	r1.Instances["i1"] = InstanceRecord{ID: "i1", State: StateRunning, CreatedAt: time.Now()}
 	r1.PortAllocations[3000] = PortAllocation{Instance: "i1", Service: "app"}
 	if err := r1.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
@@ -52,11 +53,36 @@ func TestOpen_ExistingFile(t *testing.T) {
 	if !ok {
 		t.Fatal("expected i1 to exist")
 	}
-	if rec.State != "running" {
+	if rec.State != StateRunning {
 		t.Errorf("expected running, got %s", rec.State)
 	}
 	if len(r2.PortAllocations) != 1 {
 		t.Errorf("expected 1 port allocation, got %d", len(r2.PortAllocations))
+	}
+}
+
+func TestOpen_UnsupportedVersion(t *testing.T) {
+	path := tempPath(t)
+	data := `{"version":2,"instances":{}}`
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Open(path)
+	if err == nil || !strings.Contains(err.Error(), "unsupported version") {
+		t.Fatalf("expected unsupported version error, got %v", err)
+	}
+}
+
+func TestState_Constants(t *testing.T) {
+	if StateRunning != "running" {
+		t.Errorf("StateRunning = %q, want running", StateRunning)
+	}
+	if StateSuspended != "suspended" {
+		t.Errorf("StateSuspended = %q, want suspended", StateSuspended)
+	}
+	var s State = "running"
+	if s != StateRunning {
+		t.Error("State type should be comparable with constants")
 	}
 }
 
@@ -73,7 +99,7 @@ func TestOpen_InvalidJSON(t *testing.T) {
 
 func TestSave_ReadBack(t *testing.T) {
 	openNew(t, func(r1 *Registry) {
-		_ = r1.AddInstance("i2", InstanceRecord{ID: "i2", Branch: "feat/x", State: "suspended"})
+		_ = r1.AddInstance("i2", InstanceRecord{ID: "i2", Branch: "feat/x", State: StateSuspended})
 		if err := r1.Save(); err != nil {
 			t.Fatalf("Save: %v", err)
 		}
@@ -86,7 +112,7 @@ func TestSave_ReadBack(t *testing.T) {
 		if !ok {
 			t.Fatal("expected i2")
 		}
-		if rec.Branch != "feat/x" || rec.State != "suspended" {
+		if rec.Branch != "feat/x" || rec.State != StateSuspended {
 			t.Errorf("round trip lost fields: %+v", rec)
 		}
 	})

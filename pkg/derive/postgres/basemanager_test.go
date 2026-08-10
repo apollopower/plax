@@ -756,3 +756,20 @@ func TestEndToEnd_RefreshWhileCloning(t *testing.T) {
 	}
 	t.Logf("%d clones succeeded, %d failed recoverably: %v", len(versions), len(cloneErrs), cloneErrs)
 }
+
+func TestDSNForDB_QueryParamSlash(t *testing.T) {
+	bm := testManager(t)
+	// Simulate a DSN with slashes in query params.
+	bm.dsn = "postgres://user:pass@localhost:5432/postgres?search_path=foo/bar"
+
+	got := bm.dsnForDB("plax_test")
+	if !strings.Contains(got, "plax_test") {
+		t.Errorf("dsnForDB result should contain target db name, got %s", got)
+	}
+	if !strings.Contains(got, "search_path=foo/bar") {
+		t.Errorf("dsnForDB result should preserve query params, got %s", got)
+	}
+	if strings.Contains(got, "/postgres?") {
+		t.Errorf("dsnForDB should replace db path, got %s", got)
+	}
+}

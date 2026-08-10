@@ -134,6 +134,14 @@ func TestBranchExists_False(t *testing.T) {
 	}
 }
 
+func TestSchemaFilesAtRef_MissingRef(t *testing.T) {
+	repo := initRepo(t)
+	_, err := SchemaFilesAtRef(repo, "nonexistent-ref", "src/db/migrations")
+	if err == nil {
+		t.Fatal("expected error for missing ref")
+	}
+}
+
 func TestBranchExists_True(t *testing.T) {
 	repo := initRepo(t)
 	if _, err := Create(repo, "i1"); err != nil {
