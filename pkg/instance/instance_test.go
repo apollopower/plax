@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/derive/docker"
@@ -558,6 +559,161 @@ func TestDown_NilBackends_StillCleans(t *testing.T) {
 	}
 	if len(deps.Registry.PortAllocations) > 0 {
 		t.Error("port allocations should be released")
+	}
+}
+
+func TestUp_MultipleDatabases(t *testing.T) {
+	bp := testBlueprint()
+	bp.Services["db"] = blueprint.ServiceDef{
+		Isolation: blueprint.IsolationLogical,
+		Type:      "postgres",
+		Image:     "postgres:16",
+		Databases: []blueprint.DatabaseDef{
+			{Name: "test", From: "base"},
+		},
+	}
+
+	deps, bm, _ := testDeps(t, bp)
+	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
+
+	if err := Up(context.Background(), deps, "i1"); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	rec, found := deps.Registry.GetInstance("i1")
+	if !found {
+		t.Fatal("instance not registered")
+	}
+
+	if rec.DBName != "plax_i1" {
+		t.Errorf("DBName = %q, want plax_i1", rec.DBName)
+	}
+	if rec.DBNames[""] != "plax_i1" {
+		t.Errorf("DBNames[\"\"] = %q, want plax_i1", rec.DBNames[""])
+	}
+	if rec.DBNames["test"] != "plax_i1_test" {
+		t.Errorf("DBNames[\"test\"] = %q, want plax_i1_test", rec.DBNames["test"])
+	}
+
+	cloned := bm.clonedDBs()
+	if len(cloned) != 2 {
+		t.Fatalf("cloned %d databases, want 2: %v", len(cloned), cloned)
+	}
+	hasPlax := false
+	hasTest := false
+	for _, db := range cloned {
+		if db == "plax_i1" {
+			hasPlax = true
+		}
+		if db == "plax_i1_test" {
+			hasTest = true
+		}
+	}
+	if !hasPlax || !hasTest {
+		t.Errorf("missing expected databases, cloned=%v", cloned)
+	}
+}
+
+func TestDown_MultipleDatabases(t *testing.T) {
+	bp := testBlueprint()
+	bp.Services["db"] = blueprint.ServiceDef{
+		Isolation: blueprint.IsolationLogical,
+		Type:      "postgres",
+		Image:     "postgres:16",
+		Databases: []blueprint.DatabaseDef{
+			{Name: "test", From: "base"},
+		},
+	}
+
+	deps, bm, _ := testDeps(t, bp)
+	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
+
+	if err := Up(context.Background(), deps, "i1"); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	if err := Down(context.Background(), deps, "i1"); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	dropped := bm.droppedDBs()
+	if len(dropped) != 2 {
+		t.Fatalf("dropped %d databases, want 2: %v", len(dropped), dropped)
+	}
+	hasPlax := false
+	hasTest := false
+	for _, db := range dropped {
+		if db == "plax_i1" {
+			hasPlax = true
+		}
+		if db == "plax_i1_test" {
+			hasTest = true
+		}
+	}
+	if !hasPlax || !hasTest {
+		t.Errorf("missing expected databases, dropped=%v", dropped)
+	}
+}
+
+func TestDown_OldRecord_NoDBNames(t *testing.T) {
+	deps, bm, _ := testDeps(t, testBlueprint())
+
+	if err := deps.Registry.AddInstance("legacy", registry.InstanceRecord{
+		Branch:       "plax/legacy",
+		WorktreePath: filepath.Join(deps.RepoRoot, ".plax", "worktrees", "legacy"),
+		CreatedAt:    time.Now(),
+		State:        registry.StateSuspended,
+		Ports:        map[string]int{},
+		DBName:       "plax_legacy",
+		ContainerIDs: map[string]string{},
+		PIDs:         map[string]int{},
+		PIDStarts:    map[string]int64{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := deps.Registry.Save(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Down(context.Background(), deps, "legacy"); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	dropped := bm.droppedDBs()
+	if len(dropped) != 1 || dropped[0] != "plax_legacy" {
+		t.Errorf("dropped = %v, want [plax_legacy]", dropped)
+	}
+}
+
+func TestUp_BackwardCompatible(t *testing.T) {
+	deps, bm, _ := testDeps(t, testBlueprint())
+	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
+
+	if err := Up(context.Background(), deps, "i1"); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	rec, found := deps.Registry.GetInstance("i1")
+	if !found {
+		t.Fatal("instance not registered")
+	}
+
+	if rec.DBName != "plax_i1" {
+		t.Errorf("DBName = %q, want plax_i1", rec.DBName)
+	}
+	if rec.DBNames == nil {
+		t.Fatal("DBNames is nil")
+	}
+	if len(rec.DBNames) != 1 {
+		t.Errorf("DBNames has %d entries, want 1: %v", len(rec.DBNames), rec.DBNames)
+	}
+	if rec.DBNames[""] != "plax_i1" {
+		t.Errorf("DBNames[\"\"] = %q, want plax_i1", rec.DBNames[""])
+	}
+
+	cloned := bm.clonedDBs()
+	if len(cloned) != 1 || cloned[0] != "plax_i1" {
+		t.Errorf("cloned = %v, want [plax_i1]", cloned)
 	}
 }
 

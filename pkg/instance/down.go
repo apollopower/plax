@@ -9,6 +9,7 @@ import (
 
 	"github.com/apollopower/plax/pkg/mailbox"
 	"github.com/apollopower/plax/pkg/process"
+	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/worktree"
 )
 
@@ -63,14 +64,17 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 	// ServiceDef does not yet declare volumes, so this is a no-op.
 	// When volumes are added, iterate the same list that Up used.
 
-	// Step 4: Drop instance database.
+	// Step 4: Drop all instance databases.
+	names := dbNamesFromRecord(rec)
 	if deps.BM != nil {
-		fmt.Fprintf(os.Stderr, "dropping database %s...\n", rec.DBName)
-		if err := deps.BM.DropInstanceDB(ctx, rec.DBName); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: drop database: %v\n", err)
+		for _, dbName := range names {
+			fmt.Fprintf(os.Stderr, "dropping database %s...\n", dbName)
+			if err := deps.BM.DropInstanceDB(ctx, dbName); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: drop database %s: %v\n", dbName, err)
+			}
 		}
-	} else {
-		fmt.Fprintf(os.Stderr, "warning: postgres unavailable — skipping database drop for %s\n", rec.DBName)
+	} else if len(names) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: postgres unavailable — skipping database drop for %d database(s)\n", len(names))
 	}
 
 	// Step 5: Remove Docker network.
@@ -104,4 +108,21 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 
 	fmt.Fprintf(os.Stderr, "instance %s down\n", name)
 	return nil
+}
+
+// dbNamesFromRecord returns all database names from a record, falling back
+// to the deprecated DBName field if DBNames is nil.
+func dbNamesFromRecord(rec registry.InstanceRecord) []string {
+	names := rec.DBNames
+	if names == nil {
+		if rec.DBName != "" {
+			return []string{rec.DBName}
+		}
+		return nil
+	}
+	result := make([]string, 0, len(names))
+	for _, dbName := range names {
+		result = append(result, dbName)
+	}
+	return result
 }

@@ -25,6 +25,11 @@ type SeedConfig struct {
 	MigrationsDir string `json:"migrations_dir,omitempty"`
 }
 
+type DatabaseDef struct {
+	Name string `json:"name"`
+	From string `json:"from"`
+}
+
 type ServiceDef struct {
 	Isolation ServiceIsolation   `json:"isolation"`
 	Type      string             `json:"type,omitempty"`
@@ -32,6 +37,7 @@ type ServiceDef struct {
 	Env       map[string]string  `json:"env,omitempty"`
 	Ports     map[string]PortDef `json:"ports,omitempty"`
 	Command   []string           `json:"command,omitempty"`
+	Databases []DatabaseDef      `json:"databases,omitempty"`
 }
 
 type PortDef struct {
