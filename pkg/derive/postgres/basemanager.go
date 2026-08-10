@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -373,7 +374,7 @@ func (bm *BaseManager) InstanceProvenance(ctx context.Context, dbName string) (*
 
 	pool, err := pgxpool.New(ctx, bm.dsnForDB(dbName))
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("instance provenance: connect to %s: %w", dbName, err)
 	}
 	defer pool.Close()
 
@@ -497,19 +498,12 @@ func (bm *BaseManager) relock(ctx context.Context) error {
 }
 
 func (bm *BaseManager) dsnForDB(dbName string) string {
-	s := bm.dsn
-	idx := strings.LastIndex(s, "/")
-	if idx < 0 {
-		return s
+	u, err := url.Parse(bm.dsn)
+	if err != nil {
+		return bm.dsn
 	}
-
-	prefix := s[:idx+1]
-	rest := s[idx+1:]
-
-	if qi := strings.IndexByte(rest, '?'); qi >= 0 {
-		return prefix + dbName + rest[qi:]
-	}
-	return prefix + dbName
+	u.Path = "/" + dbName
+	return u.String()
 }
 
 func (bm *BaseManager) runCommand(ctx context.Context, cmdStr string, dbName string) error {

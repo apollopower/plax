@@ -59,7 +59,7 @@ func SchemaFilesAtRef(repoRoot, ref, dir string) ([]string, error) {
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, nil
+		return nil, fmt.Errorf("git ls-tree %s: %w", ref, err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	var names []string

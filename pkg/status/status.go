@@ -60,7 +60,7 @@ func Build(ctx context.Context, deps *Deps, name string) (*Report, error) {
 
 	report := &Report{
 		Instance: name,
-		State:    rec.State,
+		State:    string(rec.State),
 	}
 
 	base := resolveBase(&rec, deps.RepoRoot)
@@ -75,16 +75,18 @@ func Build(ctx context.Context, deps *Deps, name string) (*Report, error) {
 	}
 
 	var prov *postgres.ProvenanceRow
+	var provErr error
 	if deps.BM != nil {
-		var err error
-		prov, err = deps.BM.InstanceProvenance(ctx, rec.DBName)
-		if err != nil {
-			prov = nil
-		}
+		prov, provErr = deps.BM.InstanceProvenance(ctx, rec.DBName)
 	}
 
-	report.Schema = schemaDrift(deps.RepoRoot, base, migrationsDir, deps.BM, &rec, prov)
-	report.Data = dataDrift(ctx, deps.BM, &rec, prov)
+	if provErr != nil {
+		report.Schema = Dimension{Name: "schema", Level: Unknown, Detail: fmt.Sprintf("instance provenance: %v", provErr)}
+		report.Data = Dimension{Name: "data", Level: Unknown, Detail: fmt.Sprintf("instance provenance: %v", provErr)}
+	} else {
+		report.Schema = schemaDrift(deps.RepoRoot, base, migrationsDir, deps.BM, &rec, prov)
+		report.Data = dataDrift(ctx, deps.BM, &rec, prov)
+	}
 
 	return report, nil
 }
@@ -124,11 +126,7 @@ func codeDrift(repoRoot, base string, rec *registry.InstanceRecord) Dimension {
 		d.Detail = fmt.Sprintf("up to date with %s", base)
 	} else {
 		d.Level = Drift
-		if rec.BaseRef == "" && rec.BaseCommit != "" {
-			d.Detail = fmt.Sprintf("ahead %d, behind ? (base ref unavailable)", ahead)
-		} else {
-			d.Detail = fmt.Sprintf("ahead %d, behind %d", ahead, behind)
-		}
+		d.Detail = fmt.Sprintf("ahead %d, behind %d", ahead, behind)
 	}
 	return d
 }

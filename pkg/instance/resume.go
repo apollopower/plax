@@ -6,12 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/apollopower/plax/pkg/derive/env"
 	"github.com/apollopower/plax/pkg/portpool"
 	"github.com/apollopower/plax/pkg/process"
+	"github.com/apollopower/plax/pkg/registry"
+
+	"github.com/docker/docker/errdefs"
 )
 
 func Resume(ctx context.Context, deps *Deps, name string) error {
@@ -20,8 +22,8 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 		return fmt.Errorf("instance %q not found", name)
 	}
 
-	if rec.State != "suspended" {
-		if rec.State == "running" {
+	if rec.State != registry.StateSuspended {
+		if rec.State == registry.StateRunning {
 			return fmt.Errorf("instance %q is already running", name)
 		}
 		return fmt.Errorf("instance %q is in state %q — expected suspended", name, rec.State)
@@ -67,7 +69,7 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 			fmt.Fprintf(os.Stderr, "starting %s...\n", svcName)
 			alreadyRunning, err := deps.Docker.StartService(ctx, cid)
 			if err != nil {
-				if strings.Contains(err.Error(), "No such container") {
+				if errdefs.IsNotFound(err) {
 					return fmt.Errorf("container for %q no longer exists — run 'plax down %s' then 'plax up %s' to rebuild: %w", svcName, name, name, err)
 				}
 				return fmt.Errorf("starting %s: %w", svcName, err)
@@ -145,7 +147,7 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 		}
 	}
 
-	rec.State = "running"
+	rec.State = registry.StateRunning
 	rec.PIDs = pids
 	rec.PIDStarts = pidStarts
 	deps.Registry.Instances[name] = rec

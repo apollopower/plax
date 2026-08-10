@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -336,6 +337,55 @@ func TestRecvUnreadableFile(t *testing.T) {
 	n, _ := Count(root, "i1")
 	if n != 1 {
 		t.Errorf("unreadable file was deleted; remaining = %d, want 1", n)
+	}
+}
+
+func TestRecv_ZeroCount(t *testing.T) {
+	root := t.TempDir()
+	_, err := Recv(root, "i1", 0)
+	if err == nil || !strings.Contains(err.Error(), "count must be >= 1") {
+		t.Errorf("expected count error, got %v", err)
+	}
+}
+
+func TestRecv_NegativeCount(t *testing.T) {
+	root := t.TempDir()
+	_, err := Recv(root, "i1", -1)
+	if err == nil || !strings.Contains(err.Error(), "count must be >= 1") {
+		t.Errorf("expected count error, got %v", err)
+	}
+}
+
+func TestSend_ConcurrentNoTornReads(t *testing.T) {
+	root := t.TempDir()
+	if err := CreateDir(root, "i1"); err != nil {
+		t.Fatalf("CreateDir: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := Send(root, "i1", Message{Body: "hello"})
+			if err != nil {
+				t.Errorf("Send: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	msgs, err := RecvAll(root, "i1")
+	if err != nil {
+		t.Fatalf("RecvAll: %v", err)
+	}
+	if len(msgs) != 50 {
+		t.Fatalf("got %d messages, want 50", len(msgs))
+	}
+	for _, msg := range msgs {
+		if msg.Body != "hello" {
+			t.Errorf("got body %q, want hello", msg.Body)
+		}
 	}
 }
 

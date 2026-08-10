@@ -291,7 +291,7 @@ func TestUp_Success(t *testing.T) {
 	if !found {
 		t.Fatal("instance not registered")
 	}
-	if rec.State != "running" {
+	if rec.State != registry.StateRunning {
 		t.Errorf("state = %q, want running", rec.State)
 	}
 	if rec.DBName != "plax_i1" {
