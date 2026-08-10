@@ -34,25 +34,17 @@ func testManager(t *testing.T) *BaseManager {
 	return testManagerWith(t, testBlueprint())
 }
 
-func testSuffix(t *testing.T) string {
-	t.Helper()
-	s := strings.ReplaceAll(t.Name(), "/", "_")
-	s = strings.ReplaceAll(s, "#", "_")
-	return strings.ToLower(s)
-}
-
 func testManagerWith(t *testing.T, bp *blueprint.Blueprint) *BaseManager {
 	t.Helper()
 	ctx := context.Background()
 	url := pgTestURL(t)
+	// These tests create and drop plax_base; serialize against the cmd/plax
+	// end-to-end test, which uses the same database on the same server.
 	testutil.LockPostgres(t, url)
 	bm, err := NewBaseManager(ctx, url, ".", bp)
 	if err != nil {
 		t.Skipf("skipping: cannot connect to Postgres: %v", err)
 	}
-	suffix := testSuffix(t)
-	bm.baseName = "plax_test_base_" + suffix
-	bm.nextName = "plax_test_base_next_" + suffix
 	t.Cleanup(func() { bm.Close() })
 	return bm
 }
@@ -85,7 +77,7 @@ func TestCreateBase_Success(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
@@ -105,14 +97,14 @@ func TestCreateBase_Success(t *testing.T) {
 		t.Errorf("expected version 1, got %d", info.ProvenanceVer)
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestCreateBase_Idempotent(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("first CreateBase: %v", err)
@@ -121,14 +113,14 @@ func TestCreateBase_Idempotent(t *testing.T) {
 		t.Fatalf("second CreateBase should be no-op: %v", err)
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestCreateBase_ExistsUnlocked(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
@@ -140,14 +132,14 @@ func TestCreateBase_ExistsUnlocked(t *testing.T) {
 		t.Errorf("expected 'not locked' error, got %v", err)
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestSeedBase_Success(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
@@ -168,18 +160,18 @@ func TestSeedBase_Success(t *testing.T) {
 	}
 
 	setBaseLock(t, bm, true)
-	if n := countUsers(t, ctx, bm, bm.baseName); n != 1 {
+	if n := countUsers(t, ctx, bm, "plax_base"); n != 1 {
 		t.Errorf("expected 1 seed user, got %d", n)
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestSeedBase_NoBase(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 
 	err := bm.SeedBase(ctx)
 	if err == nil || !strings.Contains(err.Error(), "does not exist") {
@@ -191,7 +183,7 @@ func TestSeedBase_CommandFails(t *testing.T) {
 	bm := testManagerWith(t, failingSeedBlueprint())
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
@@ -213,14 +205,14 @@ func TestSeedBase_CommandFails(t *testing.T) {
 		t.Errorf("version should stay 1 after failed seed, got %d", info.ProvenanceVer)
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestResetBase_Success(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
@@ -241,24 +233,24 @@ func TestResetBase_Success(t *testing.T) {
 	}
 
 	setBaseLock(t, bm, true)
-	if n := countUsers(t, ctx, bm, bm.baseName); n != 0 {
+	if n := countUsers(t, ctx, bm, "plax_base"); n != 0 {
 		t.Errorf("reset base should have no seed data, got %d users", n)
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestResetBase_CleansBaseNext(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
-	_ = bm.DropInstanceDB(ctx, bm.nextName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
+	_ = bm.DropInstanceDB(ctx, "plax_base_next")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
 	}
-	if _, err := bm.pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", bm.nextName)); err != nil {
+	if _, err := bm.pool.Exec(ctx, "CREATE DATABASE plax_base_next"); err != nil {
 		t.Fatalf("create base_next: %v", err)
 	}
 
@@ -266,7 +258,7 @@ func TestResetBase_CleansBaseNext(t *testing.T) {
 		t.Fatalf("ResetBase: %v", err)
 	}
 
-	nextExists, _, err := bm.dbExists(ctx, bm.nextName)
+	nextExists, _, err := bm.dbExists(ctx, "plax_base_next")
 	if err != nil {
 		t.Fatalf("dbExists: %v", err)
 	}
@@ -274,14 +266,14 @@ func TestResetBase_CleansBaseNext(t *testing.T) {
 		t.Error("reset should drop orphaned base_next")
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestCloneBase_Success(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 	_ = bm.DropInstanceDB(ctx, "test_clone")
 
 	if err := bm.CreateBase(ctx); err != nil {
@@ -310,14 +302,14 @@ func TestCloneBase_Success(t *testing.T) {
 	}
 
 	_ = bm.DropInstanceDB(ctx, "test_clone")
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestCloneBase_BaseNotLocked(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 	_ = bm.DropInstanceDB(ctx, "unlocked_clone")
 
 	if err := bm.CreateBase(ctx); err != nil {
@@ -331,14 +323,14 @@ func TestCloneBase_BaseNotLocked(t *testing.T) {
 	}
 
 	_ = bm.DropInstanceDB(ctx, "unlocked_clone")
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestCloneBase_AlreadyExists(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 	_ = bm.DropInstanceDB(ctx, "dup_clone")
 
 	if err := bm.CreateBase(ctx); err != nil {
@@ -354,14 +346,14 @@ func TestCloneBase_AlreadyExists(t *testing.T) {
 	}
 
 	_ = bm.DropInstanceDB(ctx, "dup_clone")
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestCloneBase_NoBase(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 
 	err := bm.CloneBase(ctx, "nonexistent_clone")
 	if err == nil {
@@ -373,8 +365,8 @@ func TestRefreshBase_Success(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
-	_ = bm.DropInstanceDB(ctx, bm.nextName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
+	_ = bm.DropInstanceDB(ctx, "plax_base_next")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
@@ -401,19 +393,19 @@ func TestRefreshBase_Success(t *testing.T) {
 	}
 
 	setBaseLock(t, bm, true)
-	if n := countUsers(t, ctx, bm, bm.baseName); n != 1 {
+	if n := countUsers(t, ctx, bm, "plax_base"); n != 1 {
 		t.Errorf("refreshed base should have seed data, got %d users", n)
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestRefreshBase_NoBase(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
-	_ = bm.DropInstanceDB(ctx, bm.nextName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
+	_ = bm.DropInstanceDB(ctx, "plax_base_next")
 
 	if err := bm.RefreshBase(ctx); err != nil {
 		t.Fatalf("RefreshBase should delegate to CreateBase: %v", err)
@@ -427,22 +419,22 @@ func TestRefreshBase_NoBase(t *testing.T) {
 		t.Errorf("got exists=%v ver=%d, expected exists=true ver=1", info.Exists, info.ProvenanceVer)
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestRefreshBase_BaseNextExists(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
-	_ = bm.DropInstanceDB(ctx, bm.nextName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
+	_ = bm.DropInstanceDB(ctx, "plax_base_next")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
 	}
 	// An unlocked, unstamped base_next is an interrupted staging — not
 	// resumable.
-	if _, err := bm.pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", bm.nextName)); err != nil {
+	if _, err := bm.pool.Exec(ctx, "CREATE DATABASE plax_base_next"); err != nil {
 		t.Fatalf("create base_next: %v", err)
 	}
 
@@ -451,16 +443,16 @@ func TestRefreshBase_BaseNextExists(t *testing.T) {
 		t.Errorf("expected 'interrupted' error, got %v", err)
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.nextName)
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base_next")
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestRefreshBase_ResumeDeferred(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
-	_ = bm.DropInstanceDB(ctx, bm.nextName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
+	_ = bm.DropInstanceDB(ctx, "plax_base_next")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
@@ -468,13 +460,13 @@ func TestRefreshBase_ResumeDeferred(t *testing.T) {
 
 	// Stage base_next exactly as a refresh would leave it after a deferred
 	// swap: migrated, stamped, locked.
-	if _, err := bm.pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", bm.nextName)); err != nil {
+	if _, err := bm.pool.Exec(ctx, "CREATE DATABASE plax_base_next"); err != nil {
 		t.Fatalf("create base_next: %v", err)
 	}
-	if err := bm.runMigrate(ctx, bm.nextName); err != nil {
+	if err := bm.runMigrate(ctx, "plax_base_next"); err != nil {
 		t.Fatalf("migrate base_next: %v", err)
 	}
-	nextPool, err := pgxpool.New(ctx, bm.dsnForDB(bm.nextName))
+	nextPool, err := pgxpool.New(ctx, bm.dsnForDB("plax_base_next"))
 	if err != nil {
 		t.Fatalf("connect to base_next: %v", err)
 	}
@@ -487,7 +479,7 @@ func TestRefreshBase_ResumeDeferred(t *testing.T) {
 		t.Fatalf("stamp base_next: %v", err)
 	}
 	nextPool.Close()
-	if err := bm.setLock(ctx, bm.nextName, false); err != nil {
+	if err := bm.setLock(ctx, "plax_base_next", false); err != nil {
 		t.Fatalf("lock base_next: %v", err)
 	}
 
@@ -509,15 +501,15 @@ func TestRefreshBase_ResumeDeferred(t *testing.T) {
 		t.Error("swapped base should be locked")
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestRefreshBase_SeedFails(t *testing.T) {
 	bm := testManagerWith(t, failingSeedBlueprint())
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
-	_ = bm.DropInstanceDB(ctx, bm.nextName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
+	_ = bm.DropInstanceDB(ctx, "plax_base_next")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
@@ -542,14 +534,14 @@ func TestRefreshBase_SeedFails(t *testing.T) {
 		t.Error("failed refresh should drop base_next")
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestDropInstanceDB_Success(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 	_ = bm.DropInstanceDB(ctx, "drop_test")
 
 	if err := bm.CreateBase(ctx); err != nil {
@@ -571,7 +563,7 @@ func TestDropInstanceDB_Success(t *testing.T) {
 		t.Error("database should be dropped")
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestDropInstanceDB_NoDB(t *testing.T) {
@@ -587,7 +579,7 @@ func TestDropInstanceDB_ActiveConnections(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 	_ = bm.DropInstanceDB(ctx, "conn_test")
 
 	if err := bm.CreateBase(ctx); err != nil {
@@ -610,14 +602,14 @@ func TestDropInstanceDB_ActiveConnections(t *testing.T) {
 		t.Fatalf("DropInstanceDB should terminate held connections: %v", err)
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestBaseStatus_Exists(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
@@ -634,14 +626,14 @@ func TestBaseStatus_Exists(t *testing.T) {
 		t.Error("expected non-zero created_at")
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestBaseStatus_NotExists(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 
 	info, err := bm.BaseStatus(ctx)
 	if err != nil {
@@ -651,21 +643,21 @@ func TestBaseStatus_NotExists(t *testing.T) {
 		t.Error("expected Exists=false")
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 func TestBaseStatus_BaseNext(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
-	_ = bm.DropInstanceDB(ctx, bm.nextName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
+	_ = bm.DropInstanceDB(ctx, "plax_base_next")
 
 	if err := bm.CreateBase(ctx); err != nil {
 		t.Fatalf("CreateBase: %v", err)
 	}
 
-	if _, err := bm.pool.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", bm.nextName)); err != nil {
+	if _, err := bm.pool.Exec(ctx, "CREATE DATABASE plax_base_next"); err != nil {
 		t.Fatalf("create base_next: %v", err)
 	}
 
@@ -677,8 +669,8 @@ func TestBaseStatus_BaseNext(t *testing.T) {
 		t.Error("expected HasBaseNext=true")
 	}
 
-	_ = bm.DropInstanceDB(ctx, bm.nextName)
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "plax_base_next")
+	_ = bm.DropInstanceDB(ctx, "plax_base")
 }
 
 // TestEndToEnd_RefreshWhileCloning exercises the swap retry path: clones in
@@ -689,8 +681,8 @@ func TestEndToEnd_RefreshWhileCloning(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
-	_ = bm.DropInstanceDB(ctx, bm.baseName)
-	_ = bm.DropInstanceDB(ctx, bm.nextName)
+	_ = bm.DropInstanceDB(ctx, "plax_base")
+	_ = bm.DropInstanceDB(ctx, "plax_base_next")
 	for i := 0; i < 10; i++ {
 		_ = bm.DropInstanceDB(ctx, fmt.Sprintf("clone_%d", i))
 	}
@@ -699,8 +691,8 @@ func TestEndToEnd_RefreshWhileCloning(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			_ = bm.DropInstanceDB(ctx, fmt.Sprintf("clone_%d", i))
 		}
-		_ = bm.DropInstanceDB(ctx, bm.nextName)
-		_ = bm.DropInstanceDB(ctx, bm.baseName)
+		_ = bm.DropInstanceDB(ctx, "plax_base_next")
+		_ = bm.DropInstanceDB(ctx, "plax_base")
 	})
 
 	if err := bm.CreateBase(ctx); err != nil {
