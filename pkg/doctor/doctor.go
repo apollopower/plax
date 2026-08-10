@@ -48,6 +48,7 @@ func (r *Report) Failed() bool {
 type BaseManager interface {
 	BaseStatus(ctx context.Context) (postgres.BaseInfo, error)
 	InstanceDBExists(ctx context.Context, dbName string) (bool, error)
+	ListPlaxDatabases(ctx context.Context) ([]string, error)
 }
 
 type DockerDriver interface {
@@ -67,6 +68,7 @@ func Run(ctx context.Context, deps *Deps) *Report {
 	r := &Report{}
 	runBlueprintVsRepo(r, deps)
 	runBlueprintVsRegistry(ctx, r, deps)
+	runOrphanDatabases(ctx, r, deps)
 	runRepoVsMachine(r, deps)
 	runBase(ctx, r, deps)
 	return r
@@ -330,5 +332,54 @@ func runBase(ctx context.Context, r *Report, deps *Deps) {
 
 	if info.HasBaseNext {
 		r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: "staged plax_base_next exists — a refresh swap was deferred; run 'plax base refresh' to finish it or 'plax base reset' to discard"})
+	}
+}
+
+func runOrphanDatabases(ctx context.Context, r *Report, deps *Deps) {
+	if deps.BM == nil {
+		return
+	}
+
+	area := "orphan-databases"
+
+	serverDBs, err := deps.BM.ListPlaxDatabases(ctx)
+	if err != nil {
+		r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: fmt.Sprintf("cannot list databases: %v", err)})
+		return
+	}
+
+	if len(serverDBs) == 0 {
+		r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: "no orphan databases found"})
+		return
+	}
+
+	declared := map[string]bool{}
+	for _, rec := range deps.Registry.Instances {
+		if rec.DBNames != nil {
+			for _, dbName := range rec.DBNames {
+				declared[dbName] = true
+			}
+		} else if rec.DBName != "" {
+			declared[rec.DBName] = true
+		}
+	}
+
+	var orphans []string
+	for _, db := range serverDBs {
+		if !declared[db] {
+			orphans = append(orphans, db)
+		}
+	}
+
+	if len(orphans) == 0 {
+		r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: "no orphan databases found"})
+		return
+	}
+
+	for _, db := range orphans {
+		r.Checks = append(r.Checks, Check{
+			Area: area, Level: Warn,
+			Message: fmt.Sprintf("%s is an unreferenced database — run `psql -c \"DROP DATABASE %s\"` to remove it", db, db),
+		})
 	}
 }

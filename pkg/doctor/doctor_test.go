@@ -13,8 +13,10 @@ import (
 )
 
 type fakeBM struct {
-	info postgres.BaseInfo
-	dbs  map[string]bool
+	info    postgres.BaseInfo
+	dbs     map[string]bool
+	plaxDBs []string
+	listErr error
 }
 
 func (f *fakeBM) BaseStatus(context.Context) (postgres.BaseInfo, error) {
@@ -23,6 +25,10 @@ func (f *fakeBM) BaseStatus(context.Context) (postgres.BaseInfo, error) {
 
 func (f *fakeBM) InstanceDBExists(_ context.Context, dbName string) (bool, error) {
 	return f.dbs[dbName], nil
+}
+
+func (f *fakeBM) ListPlaxDatabases(_ context.Context) ([]string, error) {
+	return f.plaxDBs, f.listErr
 }
 
 type fakeDocker struct {
@@ -253,6 +259,110 @@ func TestDoctor_BaseNextStaged(t *testing.T) {
 	}
 	if !found {
 		t.Error("should warn about staged base_next")
+	}
+}
+
+func TestDoctor_OrphanDatabase(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+	_ = dir
+
+	bm := &fakeBM{
+		info:    postgres.BaseInfo{Exists: true, Locked: true, ProvenanceVer: 5},
+		dbs:     map[string]bool{},
+		plaxDBs: []string{"plax_orphan_test", "plax_i1"},
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, BM: bm, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	found := false
+	for _, c := range report.Checks {
+		if c.Area == "orphan-databases" && containsStr(c.Message, "plax_orphan_test") {
+			found = true
+		}
+	}
+	if !found {
+		for _, c := range report.Checks {
+			t.Logf("[%s/%s] %s", c.Area, c.Level, c.Message)
+		}
+		t.Error("should report orphan database plax_orphan_test")
+	}
+
+	// plax_i1 should also be reported as orphan since no registry entry declares it.
+	foundI1 := false
+	for _, c := range report.Checks {
+		if c.Area == "orphan-databases" && containsStr(c.Message, "plax_i1") {
+			foundI1 = true
+		}
+	}
+	if !foundI1 {
+		t.Error("plax_i1 should be reported as orphan since no registry entry declares it")
+	}
+}
+
+func TestDoctor_NoOrphans(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+	_ = dir
+
+	_ = reg.AddInstance("i1", registry.InstanceRecord{
+		DBName:  "plax_i1",
+		DBNames: map[string]string{"": "plax_i1"},
+	})
+
+	bm := &fakeBM{
+		info:    postgres.BaseInfo{Exists: true, Locked: true, ProvenanceVer: 5},
+		dbs:     map[string]bool{},
+		plaxDBs: []string{"plax_i1"},
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, BM: bm, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	hasPass := false
+	for _, c := range report.Checks {
+		if c.Area == "orphan-databases" {
+			if c.Level == Pass {
+				hasPass = true
+			} else {
+				t.Errorf("unexpected check: [%s] %s", c.Level, c.Message)
+			}
+		}
+	}
+	if !hasPass {
+		t.Error("expected pass for no orphans")
+	}
+}
+
+func TestDoctor_OldRecord_Fallback(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+	_ = dir
+
+	_ = reg.AddInstance("i1", registry.InstanceRecord{
+		DBName: "plax_i1_old",
+	})
+
+	bm := &fakeBM{
+		info:    postgres.BaseInfo{Exists: true, Locked: true, ProvenanceVer: 5},
+		dbs:     map[string]bool{},
+		plaxDBs: []string{"plax_i1_old"},
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, BM: bm, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	hasPass := false
+	for _, c := range report.Checks {
+		if c.Area == "orphan-databases" {
+			if c.Level == Pass {
+				hasPass = true
+			}
+		}
+	}
+	if !hasPass {
+		for _, c := range report.Checks {
+			t.Logf("[%s/%s] %s", c.Area, c.Level, c.Message)
+		}
+		t.Error("expected pass for old-format record with DBName matching server DB")
 	}
 }
 

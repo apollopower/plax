@@ -39,7 +39,8 @@ type InstanceRecord struct {
 	CreatedAt    time.Time         `json:"created_at"`
 	State        State             `json:"state"`
 	Ports        map[string]int    `json:"ports"`
-	DBName       string            `json:"db_name"`
+	DBName       string            `json:"db_name,omitempty"`
+	DBNames      map[string]string `json:"db_names,omitempty"`
 	ContainerIDs map[string]string `json:"container_ids,omitempty"`
 	PIDs         map[string]int    `json:"pids,omitempty"`
 	// PIDStarts records each process's start time (clock ticks since boot)
@@ -96,6 +97,15 @@ func Open(path string) (*Registry, error) {
 	if r.PortAllocations == nil {
 		r.PortAllocations = map[int]PortAllocation{}
 	}
+
+	// Migrate old records that have DBName but no DBNames.
+	for id, rec := range r.Instances {
+		if rec.DBNames == nil && rec.DBName != "" {
+			rec.DBNames = map[string]string{"": rec.DBName}
+			r.Instances[id] = rec
+		}
+	}
+
 	r.path = path
 
 	return r, nil

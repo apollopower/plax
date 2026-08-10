@@ -146,6 +146,10 @@ was created and to detect drift later.
 - `ports` — map of container port to `{ "var": "ENV_VAR_NAME" }`.
   Optionally include `"default"` to pre-fill the template.
 - `command` — override the image's default command
+- `databases` — additional databases to clone on `up`, for logical
+  Postgres services only. Each entry has a `name` (the key used in
+  template variables, e.g. `test` gives `{{DB_NAME_test}}`) and `from`
+  (the clone origin — currently only `"base"` is supported).
 
 **processes** — Array of native processes to spawn. Each declares:
 
@@ -161,8 +165,10 @@ was created and to detect drift later.
 
 - `template` — path to `.env.example` (or equivalent)
 - `holes` — map of env var name to template string. Template strings
-  use `{{VAR}}` placeholders. Available variables: `DB_NAME`, plus one
-  per allocated port var (e.g., `PORT`, `REDIS_PORT`, `GOTENBERG_PORT`).
+  use `{{VAR}}` placeholders. Available variables: `DB_NAME` (primary
+  database), `DB_NAME_<key>` (for each declared database, e.g.
+  `DB_NAME_test`), plus one per allocated port var (e.g., `PORT`,
+  `REDIS_PORT`, `GOTENBERG_PORT`).
 
 ### 3.4 Isolation strategies
 

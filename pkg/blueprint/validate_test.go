@@ -286,6 +286,101 @@ func TestValidate_UnknownServiceIsolation(t *testing.T) {
 	}
 }
 
+func TestValidateStructural_DatabaseOnNonPostgres(t *testing.T) {
+	bp := &Blueprint{
+		Version:  1,
+		Name:     "t",
+		PortPool: PortPool{Start: 3000, End: 4000},
+		Seed:     SeedConfig{Migrate: "m", Command: "c", Workdir: "."},
+		Services: map[string]ServiceDef{
+			"redis": {
+				Isolation: IsolationDedicated,
+				Image:     "redis:7",
+				Databases: []DatabaseDef{{Name: "test", From: "base"}},
+			},
+		},
+		Env: EnvConfig{Template: ".env.example", Holes: map[string]string{}},
+	}
+	errs := ValidateStructural(bp)
+	if !containsErr(t, errs, "declares databases but is not a logical service") {
+		t.Errorf("expected error for databases on non-logical service, got %v", errs)
+	}
+}
+
+func TestValidateStructural_DatabaseOnNonPostgresLogical(t *testing.T) {
+	bp := &Blueprint{
+		Version:  1,
+		Name:     "t",
+		PortPool: PortPool{Start: 3000, End: 4000},
+		Seed:     SeedConfig{Migrate: "m", Command: "c", Workdir: "."},
+		Services: map[string]ServiceDef{
+			"db": {
+				Isolation: IsolationLogical,
+				Type:      "redis",
+				Image:     "redis:7",
+				Databases: []DatabaseDef{{Name: "test", From: "base"}},
+			},
+		},
+		Env: EnvConfig{Template: ".env.example", Holes: map[string]string{}},
+	}
+	errs := ValidateStructural(bp)
+	if !containsErr(t, errs, "declares databases but type is") {
+		t.Errorf("expected error for databases on non-postgres logical service, got %v", errs)
+	}
+}
+
+func TestValidateStructural_DuplicateDatabaseKey(t *testing.T) {
+	bp := &Blueprint{
+		Version:  1,
+		Name:     "t",
+		PortPool: PortPool{Start: 3000, End: 4000},
+		Seed:     SeedConfig{Migrate: "m", Command: "c", Workdir: "."},
+		Services: map[string]ServiceDef{
+			"db": {
+				Isolation: IsolationLogical,
+				Type:      "postgres",
+				Image:     "postgres:16",
+				Databases: []DatabaseDef{
+					{Name: "test", From: "base"},
+					{Name: "test", From: "base"},
+				},
+			},
+		},
+		Env: EnvConfig{Template: ".env.example", Holes: map[string]string{}},
+	}
+	errs := ValidateStructural(bp)
+	if !containsErr(t, errs, "duplicate database key") {
+		t.Errorf("expected duplicate database key error, got %v", errs)
+	}
+}
+
+func TestValidateStructural_ValidDatabaseDeclarations(t *testing.T) {
+	bp := &Blueprint{
+		Version:  1,
+		Name:     "t",
+		PortPool: PortPool{Start: 3000, End: 4000},
+		Seed:     SeedConfig{Migrate: "m", Command: "c", Workdir: "."},
+		Services: map[string]ServiceDef{
+			"db": {
+				Isolation: IsolationLogical,
+				Type:      "postgres",
+				Image:     "postgres:16",
+				Databases: []DatabaseDef{
+					{Name: "test", From: "base"},
+					{Name: "cache", From: "base"},
+				},
+			},
+		},
+		Env: EnvConfig{Template: ".env.example", Holes: map[string]string{}},
+	}
+	errs := ValidateStructural(bp)
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "databases") {
+			t.Errorf("unexpected error about databases: %v", errs)
+		}
+	}
+}
+
 func TestValidate_UnknownProcessIsolation(t *testing.T) {
 	bp := *validBP
 	bp.Processes = append(bp.Processes, ProcessDef{
