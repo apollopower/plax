@@ -115,6 +115,10 @@ JSON, checked into the repo root as `plax.json`. No comments.
 | 3 | [`03-lifecycle.md`](03-lifecycle.md) | `up/down/ls/attach/exec` — first runnable instances |
 | 4 | [`04-state.md`](04-state.md) | `suspend/resume/status/doctor/rederive/base` — drift detection, state management |
 | 5 | [`05-ipc.md`](05-ipc.md) | `send/recv` — instance mailbox for agent IPC |
+| 6 | [`06-correctness.md`](06-correctness.md) | Fix user-facing correctness bugs: init name, compose ports, env override, SQL injection, doctor exit code, isolation validation |
+| 7 | [`07-robustness.md`](07-robustness.md) | Harden against failure modes: process survivors, mailbox atomicity, Docker errdefs, DSN parsing, pin validation, registry versioning |
+| 8 | [`08-architecture.md`](08-architecture.md) | CSP concurrency, registry file locking, thin CLI shell, atomic env writes |
+| 9 | [`09-polish.md`](09-polish.md) | Doc comments, dead code removal, stderr layering, test hygiene, naming conventions |
 
 ---
 
