@@ -500,16 +500,7 @@ func (bm *BaseManager) relock(ctx context.Context) error {
 func (bm *BaseManager) dsnForDB(dbName string) string {
 	u, err := url.Parse(bm.dsn)
 	if err != nil {
-		idx := strings.LastIndex(bm.dsn, "/")
-		if idx < 0 {
-			return bm.dsn
-		}
-		prefix := bm.dsn[:idx+1]
-		rest := bm.dsn[idx+1:]
-		if qi := strings.IndexByte(rest, '?'); qi >= 0 {
-			return prefix + dbName + rest[qi:]
-		}
-		return prefix + dbName
+		return bm.dsn
 	}
 	u.Path = "/" + dbName
 	return u.String()
