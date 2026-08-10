@@ -1,3 +1,5 @@
+// Package registry persists instance records and port allocations to disk
+// under .plax/registry.json.
 package registry
 
 import (

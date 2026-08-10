@@ -1,3 +1,5 @@
+// Package doctor validates that blueprint, toolchain, and environment
+// prerequisites are met.
 package doctor
 
 import (

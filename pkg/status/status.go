@@ -1,3 +1,4 @@
+// Package status collects and reports instance health information.
 package status
 
 import (

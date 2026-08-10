@@ -1,3 +1,5 @@
+// Package mailbox provides file-based inter-instance message passing
+// under .plax/mail/<name>/.
 package mailbox
 
 import (
