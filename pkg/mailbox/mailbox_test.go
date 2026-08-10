@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -361,13 +362,18 @@ func TestSend_ConcurrentNoTornReads(t *testing.T) {
 		t.Fatalf("CreateDir: %v", err)
 	}
 
-	// Send messages concurrently, then verify all are intact (no partial reads).
+	var wg sync.WaitGroup
 	for range 50 {
-		_, err := Send(root, "i1", Message{Body: "hello"})
-		if err != nil {
-			t.Fatalf("Send: %v", err)
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := Send(root, "i1", Message{Body: "hello"})
+			if err != nil {
+				t.Errorf("Send: %v", err)
+			}
+		}()
 	}
+	wg.Wait()
 
 	msgs, err := RecvAll(root, "i1")
 	if err != nil {
