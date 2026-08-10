@@ -87,6 +87,15 @@ func runBlueprintVsRepo(r *Report, deps *Deps) {
 		r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: w.Error()})
 	}
 
+	for name, svc := range deps.Blueprint.Services {
+		if svc.Isolation == blueprint.IsolationShared || svc.Isolation == blueprint.IsolationExternal {
+			r.Checks = append(r.Checks, Check{
+				Area: area, Level: Warn,
+				Message: fmt.Sprintf("service %s: isolation %q is not implemented and will be skipped by 'plax up'", name, svc.Isolation),
+			})
+		}
+	}
+
 	composePath := filepath.Join(deps.RepoRoot, "docker-compose.yml")
 	data, composeErr := os.ReadFile(composePath)
 	if composeErr != nil {

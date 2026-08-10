@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -529,7 +530,7 @@ func runAttach(cmd AttachCmd) error {
 		}
 	}
 
-	envVars, err := loadInstanceEnv(rec.WorktreePath)
+	envVars, err := loadInstanceEnv(rec.WorktreePath, rec.Ports)
 	if err != nil {
 		return err
 	}
@@ -575,7 +576,7 @@ func runExec(cmd ExecCmd) error {
 		fmt.Fprintf(os.Stderr, "note: instance %s is suspended — services and processes are stopped\n", cmd.Name)
 	}
 
-	envVars, err := loadInstanceEnv(rec.WorktreePath)
+	envVars, err := loadInstanceEnv(rec.WorktreePath, rec.Ports)
 	if err != nil {
 		return err
 	}
@@ -663,8 +664,10 @@ func openRegistry(root string) (*registry.Registry, error) {
 }
 
 // loadInstanceEnv reads the derived .env from the worktree and merges it
-// over the host environment.
-func loadInstanceEnv(worktreePath string) ([]string, error) {
+// over the host environment, then layers allocated ports on top so that
+// exec and attach see the same port variables the instance's managed
+// processes receive.
+func loadInstanceEnv(worktreePath string, ports map[string]int) ([]string, error) {
 	envPath := filepath.Join(worktreePath, ".env")
 	derived, err := env.ParseFile(envPath)
 	if err != nil {
@@ -678,6 +681,9 @@ func loadInstanceEnv(worktreePath string) ([]string, error) {
 	}
 	for k, v := range derived {
 		envMap[k] = v
+	}
+	for k, v := range ports {
+		envMap[k] = strconv.Itoa(v)
 	}
 
 	result := make([]string, 0, len(envMap))
