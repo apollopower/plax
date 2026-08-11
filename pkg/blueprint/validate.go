@@ -68,6 +68,26 @@ func ValidateStructural(bp *Blueprint) []error {
 				errs = append(errs, fmt.Errorf("blueprint: service %q is logical but declares ports", svcName))
 			}
 		}
+		if len(svc.Databases) > 0 {
+			if svc.Isolation != IsolationLogical {
+				errs = append(errs, fmt.Errorf("blueprint: service %q declares databases but is not a logical service", svcName))
+			} else if svc.Type != "postgres" {
+				errs = append(errs, fmt.Errorf("blueprint: service %q declares databases but type is %q (only postgres supported)", svcName, svc.Type))
+			}
+			seen := map[string]bool{}
+			for _, db := range svc.Databases {
+				if seen[db.Name] {
+					errs = append(errs, fmt.Errorf("blueprint: service %q: duplicate database key %q", svcName, db.Name))
+				}
+				seen[db.Name] = true
+				if db.Name == "" {
+					errs = append(errs, fmt.Errorf("blueprint: service %q: database name must not be empty", svcName))
+				}
+				if db.From != "" && db.From != "base" {
+					errs = append(errs, fmt.Errorf("blueprint: service %q: database %q has unsupported from %q (only \"base\" supported)", svcName, db.Name, db.From))
+				}
+			}
+		}
 		for portKey, pd := range svc.Ports {
 			if pd.Var == "" {
 				errs = append(errs, fmt.Errorf("blueprint: service %q port %s has empty var name", svcName, portKey))

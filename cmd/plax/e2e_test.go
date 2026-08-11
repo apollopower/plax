@@ -216,6 +216,95 @@ func TestEndToEnd_TwoInstances(t *testing.T) {
 	}
 }
 
+// TestEndToEnd_TwoInstancesWithTestDB verifies that a blueprint with
+// multiple databases creates, uses, and cleans up all databases correctly.
+func TestEndToEnd_TwoInstancesWithTestDB(t *testing.T) {
+	pgURL := e2ePrereqs(t)
+	bin := buildPlax(t)
+	repo := initFixtureRepoWithTestDB(t)
+
+	suffix := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(t.Name(), "/", "_"), "#", "_"))
+	t.Setenv("PLAX_BASE_NAME", "plax_e2e_"+suffix)
+
+	_, stderr, err := runPlax(bin, repo, "base", "reset", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("base reset: %v\nstderr: %s", err, stderr)
+	}
+	t.Cleanup(func() { dropBaseDB(t, pgURL) })
+
+	for _, name := range []string{"i1", "i2"} {
+		n := name
+		t.Cleanup(func() {
+			_, _, _ = runPlax(bin, repo, "down", n, "--pg-url", pgURL)
+		})
+	}
+
+	// Create instance i1.
+	_, stderr, err = runPlax(bin, repo, "up", "i1", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("up i1: %v\nstderr: %s", err, stderr)
+	}
+
+	// Both plax_i1 and plax_i1_test exist on Postgres.
+	if !dbExists(t, pgURL, "plax_i1") {
+		t.Fatal("plax_i1 should exist")
+	}
+	if !dbExists(t, pgURL, "plax_i1_test") {
+		t.Fatal("plax_i1_test should exist")
+	}
+
+	// DATABASE_TEST_URL resolves in the derived env.
+	reg := openRegistryFile(t, repo)
+	rec1, ok := reg.Instances["i1"]
+	if !ok {
+		t.Fatal("i1 not in registry")
+	}
+	if rec1.DBNames[""] != "plax_i1" {
+		t.Errorf("DBNames[\"\"] = %q, want plax_i1", rec1.DBNames[""])
+	}
+	if rec1.DBNames["test"] != "plax_i1_test" {
+		t.Errorf("DBNames[\"test\"] = %q, want plax_i1_test", rec1.DBNames["test"])
+	}
+
+	// Create instance i2 (concurrent).
+	_, stderr, err = runPlax(bin, repo, "up", "i2", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("up i2: %v\nstderr: %s", err, stderr)
+	}
+
+	if !dbExists(t, pgURL, "plax_i2") {
+		t.Fatal("plax_i2 should exist")
+	}
+	if !dbExists(t, pgURL, "plax_i2_test") {
+		t.Fatal("plax_i2_test should exist")
+	}
+
+	// Clean teardown: down i1 drops both databases.
+	if _, _, err := runPlax(bin, repo, "down", "i1", "--pg-url", pgURL); err != nil {
+		t.Fatalf("down i1: %v", err)
+	}
+	if dbExists(t, pgURL, "plax_i1") {
+		t.Error("plax_i1 still exists after down")
+	}
+	if dbExists(t, pgURL, "plax_i1_test") {
+		t.Error("plax_i1_test still exists after down")
+	}
+
+	// Doctor after down reports no orphans for i1's databases.
+	stdout, _, err := runPlax(bin, repo, "doctor", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("doctor: %v", err)
+	}
+	if strings.Contains(stdout, "plax_i1") && strings.Contains(stdout, "unreferenced") {
+		t.Error("doctor should not report plax_i1 databases as orphaned after down")
+	}
+
+	// Clean up i2.
+	if _, _, err := runPlax(bin, repo, "down", "i2", "--pg-url", pgURL); err != nil {
+		t.Fatalf("down i2: %v", err)
+	}
+}
+
 // --- helpers ---
 
 func e2ePrereqs(t *testing.T) string {
@@ -289,6 +378,74 @@ DATABASE_URL=postgres://localhost:5432/e2e_dev
 API_KEY=placeholder
 `,
 		// Quoted secret with a '#' exercises the override round-trip.
+		".env":               "API_KEY=\"sk-test # withhash\"\n",
+		".tool-versions":     "golang 1.26\n",
+		"docker-compose.yml": "services: {}\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, args := range [][]string{
+		{"git", "init"},
+		{"git", "config", "user.email", "e2e@test.com"},
+		{"git", "config", "user.name", "E2E"},
+		{"git", "add", "."},
+		{"git", "commit", "-m", "fixture"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", args, out)
+		}
+	}
+	return dir
+}
+
+// initFixtureRepoWithTestDB returns a repo whose blueprint declares a _test
+// database alongside the primary.
+func initFixtureRepoWithTestDB(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	files := map[string]string{
+		"plax.json": `{
+  "version": 1,
+  "name": "e2e",
+  "port_pool": {"start": 26200, "end": 26300},
+  "toolchain": ".tool-versions",
+  "seed": {"migrate": "true", "command": "true", "workdir": "."},
+  "services": {
+    "db": {
+      "isolation": "logical",
+      "type": "postgres",
+      "image": "postgres:16",
+      "databases": [{"name": "test", "from": "base"}]
+    },
+    "redis": {"isolation": "dedicated", "image": "redis:7-alpine", "ports": {"6379": {"var": "REDIS_PORT"}}}
+  },
+  "processes": [
+    {"name": "web", "isolation": "native", "command": "python3 -m http.server {{PORT}} --bind 127.0.0.1", "workdir": ".", "port_var": "PORT"}
+  ],
+  "env": {
+    "template": ".env.example",
+    "holes": {
+      "PORT": "{{PORT}}",
+      "REDIS_URL": "redis://localhost:{{REDIS_PORT}}/0",
+      "DATABASE_URL": "postgres://localhost:5432/{{DB_NAME}}",
+      "DATABASE_TEST_URL": "postgres://localhost:5432/{{DB_NAME_test}}"
+    }
+  }
+}
+`,
+		".env.example": `PORT=3000
+REDIS_URL=redis://localhost:6379/0
+DATABASE_URL=postgres://localhost:5432/e2e_dev
+DATABASE_TEST_URL=postgres://localhost:5432/e2e_dev_test
+API_KEY=placeholder
+`,
 		".env":               "API_KEY=\"sk-test # withhash\"\n",
 		".tool-versions":     "golang 1.26\n",
 		"docker-compose.yml": "services: {}\n",

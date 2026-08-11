@@ -39,7 +39,8 @@ type InstanceRecord struct {
 	CreatedAt    time.Time         `json:"created_at"`
 	State        State             `json:"state"`
 	Ports        map[string]int    `json:"ports"`
-	DBName       string            `json:"db_name"`
+	DBName       string            `json:"db_name,omitempty"`
+	DBNames      map[string]string `json:"db_names,omitempty"`
 	ContainerIDs map[string]string `json:"container_ids,omitempty"`
 	PIDs         map[string]int    `json:"pids,omitempty"`
 	// PIDStarts records each process's start time (clock ticks since boot)
@@ -96,6 +97,15 @@ func Open(path string) (*Registry, error) {
 	if r.PortAllocations == nil {
 		r.PortAllocations = map[int]PortAllocation{}
 	}
+
+	// Migrate old records that have DBName but no DBNames.
+	for id, rec := range r.Instances {
+		if rec.DBNames == nil && rec.DBName != "" {
+			rec.DBNames = map[string]string{"": rec.DBName}
+			r.Instances[id] = rec
+		}
+	}
+
 	r.path = path
 
 	return r, nil
@@ -178,4 +188,21 @@ func (r *Registry) AllocPort(port int, inst, svc string) error {
 
 func (r *Registry) ReleasePort(port int) {
 	delete(r.PortAllocations, port)
+}
+
+// DBNamesFromRecord returns all database names from a record, falling back
+// to the deprecated DBName field if DBNames is nil.
+func DBNamesFromRecord(rec InstanceRecord) []string {
+	names := rec.DBNames
+	if names == nil {
+		if rec.DBName != "" {
+			return []string{rec.DBName}
+		}
+		return nil
+	}
+	result := make([]string, 0, len(names))
+	for _, dbName := range names {
+		result = append(result, dbName)
+	}
+	return result
 }

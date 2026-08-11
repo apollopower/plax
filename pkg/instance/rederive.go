@@ -46,9 +46,16 @@ func Rederive(ctx context.Context, deps *Deps) error {
 	for _, name := range names {
 		rec := deps.Registry.Instances[name]
 
-		values := map[string]string{"DB_NAME": rec.DBName}
+		values := map[string]string{}
 		for varName, port := range rec.Ports {
 			values[varName] = strconv.Itoa(port)
+		}
+		for key, physicalName := range rec.DBNames {
+			if key == "" {
+				values["DB_NAME"] = physicalName
+			} else {
+				values["DB_NAME_"+key] = physicalName
+			}
 		}
 
 		instEnv := map[string]string{}

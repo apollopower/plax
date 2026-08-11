@@ -622,5 +622,31 @@ func (bm *BaseManager) swapBase(ctx context.Context) error {
 	return nil
 }
 
+// ListPlaxDatabases returns every database name on the connected server that
+// starts with the well-known "plax_" prefix (excluding "plax_base" and
+// "plax_base_next"). Used by doctor to detect orphans.
+func (bm *BaseManager) ListPlaxDatabases(ctx context.Context) ([]string, error) {
+	rows, err := bm.pool.Query(ctx,
+		"SELECT datname FROM pg_database WHERE datname LIKE 'plax_%' AND datname != $1 AND datname != $2",
+		bm.baseName, bm.nextName)
+	if err != nil {
+		return nil, fmt.Errorf("list plax databases: %w", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("list plax databases: scan: %w", err)
+		}
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list plax databases: rows: %w", err)
+	}
+	return names, nil
+}
+
 // connStringForTemplate will be re-added when Phase 3 needs it.
 // It renders a Postgres connection string from a blueprint hole template.

@@ -80,9 +80,16 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 		}
 	}
 
-	values := map[string]string{"DB_NAME": rec.DBName}
+	values := map[string]string{}
 	for varName, port := range rec.Ports {
 		values[varName] = strconv.Itoa(port)
+	}
+	for key, physicalName := range rec.DBNames {
+		if key == "" {
+			values["DB_NAME"] = physicalName
+		} else {
+			values["DB_NAME_"+key] = physicalName
+		}
 	}
 
 	pids := map[string]int{}

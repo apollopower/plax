@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/apollopower/plax/pkg/blueprint"
@@ -124,9 +126,19 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	})
 
 	// Build the values map for .env derivation and command templating.
-	values := map[string]string{"DB_NAME": "plax_" + name}
+	// Database names are constructed from the blueprint's Databases slice
+	// (or a single default DB if none declared).
+	dbNames := buildDBNames(deps.Blueprint, name)
+	values := map[string]string{}
 	for varName, port := range allocated {
 		values[varName] = strconv.Itoa(port)
+	}
+	for key, physicalName := range dbNames {
+		if key == "" {
+			values["DB_NAME"] = physicalName
+		} else {
+			values["DB_NAME_"+key] = physicalName
+		}
 	}
 
 	// Step 4: Derive .env.
@@ -145,15 +157,20 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		// No separate cleanup — removing the worktree removes .env.
 	}
 
-	// Step 5: Clone database.
-	dbName := "plax_" + name
-	fmt.Fprintf(os.Stderr, "cloning database %s...\n", dbName)
-	if err := deps.BM.CloneBase(ctx, dbName); err != nil {
-		return fmt.Errorf("cloning database: %w", err)
+	// Step 5: Clone all databases (primary + any declared databases).
+	clonedDBs := []string{}
+	for _, physicalName := range dbNames {
+		fmt.Fprintf(os.Stderr, "cloning database %s...\n", physicalName)
+		if err := deps.BM.CloneBase(ctx, physicalName); err != nil {
+			return fmt.Errorf("cloning database: %w", err)
+		}
+		clonedDBs = append(clonedDBs, physicalName)
 	}
 	cleanups = append(cleanups, func() {
-		if err := deps.BM.DropInstanceDB(cleanupCtx, dbName); err != nil {
-			fmt.Fprintf(os.Stderr, "rollback: drop database: %v\n", err)
+		for _, db := range clonedDBs {
+			if err := deps.BM.DropInstanceDB(cleanupCtx, db); err != nil {
+				fmt.Fprintf(os.Stderr, "rollback: drop database %s: %v\n", db, err)
+			}
 		}
 	})
 
@@ -296,7 +313,8 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		CreatedAt:    time.Now(),
 		State:        registry.StateRunning,
 		Ports:        allocated,
-		DBName:       dbName,
+		DBName:       dbNames[""],
+		DBNames:      dbNames,
 		ContainerIDs: containerIDs,
 		PIDs:         pids,
 		PIDStarts:    pidStarts,
@@ -318,7 +336,14 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	fmt.Fprintf(os.Stderr, "\ninstance %s up\n", name)
 	fmt.Fprintf(os.Stderr, "  worktree:  %s\n", worktree.WorktreeRelPath(name))
 	fmt.Fprintf(os.Stderr, "  branch:    %s\n", worktree.BranchName(name))
-	fmt.Fprintf(os.Stderr, "  database:  %s\n", dbName)
+	if len(dbNames) > 0 {
+		dbList := sortedDBNames(dbNames)
+		label := "  databases:"
+		if len(dbList) == 1 {
+			label = "  database:"
+		}
+		fmt.Fprintf(os.Stderr, "%s %s\n", label, strings.Join(dbList, ", "))
+	}
 	if len(allocated) > 0 {
 		fmt.Fprintf(os.Stderr, "  ports:")
 		// Sorted for deterministic output.
@@ -405,6 +430,48 @@ func splitEnv(s string) (string, string, bool) {
 		}
 	}
 	return s, "", false
+}
+
+func sortedDBNames(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	result := make([]string, len(keys))
+	for i, k := range keys {
+		result[i] = m[k]
+	}
+	return result
+}
+
+// buildDBNames constructs the physical database name map from a blueprint.
+// If no databases are declared, a single default entry with key "" is returned.
+func buildDBNames(bp *blueprint.Blueprint, instanceName string) map[string]string {
+	dbNames := map[string]string{}
+	for _, svc := range bp.Services {
+		if svc.Isolation != blueprint.IsolationLogical {
+			continue
+		}
+		if len(svc.Databases) == 0 {
+			if _, ok := dbNames[""]; !ok {
+				dbNames[""] = "plax_" + instanceName
+			}
+		} else {
+			for _, dbDef := range svc.Databases {
+				key := dbDef.Name
+				physicalName := "plax_" + instanceName
+				if key != "" {
+					physicalName += "_" + key
+				}
+				dbNames[key] = physicalName
+			}
+		}
+	}
+	if _, ok := dbNames[""]; !ok {
+		dbNames[""] = "plax_" + instanceName
+	}
+	return dbNames
 }
 
 // sortedKeys returns the keys of a map sorted alphabetically.
