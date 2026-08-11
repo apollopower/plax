@@ -386,7 +386,7 @@ otherwise, holds the advisory lock):
 - [x] `plax recv nonexistent` exits 1 with a clear error
 - [x] `gofmt -s`, `go vet ./...`, `go test -race -count=1 ./...`, and
   `golangci-lint run` all pass
-- [ ] End-to-end mailbox test passes with `go test -race ./cmd/plax/ -run
+- [x] End-to-end mailbox test passes with `go test -race ./cmd/plax/ -run
   TestEndToEnd_Mailbox -count=1` (skipped without Postgres/Docker)
 
 ---

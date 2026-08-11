@@ -21,8 +21,8 @@ Runs `git -C <worktreePath> rev-parse --abbrev-ref HEAD` and
 not the repo root. Returns `ref=""` for detached HEAD (same convention as the
 existing `HeadRef`).
 
-- [ ] Add to `pkg/worktree/git.go`
-- [ ] Add test in `pkg/worktree/worktree_test.go`
+- [x] Add to `pkg/worktree/git.go`
+- [x] Add test in `pkg/worktree/worktree_test.go`
 
 ### 2. Resolve the worktree's HEAD in `codeDrift`
 
@@ -30,19 +30,19 @@ In `pkg/status/status.go`, `codeDrift` currently takes `(repoRoot, base string,
 rec *registry.InstanceRecord)`. The right-hand side of the ahead/behind range
 must become the worktree's actual HEAD commit instead of `rec.Branch`.
 
-- [ ] Call `worktree.WorktreeHead(rec.WorktreePath)`. If the worktree path is
+- [x] Call `worktree.WorktreeHead(rec.WorktreePath)`. If the worktree path is
   gone (instance was torn down, worktree file was deleted), fall back to
   `rec.Branch` and note "worktree path missing" in detail.
-- [ ] If the resolved commit matches the commit at `rec.Branch` (fast path:
+- [x] If the resolved commit matches the commit at `rec.Branch` (fast path:
   `git rev-parse <rec.Branch>` gives the same SHA), use `rec.Branch` directly
   so the ahead/behind detail string uses a human-readable branch name. This
   is the common case — the user hasn't changed HEAD — and avoids showing a
   bare SHA when the named branch is fine.
-- [ ] Pass the resolved commit SHA (or branch name for the fast path) to
+- [x] Pass the resolved commit SHA (or branch name for the fast path) to
   `worktree.AheadBehind(repoRoot, base, rhs)`. Since git worktrees share
   object storage, `--left-right --count` from the repo root against a
   worktree commit SHA works correctly.
-- [ ] Update the detail string:
+- [x] Update the detail string:
   - Fast path (abbreviated ref matches recorded branch): unchanged, e.g.
     `"up to date with main"` / `"ahead 1, behind 0"`
   - Detached HEAD: `"ahead 1, behind 0 (detached at <short SHA>)"`
@@ -56,20 +56,20 @@ to hash the migration filenames at the `base` ref. This should instead use the
 **worktree's current revision**, so migrations added by a checked-out branch
 are detected.
 
-- [ ] Resolve worktree HEAD commit (same helper from step 2) and pass it to
+- [x] Resolve worktree HEAD commit (same helper from step 2) and pass it to
   `SchemaFilesAtRef` instead of `base`.
-- [ ] Update detail string to reflect the ref being compared:
+- [x] Update detail string to reflect the ref being compared:
   `"database was built from a different migration set than worktree HEAD declares"`.
-- [ ] Edge case: if worktree HEAD cannot be resolved (worktree gone), fall
+- [x] Edge case: if worktree HEAD cannot be resolved (worktree gone), fall
   back to the current `base` behavior with a note.
 
 ### 4. Tests
 
-- [ ] Unit test `worktree.WorktreeHead` for normal branch and detached HEAD.
-- [ ] Unit test `codeDrift` with worktree on a branch that diverges from
+- [x] Unit test `worktree.WorktreeHead` for normal branch and detached HEAD.
+- [x] Unit test `codeDrift` with worktree on a branch that diverges from
   `rec.Branch`.
-- [ ] Unit test `codeDrift` with worktree missing.
-- [ ] Unit test `schemaDrift` with a migration added in the worktree HEAD
+- [x] Unit test `codeDrift` with worktree missing.
+- [x] Unit test `schemaDrift` with a migration added in the worktree HEAD
   that doesn't exist at `base`.
 
 ## Edge cases
