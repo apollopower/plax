@@ -556,6 +556,147 @@ func dockerNetworkExists(t *testing.T, name string) bool {
 	return strings.TrimSpace(string(out)) == name
 }
 
+// TestEndToEnd_UpWithRef verifies that --ref creates an instance branched
+// from the specified ref, that both instances coexist on different ports,
+// and that the worktree content matches the ref's branch.
+func TestEndToEnd_UpWithRef(t *testing.T) {
+	pgURL := e2ePrereqs(t)
+	bin := buildPlax(t)
+	repo := initFixtureRepoWithBranch(t)
+
+	suffix := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(t.Name(), "/", "_"), "#", "_"))
+	t.Setenv("PLAX_BASE_NAME", "plax_e2e_"+suffix)
+
+	_, stderr, err := runPlax(bin, repo, "base", "reset", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("base reset: %v\nstderr: %s", err, stderr)
+	}
+	t.Cleanup(func() { dropBaseDB(t, pgURL) })
+
+	for _, name := range []string{"r1", "r2"} {
+		n := name
+		t.Cleanup(func() {
+			_, _, _ = runPlax(bin, repo, "down", n, "--pg-url", pgURL)
+		})
+	}
+
+	// Instance from other-branch.
+	_, stderr, err = runPlax(bin, repo, "up", "r1", "--ref", "other-branch", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("up r1 --ref other-branch: %v\nstderr: %s", err, stderr)
+	}
+
+	// Verify the worktree contains the other-branch content.
+	reg := openRegistryFile(t, repo)
+	rec1, ok := reg.Instances["r1"]
+	if !ok {
+		t.Fatal("r1 not in registry")
+	}
+	if rec1.SourceRef != "other-branch" {
+		t.Errorf("SourceRef = %q, want other-branch", rec1.SourceRef)
+	}
+
+	indexContent, err := os.ReadFile(filepath.Join(rec1.WorktreePath, "index.html"))
+	if err != nil {
+		t.Fatalf("read index.html from worktree: %v", err)
+	}
+	if strings.TrimSpace(string(indexContent)) != "other-branch" {
+		t.Errorf("worktree index.html = %q, want other-branch", strings.TrimSpace(string(indexContent)))
+	}
+
+	// waitHTTP200 on r1's port.
+	waitHTTP200(t, rec1.Ports["PORT"])
+
+	// Instance from current HEAD (no --ref).
+	_, stderr, err = runPlax(bin, repo, "up", "r2", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("up r2: %v\nstderr: %s", err, stderr)
+	}
+
+	reg = openRegistryFile(t, repo)
+	rec2, ok := reg.Instances["r2"]
+	if !ok {
+		t.Fatal("r2 not in registry")
+	}
+	if rec2.SourceRef != "" {
+		t.Errorf("SourceRef should be empty, got %q", rec2.SourceRef)
+	}
+
+	indexContent2, err := os.ReadFile(filepath.Join(rec2.WorktreePath, "index.html"))
+	if err != nil {
+		t.Fatalf("read index.html from r2 worktree: %v", err)
+	}
+	if strings.TrimSpace(string(indexContent2)) != "main" {
+		t.Errorf("r2 worktree index.html = %q, want main", strings.TrimSpace(string(indexContent2)))
+	}
+
+	// Both serve HTTP on different ports.
+	waitHTTP200(t, rec2.Ports["PORT"])
+	if rec1.Ports["PORT"] == rec2.Ports["PORT"] {
+		t.Fatalf("instances share app port %d", rec1.Ports["PORT"])
+	}
+
+	// Cleanup.
+	if _, _, err := runPlax(bin, repo, "down", "r1", "--pg-url", pgURL); err != nil {
+		t.Fatalf("down r1: %v", err)
+	}
+	if _, _, err := runPlax(bin, repo, "down", "r2", "--pg-url", pgURL); err != nil {
+		t.Fatalf("down r2: %v", err)
+	}
+}
+
+// initFixtureRepoWithBranch returns a fixture repo that has an "other-branch"
+// with distinct content from main.
+func initFixtureRepoWithBranch(t *testing.T) string {
+	t.Helper()
+	dir := initFixtureRepo(t)
+
+	// Add index.html on main.
+	mainHTML := filepath.Join(dir, "index.html")
+	if err := os.WriteFile(mainHTML, []byte("main\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "add", "index.html")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add index.html: %s", out)
+	}
+	cmd = exec.Command("git", "commit", "-m", "add index.html on main")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %s", out)
+	}
+
+	// Create other-branch with different content.
+	cmd = exec.Command("git", "checkout", "-b", "other-branch")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git checkout -b other-branch: %s", out)
+	}
+	if err := os.WriteFile(mainHTML, []byte("other-branch\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("git", "add", "index.html")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add index.html: %s", out)
+	}
+	cmd = exec.Command("git", "commit", "-m", "other-branch content")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit on other-branch: %s", out)
+	}
+
+	// Go back to main.
+	cmd = exec.Command("git", "checkout", "main")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git checkout main: %s", out)
+	}
+
+	return dir
+}
+
 func dropBaseDB(t *testing.T, pgURL string) {
 	t.Helper()
 	conn, err := pgx.Connect(context.Background(), pgURL)

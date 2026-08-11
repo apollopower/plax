@@ -717,6 +717,80 @@ func TestUp_BackwardCompatible(t *testing.T) {
 	}
 }
 
+func TestUp_WithRef(t *testing.T) {
+	deps, bm, drv := testDeps(t, testBlueprint())
+	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
+
+	// Create a second branch in the test repo for the ref.
+	createOtherBranch(t, deps.RepoRoot)
+	otherRef := "other"
+
+	deps.SourceRef = otherRef
+	deps.ResolvedRef = otherRef
+
+	if err := Up(context.Background(), deps, "i1"); err != nil {
+		t.Fatalf("Up with ref: %v", err)
+	}
+
+	rec, found := deps.Registry.GetInstance("i1")
+	if !found {
+		t.Fatal("instance not registered")
+	}
+	if rec.SourceRef != "other" {
+		t.Errorf("SourceRef = %q, want %q", rec.SourceRef, "other")
+	}
+	if rec.State != registry.StateRunning {
+		t.Errorf("state = %q, want running", rec.State)
+	}
+	if rec.Ports["PORT"] == 0 || rec.Ports["REDIS_PORT"] == 0 {
+		t.Errorf("ports not allocated: %v", rec.Ports)
+	}
+
+	// Verify worktree is at the "other" branch's HEAD.
+	otherCommit := gitRevParse(t, deps.RepoRoot, "other")
+	_, wtCommit, err := worktree.WorktreeHead(rec.WorktreePath)
+	if err != nil {
+		t.Fatalf("WorktreeHead: %v", err)
+	}
+	if wtCommit != otherCommit {
+		t.Errorf("worktree at %s, want other branch's HEAD (%s)", wtCommit, otherCommit)
+	}
+
+	if got := bm.clonedDBs(); len(got) != 1 || got[0] != "plax_i1" {
+		t.Errorf("cloned = %v, want [plax_i1]", got)
+	}
+	if len(drv.createdNets) != 1 {
+		t.Errorf("createdNets = %v", drv.createdNets)
+	}
+}
+
+func TestUp_WithoutRef(t *testing.T) {
+	deps, bm, drv := testDeps(t, testBlueprint())
+	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
+
+	if err := Up(context.Background(), deps, "i1"); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	rec, found := deps.Registry.GetInstance("i1")
+	if !found {
+		t.Fatal("instance not registered")
+	}
+	if rec.SourceRef != "" {
+		t.Errorf("SourceRef should be empty without --ref, got %q", rec.SourceRef)
+	}
+	if rec.State != registry.StateRunning {
+		t.Errorf("state = %q, want running", rec.State)
+	}
+
+	if got := bm.clonedDBs(); len(got) != 1 || got[0] != "plax_i1" {
+		t.Errorf("cloned = %v, want [plax_i1]", got)
+	}
+	if len(drv.createdNets) != 1 {
+		t.Errorf("createdNets = %v", drv.createdNets)
+	}
+}
+
 func TestDown_StalePGID_NotSignaled(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
@@ -744,5 +818,38 @@ func TestDown_StalePGID_NotSignaled(t *testing.T) {
 	}
 	if _, found := deps.Registry.GetInstance("i1"); found {
 		t.Error("registry entry should still be removed")
+	}
+}
+
+// gitRevParse returns the commit SHA for a given ref.
+func gitRevParse(t *testing.T, repo, ref string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", ref)
+	cmd.Dir = repo
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %s: %v", ref, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// createOtherBranch creates a "other" branch at the repo HEAD, advancing
+// main past it so the branches diverge.
+func createOtherBranch(t *testing.T, repoRoot string) {
+	t.Helper()
+	cmd := exec.Command("git", "commit", "--allow-empty", "-m", "other-commit")
+	cmd.Dir = repoRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("commit for other branch: %s", out)
+	}
+	cmd = exec.Command("git", "branch", "other")
+	cmd.Dir = repoRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("branch other: %s", out)
+	}
+	cmd = exec.Command("git", "reset", "--hard", "HEAD~1")
+	cmd.Dir = repoRoot
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("reset: %s", out)
 	}
 }
