@@ -299,17 +299,17 @@ with a second branch:
 
 ## Acceptance criteria
 
-- [ ] `plax up i1` (no `--ref`) behaves identically to before this plan
-- [ ] `plax up i1 --ref main` creates an instance branched from `main` (explicitly, same result as the default when on `main`)
-- [ ] `plax up i1 --ref other-branch` creates an instance branched from `other-branch`, and commands run inside the worktree see that branch's file contents
-- [ ] `plax up i1 --ref <sha>` creates a worktree at that commit; the worktree is in detached HEAD state and the instance is usable
-- [ ] `plax up i1 --ref pr/3861` and `plax up i1 --ref 3861` both resolve to `refs/pull/3861/head` via `git fetch` when the ref is not already present
-- [ ] `plax up i1 --ref nonexistent` fails with a clear error message before any side effects
-- [ ] `plax status i1` reports the source ref when one was used
-- [ ] `InstanceRecord.SourceRef` is populated with the user-supplied `--ref` value (not the resolved SHA)
-- [ ] `go vet ./...` passes
-- [ ] `go test -race -count=1 ./...` passes (both with and without `PLAX_TEST_POSTGRES_URL`)
-- [ ] `golangci-lint run` passes
+- [x] `plax up i1` (no `--ref`) behaves identically to before this plan
+- [x] `plax up i1 --ref main` creates an instance branched from `main` (explicitly, same result as the default when on `main`)
+- [x] `plax up i1 --ref other-branch` creates an instance branched from `other-branch`, and commands run inside the worktree see that branch's file contents
+- [x] `plax up i1 --ref <sha>` creates a worktree at that commit; the worktree is in detached HEAD state and the instance is usable
+- [x] `plax up i1 --ref pr/3861` and `plax up i1 --ref 3861` both resolve to `refs/pull/3861/head` via `git fetch` when the ref is not already present
+- [x] `plax up i1 --ref nonexistent` fails with a clear error message before any side effects
+- [x] `plax status i1` reports the source ref when one was used
+- [x] `InstanceRecord.SourceRef` is populated with the user-supplied `--ref` value (not the resolved SHA)
+- [x] `go vet ./...` passes
+- [x] `go test -race -count=1 ./...` passes (both with and without `PLAX_TEST_POSTGRES_URL`)
+- [x] `golangci-lint run` passes
 
 ---
 

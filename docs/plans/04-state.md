@@ -965,24 +965,24 @@ noted.
 
 - [x] `plax suspend i1` stops processes and containers; `ls` shows `suspended`; ports remain allocated in the registry; the database still answers queries *(TestSuspend_Success; e2e: DB check while suspended)*
 - [x] `plax suspend i1` twice is a no-op the second time, exit 0 *(TestSuspend_AlreadySuspended)*
-- [ ] `plax resume i1` restarts everything on the same ports and prints the drift report to stderr *(e2e TestEndToEnd_SuspendResume)*
+- [x] `plax resume i1` restarts everything on the same ports and prints the drift report to stderr *(e2e TestEndToEnd_SuspendResume)*
 - [x] `plax resume i1` with its port bound by another process fails, names the pid and command, and changes nothing *(TestResume_PortTaken; e2e)*
 - [x] `plax resume` never reallocates a different port for a taken one *(design §4; asserted by the port-taken tests)*
-- [ ] A failed resume (dead container, dying process) leaves the instance suspended and retryable *(TestResume_MissingContainer, TestResume_ProcessDiesImmediately)*
+- [x] A failed resume (dead container, dying process) leaves the instance suspended and retryable *(TestResume_MissingContainer, TestResume_ProcessDiesImmediately)*
 - [x] `plax status i1` prints five parseable rows; each dimension independently reaches `ok`, `drift`, or `unknown` *(status unit tests)*
-- [ ] Committing on the base branch after `up` makes `status` report `behind 1` *(e2e)*
-- [ ] `plax base refresh` makes `status` report the instance's base version as stale *(e2e)*
+- [x] Committing on the base branch after `up` makes `status` report `behind 1` *(e2e)*
+- [x] `plax base refresh` makes `status` report the instance's base version as stale *(e2e)*
 - [x] Editing `docker-compose.yml` makes `status` report config drift and makes every other registry command print the one-line notice to stderr *(e2e; TestStatus_ConfigDrift)*
 - [x] `status` with Postgres down still prints the report with `unknown` Data/Schema rows and exits 0 *(TestStatus_DataUnknown_NoBM)*
-- [ ] Instances created before Phase 4 report Code via the main/master fallback and Host as `unknown (recorded before Phase 4)` *(TestStatus_CodeBaseRefFallback, TestStatus_HostUnknown_Phase3Record)*
+- [x] Instances created before Phase 4 report Code via the main/master fallback and Host as `unknown (recorded before Phase 4)` *(TestStatus_CodeBaseRefFallback, TestStatus_HostUnknown_Phase3Record)*
 - [x] `plax doctor` on a healthy repo exits 0; with a failed check exits 1 and names the remedy *(doctor unit tests; e2e)*
 - [x] `plax doctor` catches: compose/blueprint mismatch, dangling worktree or branch, port allocated to an unknown instance, toolchain mismatch, unlocked base, staged `plax_base_next` *(doctor unit tests)*
-- [ ] `plax rederive` after editing `.env.example` updates every instance's `.env`, prints a key-level diff, and preserves secrets that no longer exist in the user's `.env` *(rederive unit tests; e2e)*
-- [ ] `plax rederive` with no changes writes nothing and prints no diff *(TestRederive_NoChange_NoWrite)*
-- [ ] `plax attach i1` on a suspended instance prints the suspended note; on a drifted instance prints the drift hint; neither blocks the shell *(e2e)*
-- [ ] `plax exec i1` works on a suspended instance (with the note) *(e2e)*
+- [x] `plax rederive` after editing `.env.example` updates every instance's `.env`, prints a key-level diff, and preserves secrets that no longer exist in the user's `.env` *(rederive unit tests; e2e)*
+- [x] `plax rederive` with no changes writes nothing and prints no diff *(TestRederive_NoChange_NoWrite)*
+- [x] `plax attach i1` on a suspended instance prints the suspended note; on a drifted instance prints the drift hint; neither blocks the shell *(e2e)*
+- [x] `plax exec i1` works on a suspended instance (with the note) *(e2e)*
 - [x] `up` records `BaseRef`, `BaseCommit`, and resolved `ToolVersions` in the registry *(TestUp_RecordsBaseRefAndToolVersions)*
-- [ ] Registries written by Phase 3 load unchanged; no migration step *(TestOpen_Phase3RegistryRecord — additive omitempty fields)*
+- [x] Registries written by Phase 3 load unchanged; no migration step *(TestOpen_Phase3RegistryRecord — additive omitempty fields)*
 - [x] `gofmt -s`, `go vet ./...`, `go test -race -count=1 ./...` (with and without `PLAX_TEST_POSTGRES_URL`), and `golangci-lint run` all pass
 
 ---

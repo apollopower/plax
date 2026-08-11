@@ -26,8 +26,8 @@ func InitFromRepo(root string) (*Blueprint, []string, error) {
 		PortPool:  PortPool{Start: 3000, End: 4000},
 		Toolchain: ".tool-versions",
 		Seed: SeedConfig{
-			Migrate: "TODO: add migrate command, e.g. 'bun run db migrate'",
-			Command: "TODO: add seed command, e.g. 'bun run db fixtures'",
+			Migrate: "",
+			Command: "",
 			Workdir: ".",
 		},
 		Env: EnvConfig{
@@ -331,7 +331,7 @@ func detectHoles(envVars map[string]string, services map[string]ServiceDef, port
 
 			varName, known := portVarMap[portNum]
 			if !known {
-				varName = "FIXME_PORT_" + portNum
+				varName = "PORT_" + portNum
 			}
 
 			pat := regexp.MustCompile(`localhost:` + regexp.QuoteMeta(portNum) + `\b`)

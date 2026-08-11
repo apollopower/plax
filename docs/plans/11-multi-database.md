@@ -297,15 +297,15 @@ declares a `_test` database and verifies:
 
 ## Acceptance criteria
 
-- [ ] `plax up i1` with a blueprint declaring `databases: [{name:"test", from:"base"}]` creates both `plax_i1` and `plax_i1_test`
-- [ ] `plax down i1` drops both databases
-- [ ] `{{DB_NAME_test}}` in a hole template resolves correctly at derivation time
-- [ ] A blueprint with no `databases` field behaves identically to before this plan
-- [ ] `plax doctor` reports each `plax_*` database on the server that has no registry entry
-- [ ] An old registry file with only `db_name` (no `db_names`) is handled correctly by `down` and `doctor`
-- [ ] `go vet ./...` passes
-- [ ] `go test -race -count=1 ./...` passes (both with and without `PLAX_TEST_POSTGRES_URL`)
-- [ ] `golangci-lint run` passes
+- [x] `plax up i1` with a blueprint declaring `databases: [{name:"test", from:"base"}]` creates both `plax_i1` and `plax_i1_test`
+- [x] `plax down i1` drops both databases
+- [x] `{{DB_NAME_test}}` in a hole template resolves correctly at derivation time
+- [x] A blueprint with no `databases` field behaves identically to before this plan
+- [x] `plax doctor` reports each `plax_*` database on the server that has no registry entry
+- [x] An old registry file with only `db_name` (no `db_names`) is handled correctly by `down` and `doctor`
+- [x] `go vet ./...` passes
+- [x] `go test -race -count=1 ./...` passes (both with and without `PLAX_TEST_POSTGRES_URL`)
+- [x] `golangci-lint run` passes
 
 ---
 
