@@ -28,14 +28,14 @@ func initRepo(t *testing.T) string {
 	return dir
 }
 
-func TestBranchName(t *testing.T) {
+func TestWorktree_BranchName(t *testing.T) {
 	got := BranchName("i1")
 	if got != "plax/i1" {
 		t.Errorf("BranchName(i1) = %q, want %q", got, "plax/i1")
 	}
 }
 
-func TestWorktreeRelPath(t *testing.T) {
+func TestWorktree_WorktreeRelPath(t *testing.T) {
 	got := WorktreeRelPath("i1")
 	want := filepath.Join(".plax", "worktrees", "i1")
 	if got != want {
@@ -43,7 +43,7 @@ func TestWorktreeRelPath(t *testing.T) {
 	}
 }
 
-func TestCreate_Success(t *testing.T) {
+func TestWorktree_CreateSuccess(t *testing.T) {
 	repo := initRepo(t)
 
 	absPath, err := Create(repo, "i1", "")
@@ -65,7 +65,7 @@ func TestCreate_Success(t *testing.T) {
 	}
 }
 
-func TestCreate_BranchExists(t *testing.T) {
+func TestWorktree_CreateBranchExists(t *testing.T) {
 	repo := initRepo(t)
 
 	if _, err := Create(repo, "i1", ""); err != nil {
@@ -78,7 +78,7 @@ func TestCreate_BranchExists(t *testing.T) {
 	}
 }
 
-func TestCreate_WithRef(t *testing.T) {
+func TestWorktree_CreateWithRef(t *testing.T) {
 	repo := initRepoWithOtherBranch(t)
 
 	absPath, err := Create(repo, "i1", "other")
@@ -105,7 +105,7 @@ func TestCreate_WithRef(t *testing.T) {
 	}
 }
 
-func TestCreate_WithDetachedRef(t *testing.T) {
+func TestWorktree_CreateWithDetachedRef(t *testing.T) {
 	repo := initRepo(t)
 
 	// Get the HEAD commit SHA.
@@ -132,7 +132,7 @@ func TestCreate_WithDetachedRef(t *testing.T) {
 	}
 }
 
-func TestRemove_Success(t *testing.T) {
+func TestWorktree_RemoveSuccess(t *testing.T) {
 	repo := initRepo(t)
 
 	absPath, err := Create(repo, "i1", "")
@@ -153,7 +153,7 @@ func TestRemove_Success(t *testing.T) {
 	}
 }
 
-func TestRemove_MissingWorktreeStillDeletesBranch(t *testing.T) {
+func TestWorktree_RemoveMissingWorktreeStillDeletesBranch(t *testing.T) {
 	repo := initRepo(t)
 
 	absPath, err := Create(repo, "i1", "")
@@ -182,14 +182,14 @@ func TestRemove_MissingWorktreeStillDeletesBranch(t *testing.T) {
 	}
 }
 
-func TestBranchExists_False(t *testing.T) {
+func TestWorktree_BranchExistsFalse(t *testing.T) {
 	repo := initRepo(t)
 	if BranchExists(repo, "nope") {
 		t.Error("BranchExists should return false for missing branch")
 	}
 }
 
-func TestSchemaFilesAtRef_MissingRef(t *testing.T) {
+func TestWorktree_SchemaFilesAtRefMissingRef(t *testing.T) {
 	repo := initRepo(t)
 	_, err := SchemaFilesAtRef(repo, "nonexistent-ref", "src/db/migrations")
 	if err == nil {
@@ -197,7 +197,7 @@ func TestSchemaFilesAtRef_MissingRef(t *testing.T) {
 	}
 }
 
-func TestBranchExists_True(t *testing.T) {
+func TestWorktree_BranchExistsTrue(t *testing.T) {
 	repo := initRepo(t)
 	if _, err := Create(repo, "i1", ""); err != nil {
 		t.Fatalf("Create: %v", err)
@@ -207,7 +207,7 @@ func TestBranchExists_True(t *testing.T) {
 	}
 }
 
-func TestWorktreeHead_NormalBranch(t *testing.T) {
+func TestWorktree_WorktreeHeadNormalBranch(t *testing.T) {
 	repo := initRepo(t)
 	wtPath, err := Create(repo, "i1", "")
 	if err != nil {
@@ -226,7 +226,7 @@ func TestWorktreeHead_NormalBranch(t *testing.T) {
 	}
 }
 
-func TestWorktreeHead_DetachedHead(t *testing.T) {
+func TestWorktree_WorktreeHeadDetachedHead(t *testing.T) {
 	repo := initRepo(t)
 	wtPath, err := Create(repo, "i1", "")
 	if err != nil {
@@ -251,7 +251,7 @@ func TestWorktreeHead_DetachedHead(t *testing.T) {
 	}
 }
 
-func TestWorktreeHead_MissingPath(t *testing.T) {
+func TestWorktree_WorktreeHeadMissingPath(t *testing.T) {
 	_, _, err := WorktreeHead("/nonexistent/path")
 	if err == nil {
 		t.Fatal("expected error for missing worktree path")
@@ -260,7 +260,7 @@ func TestWorktreeHead_MissingPath(t *testing.T) {
 
 // --- ResolveRef tests ---
 
-func TestResolveRef_Empty(t *testing.T) {
+func TestWorktree_ResolveRefEmpty(t *testing.T) {
 	repo := initRepo(t)
 	got, err := ResolveRef(repo, "")
 	if err != nil {
@@ -271,7 +271,7 @@ func TestResolveRef_Empty(t *testing.T) {
 	}
 }
 
-func TestResolveRef_PRNumber(t *testing.T) {
+func TestWorktree_ResolveRefPRNumber(t *testing.T) {
 	repo := initRepo(t)
 	// Seed a local ref to avoid a real fetch.
 	seedPRRef(t, repo, "42")
@@ -285,7 +285,7 @@ func TestResolveRef_PRNumber(t *testing.T) {
 	}
 }
 
-func TestResolveRef_PRNumberPrefixed(t *testing.T) {
+func TestWorktree_ResolveRefPRNumberPrefixed(t *testing.T) {
 	repo := initRepo(t)
 	seedPRRef(t, repo, "42")
 
@@ -298,7 +298,7 @@ func TestResolveRef_PRNumberPrefixed(t *testing.T) {
 	}
 }
 
-func TestResolveRef_BranchName(t *testing.T) {
+func TestWorktree_ResolveRefBranchName(t *testing.T) {
 	repo := initRepo(t)
 
 	got, err := ResolveRef(repo, "main")
@@ -310,7 +310,7 @@ func TestResolveRef_BranchName(t *testing.T) {
 	}
 }
 
-func TestResolveRef_OriginBranch(t *testing.T) {
+func TestWorktree_ResolveRefOriginBranch(t *testing.T) {
 	repo := initRepo(t)
 	// Seed an origin/main ref locally.
 	seedOriginRef(t, repo, "main")
@@ -324,7 +324,7 @@ func TestResolveRef_OriginBranch(t *testing.T) {
 	}
 }
 
-func TestResolveRef_CommitSHA(t *testing.T) {
+func TestWorktree_ResolveRefCommitSHA(t *testing.T) {
 	repo := initRepo(t)
 
 	_, sha, err := HeadRef(repo)
@@ -341,7 +341,7 @@ func TestResolveRef_CommitSHA(t *testing.T) {
 	}
 }
 
-func TestResolveRef_ExplicitRef(t *testing.T) {
+func TestWorktree_ResolveRefExplicitRef(t *testing.T) {
 	repo := initRepo(t)
 
 	got, err := ResolveRef(repo, "refs/heads/main")
@@ -353,7 +353,7 @@ func TestResolveRef_ExplicitRef(t *testing.T) {
 	}
 }
 
-func TestResolveRef_NotFound(t *testing.T) {
+func TestWorktree_ResolveRefNotFound(t *testing.T) {
 	repo := initRepo(t)
 
 	_, err := ResolveRef(repo, "nonexistent-branch")
@@ -362,7 +362,7 @@ func TestResolveRef_NotFound(t *testing.T) {
 	}
 }
 
-func TestResolveRef_BareIntegerFetched(t *testing.T) {
+func TestWorktree_ResolveRefBareIntegerFetched(t *testing.T) {
 	// When a PR ref is not present locally, ResolveRef attempts git fetch.
 	// Without a remote, this fails gracefully.
 	repo := initRepo(t)

@@ -105,7 +105,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		}
 	})
 
-	// Step 3: Create Docker network.
+	// Step 3: Create Docker network and allocate ports.
 	netName := "plax-" + name + "-net"
 	fmt.Fprintf(os.Stderr, "creating network %s...\n", netName)
 	if err := deps.Docker.CreateNetwork(ctx, netName); err != nil {
@@ -117,7 +117,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		}
 	})
 
-	// Step 3: Allocate ports.
+	// Allocate ports.
 	fmt.Fprintf(os.Stderr, "allocating ports...\n")
 	allocated, err := allocatePorts(deps, name)
 	if err != nil {
@@ -178,7 +178,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		}
 	})
 
-	// Step 6: Compute provenance and blueprint stamp.
+	// Step 6: Compute provenance and start workloads.
 	toolchainHash := hashFile(filepath.Join(deps.RepoRoot, deps.Blueprint.Toolchain))
 	var toolVersions map[string]string
 	if deps.Blueprint.Toolchain != "" {
@@ -193,7 +193,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		baseRef, baseCommit = "", ""
 	}
 
-	// Step 7: Start dedicated containers concurrently.
+	// Start dedicated containers concurrently.
 	containerIDs := map[string]string{}
 	cleanups = append(cleanups, func() {
 		for svcName, cid := range containerIDs {
@@ -266,7 +266,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		}
 	}
 
-	// Step 8: Start native processes concurrently.
+	// Start native processes concurrently.
 	pids := map[string]int{}
 	pidStarts := map[string]int64{}
 	cleanups = append(cleanups, func() {
@@ -327,7 +327,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		}
 	}
 
-	// Step 9: Verify the workloads stayed up. Spawn and ContainerStart only
+	// Step 7: Verify the workloads stayed up. Spawn and ContainerStart only
 	// prove the workload started; a typo'd command exits immediately and must
 	// fail the whole up rather than record a "running" instance.
 	if len(containerIDs) > 0 || len(pids) > 0 {
@@ -348,7 +348,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		}
 	}
 
-	// Step 10: Write registry.
+	// Write registry.
 	if err := deps.Registry.AddInstance(name, registry.InstanceRecord{
 		Branch:       worktree.BranchName(name),
 		WorktreePath: worktreePath,
@@ -390,7 +390,12 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	if len(allocated) > 0 {
 		fmt.Fprintf(os.Stderr, "  ports:")
 		// Sorted for deterministic output.
-		for _, varName := range sortedKeys(allocated) {
+		varNames := make([]string, 0, len(allocated))
+		for k := range allocated {
+			varNames = append(varNames, k)
+		}
+		sort.Strings(varNames)
+		for _, varName := range varNames {
 			fmt.Fprintf(os.Stderr, " %s=%d", varName, allocated[varName])
 		}
 		fmt.Fprintln(os.Stderr)
@@ -447,7 +452,7 @@ func allocatePorts(deps *Deps, instanceName string) (map[string]int, error) {
 func buildProcessEnv(derivedEnv map[string]string, allocated map[string]int, proc blueprint.ProcessDef) []string {
 	envMap := map[string]string{}
 	for _, e := range os.Environ() {
-		k, v, _ := splitEnv(e)
+		k, v, _ := strings.Cut(e, "=")
 		envMap[k] = v
 	}
 	for k, v := range derivedEnv {
@@ -464,15 +469,6 @@ func buildProcessEnv(derivedEnv map[string]string, allocated map[string]int, pro
 		result = append(result, k+"="+v)
 	}
 	return result
-}
-
-func splitEnv(s string) (string, string, bool) {
-	for i := 0; i < len(s); i++ {
-		if s[i] == '=' {
-			return s[:i], s[i+1:], true
-		}
-	}
-	return s, "", false
 }
 
 func sortedDBNames(m map[string]string) []string {
@@ -515,19 +511,4 @@ func buildDBNames(bp *blueprint.Blueprint, instanceName string) map[string]strin
 		dbNames[""] = "plax_" + instanceName
 	}
 	return dbNames
-}
-
-// sortedKeys returns the keys of a map sorted alphabetically.
-func sortedKeys(m map[string]int) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	// Simple insertion sort for small maps.
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
-	return keys
 }

@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestSpawn_Success(t *testing.T) {
+func TestProcess_SpawnSuccess(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "test.log")
 
@@ -33,7 +33,7 @@ func TestSpawn_Success(t *testing.T) {
 	_ = Terminate(pgid, startTime, 2*time.Second)
 }
 
-func TestSpawn_WithEnv(t *testing.T) {
+func TestProcess_SpawnWithEnv(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "env.log")
 
@@ -54,7 +54,7 @@ func TestSpawn_WithEnv(t *testing.T) {
 	_ = Terminate(pgid, 0, 2*time.Second)
 }
 
-func TestSpawn_WithDir(t *testing.T) {
+func TestProcess_SpawnWithDir(t *testing.T) {
 	workDir := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "pwd.log")
 
@@ -77,7 +77,7 @@ func TestSpawn_WithDir(t *testing.T) {
 	_ = Terminate(pgid, 0, 2*time.Second)
 }
 
-func TestSpawn_LogFile(t *testing.T) {
+func TestProcess_SpawnLogFile(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "hello.log")
 
@@ -96,7 +96,7 @@ func TestSpawn_LogFile(t *testing.T) {
 	_ = Terminate(pgid, 0, 2*time.Second)
 }
 
-func TestSpawn_ProcessGroup(t *testing.T) {
+func TestProcess_SpawnProcessGroup(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "pg.log")
 
@@ -124,7 +124,7 @@ func TestSpawn_ProcessGroup(t *testing.T) {
 	_ = Terminate(pgid, 0, 2*time.Second)
 }
 
-func TestTerminate_Graceful(t *testing.T) {
+func TestProcess_TerminateGraceful(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "term.log")
 
@@ -146,7 +146,7 @@ func TestTerminate_Graceful(t *testing.T) {
 	}
 }
 
-func TestTerminate_StalePGIDNotSignaled(t *testing.T) {
+func TestProcess_TerminateStalePGIDNotSignaled(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "stale.log")
 
@@ -174,7 +174,7 @@ func TestTerminate_StalePGIDNotSignaled(t *testing.T) {
 	}
 }
 
-func TestTerminate_ChildrenKilled(t *testing.T) {
+func TestProcess_TerminateChildrenKilled(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "children.log")
 
@@ -198,7 +198,7 @@ func TestTerminate_ChildrenKilled(t *testing.T) {
 	}
 }
 
-func TestTerminate_AlreadyDead(t *testing.T) {
+func TestProcess_TerminateAlreadyDead(t *testing.T) {
 	// Use a PID that's very unlikely to exist.
 	if err := Terminate(999999, 0, 100*time.Millisecond); err != nil {
 		t.Errorf("Terminate on dead process should be no-op: %v", err)
@@ -209,7 +209,7 @@ func TestTerminate_AlreadyDead(t *testing.T) {
 	}
 }
 
-func TestIsAlive_Running(t *testing.T) {
+func TestProcess_IsAliveRunning(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "alive.log")
 
@@ -225,13 +225,13 @@ func TestIsAlive_Running(t *testing.T) {
 	_ = Terminate(pgid, 0, 2*time.Second)
 }
 
-func TestIsAlive_Dead(t *testing.T) {
+func TestProcess_IsAliveDead(t *testing.T) {
 	if IsAlive(999999) {
 		t.Error("IsAlive should return false for nonexistent pgid")
 	}
 }
 
-func TestStartTime_Running(t *testing.T) {
+func TestProcess_StartTimeRunning(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "starttime.log")
 
@@ -250,7 +250,7 @@ func TestStartTime_Running(t *testing.T) {
 	_ = Terminate(pgid, startTime, 2*time.Second)
 }
 
-func TestTerminate_InvalidPGID(t *testing.T) {
+func TestProcess_TerminateInvalidPGID(t *testing.T) {
 	err := Terminate(0, 0, 100*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "invalid pgid") {
 		t.Errorf("Terminate(0) = %v, want invalid pgid error", err)
@@ -261,7 +261,7 @@ func TestTerminate_InvalidPGID(t *testing.T) {
 	}
 }
 
-func TestIsAlive_InvalidPGID(t *testing.T) {
+func TestProcess_IsAliveInvalidPGID(t *testing.T) {
 	if IsAlive(0) {
 		t.Error("IsAlive(0) should be false")
 	}
@@ -270,7 +270,7 @@ func TestIsAlive_InvalidPGID(t *testing.T) {
 	}
 }
 
-func TestTerminate_SurvivorLeak(t *testing.T) {
+func TestProcess_TerminateSurvivorLeak(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "survivor.log")
 
@@ -306,7 +306,7 @@ func TestTerminate_SurvivorLeak(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 }
 
-func TestTerminate_SIGKILLPath(t *testing.T) {
+func TestProcess_TerminateSIGKILLPath(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "sigkill.log")
 
@@ -339,7 +339,7 @@ func TestTerminate_SIGKILLPath(t *testing.T) {
 	}
 }
 
-func TestStartTime_Dead(t *testing.T) {
+func TestProcess_StartTimeDead(t *testing.T) {
 	if got := StartTime(999999); got != 0 {
 		t.Errorf("StartTime(999999) = %d, want 0", got)
 	}

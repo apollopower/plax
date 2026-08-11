@@ -301,7 +301,7 @@ func assertNoResidue(t *testing.T, deps *Deps, name string) {
 
 // --- tests ---
 
-func TestUp_Success(t *testing.T) {
+func TestInstance_UpSuccess(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
@@ -372,7 +372,7 @@ func TestUp_Success(t *testing.T) {
 	}
 }
 
-func TestUp_DuplicateName(t *testing.T) {
+func TestInstance_UpDuplicateName(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
@@ -384,7 +384,7 @@ func TestUp_DuplicateName(t *testing.T) {
 	}
 }
 
-func TestUp_HyphenNameRejected(t *testing.T) {
+func TestInstance_UpHyphenNameRejected(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
 	err := Up(context.Background(), deps, "foo-bar")
@@ -394,7 +394,7 @@ func TestUp_HyphenNameRejected(t *testing.T) {
 	assertNoResidue(t, deps, "foo-bar")
 }
 
-func TestUp_InvalidBlueprint_NoSideEffects(t *testing.T) {
+func TestInstance_UpInvalidBlueprintNoSideEffects(t *testing.T) {
 	bp := testBlueprint()
 	bp.Processes = append(bp.Processes, blueprint.ProcessDef{
 		Name: "app", Isolation: blueprint.IsolationNative, Command: "sleep 60", Workdir: ".",
@@ -413,7 +413,7 @@ func TestUp_InvalidBlueprint_NoSideEffects(t *testing.T) {
 	}
 }
 
-func TestUp_RollbackOnCloneFailure(t *testing.T) {
+func TestInstance_UpRollbackOnCloneFailure(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 	bm.cloneFunc = func(context.Context, string) error {
 		return errors.New("boom")
@@ -433,7 +433,7 @@ func TestUp_RollbackOnCloneFailure(t *testing.T) {
 	}
 }
 
-func TestUp_RollbackOnImmediateExit(t *testing.T) {
+func TestInstance_UpRollbackOnImmediateExit(t *testing.T) {
 	bp := testBlueprint()
 	bp.Processes[0].Command = "exit 1"
 
@@ -466,7 +466,7 @@ func bmDropped(deps *Deps, t *testing.T) []string {
 	return f.droppedDBs()
 }
 
-func TestUp_RollbackOnCancel(t *testing.T) {
+func TestInstance_UpRollbackOnCancel(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 
 	cloneEntered := make(chan struct{})
@@ -499,7 +499,7 @@ func TestUp_RollbackOnCancel(t *testing.T) {
 	assertNoResidue(t, deps, "i1")
 }
 
-func TestUp_ConcurrentPartialFailure(t *testing.T) {
+func TestInstance_UpConcurrentPartialFailure(t *testing.T) {
 	bp := testBlueprint()
 	bp.Services["redis2"] = blueprint.ServiceDef{
 		Isolation: blueprint.IsolationDedicated,
@@ -528,7 +528,7 @@ func TestUp_ConcurrentPartialFailure(t *testing.T) {
 	}
 }
 
-func TestDown_Success(t *testing.T) {
+func TestInstance_DownSuccess(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 
 	if err := Up(context.Background(), deps, "i1"); err != nil {
@@ -553,7 +553,7 @@ func TestDown_Success(t *testing.T) {
 	}
 }
 
-func TestDown_StopFailure_StillRemoves(t *testing.T) {
+func TestInstance_DownStopFailureStillRemoves(t *testing.T) {
 	deps, _, drv := testDeps(t, testBlueprint())
 
 	if err := Up(context.Background(), deps, "i1"); err != nil {
@@ -575,7 +575,7 @@ func TestDown_StopFailure_StillRemoves(t *testing.T) {
 	assertNoResidue(t, deps, "i1")
 }
 
-func TestDown_NotFound(t *testing.T) {
+func TestInstance_DownNotFound(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
 	if err := Down(context.Background(), deps, "nope"); err == nil {
@@ -583,7 +583,7 @@ func TestDown_NotFound(t *testing.T) {
 	}
 }
 
-func TestDown_MissingWorktree_BranchDeleted(t *testing.T) {
+func TestInstance_DownMissingWorktreeBranchDeleted(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
@@ -613,7 +613,7 @@ func TestDown_MissingWorktree_BranchDeleted(t *testing.T) {
 	}
 }
 
-func TestDown_NilBackends_StillCleans(t *testing.T) {
+func TestInstance_DownNilBackendsStillCleans(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
 	if err := Up(context.Background(), deps, "i1"); err != nil {
@@ -643,7 +643,7 @@ func TestDown_NilBackends_StillCleans(t *testing.T) {
 	}
 }
 
-func TestUp_MultipleDatabases(t *testing.T) {
+func TestInstance_UpMultipleDatabases(t *testing.T) {
 	bp := testBlueprint()
 	bp.Services["db"] = blueprint.ServiceDef{
 		Isolation: blueprint.IsolationLogical,
@@ -695,7 +695,7 @@ func TestUp_MultipleDatabases(t *testing.T) {
 	}
 }
 
-func TestDown_MultipleDatabases(t *testing.T) {
+func TestInstance_DownMultipleDatabases(t *testing.T) {
 	bp := testBlueprint()
 	bp.Services["db"] = blueprint.ServiceDef{
 		Isolation: blueprint.IsolationLogical,
@@ -736,7 +736,7 @@ func TestDown_MultipleDatabases(t *testing.T) {
 	}
 }
 
-func TestDown_OldRecord_NoDBNames(t *testing.T) {
+func TestInstance_DownOldRecordNoDBNames(t *testing.T) {
 	deps, bm, _ := testDeps(t, testBlueprint())
 
 	if err := deps.Registry.AddInstance("legacy", registry.InstanceRecord{
@@ -766,7 +766,7 @@ func TestDown_OldRecord_NoDBNames(t *testing.T) {
 	}
 }
 
-func TestUp_BackwardCompatible(t *testing.T) {
+func TestInstance_UpBackwardCompatible(t *testing.T) {
 	deps, bm, _ := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
@@ -798,7 +798,7 @@ func TestUp_BackwardCompatible(t *testing.T) {
 	}
 }
 
-func TestUp_WithRef(t *testing.T) {
+func TestInstance_UpWithRef(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
@@ -845,7 +845,7 @@ func TestUp_WithRef(t *testing.T) {
 	}
 }
 
-func TestUp_WithoutRef(t *testing.T) {
+func TestInstance_UpWithoutRef(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
@@ -872,7 +872,7 @@ func TestUp_WithoutRef(t *testing.T) {
 	}
 }
 
-func TestDown_StalePGID_NotSignaled(t *testing.T) {
+func TestInstance_DownStalePGIDNotSignaled(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 

@@ -6,11 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
-func TestInit_SampleRepo_GoldenMatch(t *testing.T) {
+func TestBlueprint_InitSampleRepoGoldenMatch(t *testing.T) {
 	root := "testdata/sample"
-	bp, err := InitFromRepo(root)
+	bp, _, err := InitFromRepo(root)
 	if err != nil {
 		t.Fatalf("InitFromRepo: %v", err)
 	}
@@ -25,14 +27,14 @@ func TestInit_SampleRepo_GoldenMatch(t *testing.T) {
 		t.Fatalf("read golden: %v", err)
 	}
 
-	if string(got) != string(golden) {
-		t.Errorf("output does not match golden file\n--- got:\n%s\n--- golden:\n%s", string(got), string(golden))
+	if diff := cmp.Diff(string(golden), string(got)); diff != "" {
+		t.Errorf("output does not match golden file (-want +got):\n%s", diff)
 	}
 }
 
-func TestInit_MissingCompose(t *testing.T) {
+func TestBlueprint_InitMissingCompose(t *testing.T) {
 	root := t.TempDir()
-	_, err := InitFromRepo(root)
+	_, _, err := InitFromRepo(root)
 	if err == nil {
 		t.Fatal("expected error for missing compose")
 	}
@@ -41,14 +43,14 @@ func TestInit_MissingCompose(t *testing.T) {
 	}
 }
 
-func TestInit_MissingEnvExample(t *testing.T) {
+func TestBlueprint_InitMissingEnvExample(t *testing.T) {
 	root := t.TempDir()
 	composePath := filepath.Join(root, "docker-compose.yml")
 	if err := os.WriteFile(composePath, []byte("version: '3'\nservices:\n  web:\n    image: nginx\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	bp, err := InitFromRepo(root)
+	bp, _, err := InitFromRepo(root)
 	if err != nil {
 		t.Fatalf("InitFromRepo: %v", err)
 	}
@@ -57,7 +59,7 @@ func TestInit_MissingEnvExample(t *testing.T) {
 	}
 }
 
-func TestInit_ComposeWithNoImage(t *testing.T) {
+func TestBlueprint_InitComposeWithNoImage(t *testing.T) {
 	root := t.TempDir()
 	composePath := filepath.Join(root, "docker-compose.yml")
 	if err := os.WriteFile(composePath, []byte("version: '3'\nservices:\n  noimg:\n    ports:\n      - '3000:3000'\n"), 0644); err != nil {
@@ -68,7 +70,7 @@ func TestInit_ComposeWithNoImage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bp, err := InitFromRepo(root)
+	bp, _, err := InitFromRepo(root)
 	if err != nil {
 		t.Fatalf("InitFromRepo: %v", err)
 	}
@@ -77,7 +79,7 @@ func TestInit_ComposeWithNoImage(t *testing.T) {
 	}
 }
 
-func TestInit_ComposePortsBareNumber(t *testing.T) {
+func TestBlueprint_InitComposePortsBareNumber(t *testing.T) {
 	root := t.TempDir()
 	composeContent := `version: '3'
 services:
@@ -93,7 +95,7 @@ services:
 		t.Fatal(err)
 	}
 
-	bp, err := InitFromRepo(root)
+	bp, _, err := InitFromRepo(root)
 	if err != nil {
 		t.Fatalf("InitFromRepo: %v", err)
 	}
@@ -116,7 +118,7 @@ services:
 	}
 }
 
-func TestInit_ComposePortsEnvVarDefault(t *testing.T) {
+func TestBlueprint_InitComposePortsEnvVarDefault(t *testing.T) {
 	root := t.TempDir()
 	composeContent := `version: '3'
 services:
@@ -132,7 +134,7 @@ services:
 		t.Fatal(err)
 	}
 
-	bp, err := InitFromRepo(root)
+	bp, _, err := InitFromRepo(root)
 	if err != nil {
 		t.Fatalf("InitFromRepo: %v", err)
 	}
@@ -153,7 +155,7 @@ services:
 	}
 }
 
-func TestInit_PostgresService_NotInPortMap(t *testing.T) {
+func TestBlueprint_InitPostgresServiceNotInPortMap(t *testing.T) {
 	root := t.TempDir()
 	composeContent := `version: '3'
 services:
@@ -169,7 +171,7 @@ services:
 		t.Fatal(err)
 	}
 
-	bp, err := InitFromRepo(root)
+	bp, _, err := InitFromRepo(root)
 	if err != nil {
 		t.Fatalf("InitFromRepo: %v", err)
 	}
@@ -182,7 +184,7 @@ services:
 	}
 }
 
-func TestInit_PostgresPort_NotHole(t *testing.T) {
+func TestBlueprint_InitPostgresPortNotHole(t *testing.T) {
 	root := t.TempDir()
 	composeContent := `version: '3'
 services:
@@ -198,7 +200,7 @@ services:
 		t.Fatal(err)
 	}
 
-	bp, err := InitFromRepo(root)
+	bp, _, err := InitFromRepo(root)
 	if err != nil {
 		t.Fatalf("InitFromRepo: %v", err)
 	}
@@ -207,9 +209,9 @@ services:
 	}
 }
 
-func TestInit_SampleRepo_PassesValidation(t *testing.T) {
+func TestBlueprint_InitSampleRepoPassesValidation(t *testing.T) {
 	root := "testdata/sample"
-	bp, err := InitFromRepo(root)
+	bp, _, err := InitFromRepo(root)
 	if err != nil {
 		t.Fatalf("InitFromRepo: %v", err)
 	}

@@ -42,7 +42,11 @@ func ValidateStructural(bp *Blueprint) []error {
 		IsolationExternal:  true,
 	}
 
-	usedPortVars := map[string]string{}
+	type portVarClaim struct {
+		kind string
+		name string
+	}
+	usedPortVars := map[string]portVarClaim{}
 	dockerNames := map[string]string{}
 	for svcName, svc := range bp.Services {
 		if !validServiceIsolations[svc.Isolation] {
@@ -94,9 +98,9 @@ func ValidateStructural(bp *Blueprint) []error {
 				continue
 			}
 			if prev, ok := usedPortVars[pd.Var]; ok {
-				errs = append(errs, fmt.Errorf("blueprint: port var %q used by services %q and %q", pd.Var, prev, svcName))
+				errs = append(errs, fmt.Errorf("blueprint: port var %q collides: %s %q and service %q", pd.Var, prev.kind, prev.name, svcName))
 			} else {
-				usedPortVars[pd.Var] = svcName
+				usedPortVars[pd.Var] = portVarClaim{kind: "service", name: svcName}
 			}
 		}
 	}
@@ -119,9 +123,9 @@ func ValidateStructural(bp *Blueprint) []error {
 	for _, proc := range bp.Processes {
 		if proc.PortVar != "" {
 			if prev, ok := usedPortVars[proc.PortVar]; ok {
-				errs = append(errs, fmt.Errorf("blueprint: port var %q collides with service %q port var", proc.PortVar, prev))
+				errs = append(errs, fmt.Errorf("blueprint: port var %q collides: %s %q and process %q", proc.PortVar, prev.kind, prev.name, proc.Name))
 			}
-			usedPortVars[proc.PortVar] = proc.Name
+			usedPortVars[proc.PortVar] = portVarClaim{kind: "process", name: proc.Name}
 		}
 		for _, dep := range proc.DependsOn {
 			if !procNames[dep] {
