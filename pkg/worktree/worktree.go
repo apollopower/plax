@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -27,10 +28,13 @@ func BranchExists(repoRoot, name string) bool {
 	return cmd.Run() == nil
 }
 
-// Create creates a git branch (plax/<name>) at current HEAD and adds a
-// worktree at .plax/worktrees/<name>. Returns the absolute worktree path.
-// Fails if the branch already exists.
-func Create(repoRoot, name string) (string, error) {
+// Create creates a git branch (plax/<name>) and adds a worktree at
+// .plax/worktrees/<name>. Returns the absolute worktree path.
+//
+// If sourceRef is empty, branches from the repo root's current HEAD
+// (existing behaviour). Otherwise, branches from the resolved commit
+// of sourceRef (which should already be resolved by ResolveRef).
+func Create(repoRoot, name, sourceRef string) (string, error) {
 	branch := BranchName(name)
 	relPath := WorktreeRelPath(name)
 	absPath := filepath.Join(repoRoot, relPath)
@@ -43,7 +47,12 @@ func Create(repoRoot, name string) (string, error) {
 		return "", fmt.Errorf("worktree: mkdir: %w", err)
 	}
 
-	cmd := exec.Command("git", "branch", branch)
+	var cmd *exec.Cmd
+	if sourceRef == "" {
+		cmd = exec.Command("git", "branch", branch)
+	} else {
+		cmd = exec.Command("git", "branch", branch, sourceRef)
+	}
 	cmd.Dir = repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("worktree: create branch %s: %s", branch, strings.TrimSpace(string(out)))
@@ -52,7 +61,6 @@ func Create(repoRoot, name string) (string, error) {
 	cmd = exec.Command("git", "worktree", "add", relPath, branch)
 	cmd.Dir = repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
-		// Clean up the branch we just created.
 		cleanup := exec.Command("git", "branch", "-D", branch)
 		cleanup.Dir = repoRoot
 		_ = cleanup.Run()
@@ -60,6 +68,62 @@ func Create(repoRoot, name string) (string, error) {
 	}
 
 	return absPath, nil
+}
+
+// ResolveRef resolves a user-supplied ref string to a git ref that can be
+// passed to `git branch <name> <ref>`.
+//
+//	""                   → "" (caller uses repo-root HEAD)
+//	"123" or "pr/123"    → "refs/pull/123/head" (fetched if needed)
+//	"refs/..."           → verified as-is
+//	branch/tag/SHA       → verified via git rev-parse --verify
+func ResolveRef(repoRoot, ref string) (string, error) {
+	// Step 1: empty string — caller uses repo-root HEAD.
+	if ref == "" {
+		return "", nil
+	}
+
+	// PR number (bare integer or pr/N).
+	n := strings.TrimPrefix(ref, "pr/")
+	isPR := strings.HasPrefix(ref, "pr/")
+	if !isPR {
+		// Check if the entire ref is a bare integer.
+		if _, err := strconv.Atoi(ref); err == nil {
+			isPR = true
+			n = ref
+		}
+	}
+	if isPR {
+		if _, err := strconv.Atoi(n); err != nil {
+			return "", fmt.Errorf("--ref %q: expecting a PR number, got %q", ref, n)
+		}
+		fetchRef := "refs/pull/" + n + "/head"
+		if !RefExists(repoRoot, fetchRef) {
+			cmd := exec.Command("git", "fetch", "origin", fetchRef+":"+fetchRef)
+			cmd.Dir = repoRoot
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return "", fmt.Errorf("cannot fetch PR #%s — does the remote have a PR with that number? Try 'gh pr view %s' to confirm: %s", n, n, strings.TrimSpace(string(out)))
+			}
+		}
+		return fetchRef, nil
+	}
+
+	// Explicit refs/ prefix.
+	if strings.HasPrefix(ref, "refs/") {
+		if !RefExists(repoRoot, ref) {
+			return "", fmt.Errorf("ref %q not found", ref)
+		}
+		return ref, nil
+	}
+
+	// Branch, tag, or short SHA.
+	if RefExists(repoRoot, ref) {
+		return ref, nil
+	}
+	if RefExists(repoRoot, "origin/"+ref) {
+		return "origin/" + ref, nil
+	}
+	return "", fmt.Errorf("ref %q not found — check the branch name or run 'git fetch'", ref)
 }
 
 // Remove removes the worktree and force-deletes the branch.

@@ -80,8 +80,12 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	}()
 
 	// Step 1: Create branch and worktree.
-	fmt.Fprintf(os.Stderr, "creating branch and worktree...\n")
-	worktreePath, err := worktree.Create(deps.RepoRoot, name)
+	if deps.SourceRef != "" {
+		fmt.Fprintf(os.Stderr, "creating branch and worktree from %s...\n", deps.SourceRef)
+	} else {
+		fmt.Fprintf(os.Stderr, "creating branch and worktree...\n")
+	}
+	worktreePath, err := worktree.Create(deps.RepoRoot, name, deps.ResolvedRef)
 	if err != nil {
 		return err
 	}
@@ -320,6 +324,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		PIDStarts:    pidStarts,
 		BaseRef:      baseRef,
 		BaseCommit:   baseCommit,
+		SourceRef:    deps.SourceRef,
 		Provenance: registry.Provenance{
 			BaseVersion:  baseInfo.ProvenanceVer,
 			Toolchain:    toolchainHash,

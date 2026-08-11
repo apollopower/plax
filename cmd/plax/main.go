@@ -27,6 +27,7 @@ import (
 	"github.com/apollopower/plax/pkg/portpool"
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/status"
+	"github.com/apollopower/plax/pkg/worktree"
 )
 
 type CLI struct {
@@ -88,6 +89,7 @@ type UpCmd struct {
 	Name  string `arg:"" help:"Instance name (e.g. i1)"`
 	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
+	Ref   string `name:"ref" short:"R" optional:"" help:"Branch, PR number, tag, or commit SHA to branch from (default: current HEAD)"`
 }
 
 type DownCmd struct {
@@ -386,6 +388,16 @@ func runUp(cmd UpCmd) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	absRoot, err := filepath.Abs(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("resolving repo root: %w", err)
+	}
+
+	resolvedRef, err := worktree.ResolveRef(absRoot, cmd.Ref)
+	if err != nil {
+		return err
+	}
+
 	deps, err := buildDeps(ctx, cmd.Root, cmd.PgURL)
 	if err != nil {
 		return err
@@ -395,6 +407,9 @@ func runUp(cmd UpCmd) error {
 	printStampNotice(cmd.Root, deps.Blueprint, deps.Registry)
 
 	deps.Registry.BlueprintStamp = computeStamp(cmd.Root, deps.Blueprint)
+
+	deps.SourceRef = cmd.Ref
+	deps.ResolvedRef = resolvedRef
 
 	return instance.Up(ctx, deps.Deps, cmd.Name)
 }

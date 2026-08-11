@@ -50,6 +50,7 @@ type InstanceRecord struct {
 	Provenance Provenance       `json:"provenance"`
 	BaseRef    string           `json:"base_ref,omitempty"`
 	BaseCommit string           `json:"base_commit,omitempty"`
+	SourceRef  string           `json:"source_ref,omitempty"`
 }
 
 type PortAllocation struct {

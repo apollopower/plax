@@ -60,7 +60,7 @@ func initStatusRepo(t *testing.T) (repoRoot string, bp *blueprint.Blueprint, reg
 	run("git", "add", ".")
 	run("git", "commit", "-m", "init")
 
-	wtPath, err := worktree.Create(dir, "i1")
+	wtPath, err := worktree.Create(dir, "i1", "")
 	if err != nil {
 		t.Fatalf("create worktree: %v", err)
 	}

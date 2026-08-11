@@ -55,6 +55,14 @@ type Deps struct {
 	BM        BaseManager
 	Docker    DockerDriver
 	RepoRoot  string // absolute path to the repo root
+
+	// SourceRef is the original --ref value the user passed (empty if none).
+	// Stored in the registry record for provenance.
+	SourceRef string
+
+	// ResolvedRef is the git ref to branch from (resolved from SourceRef by
+	// worktree.ResolveRef). Empty means branch from repo-root HEAD.
+	ResolvedRef string
 }
 
 // Instance names are embedded in Postgres database names as unquoted
