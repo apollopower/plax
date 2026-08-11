@@ -66,15 +66,13 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 		ch := make(chan svcResult, len(rec.ContainerIDs))
 		for svcName, cid := range rec.ContainerIDs {
 			go func(name, cid string) {
-				if err := deps.Docker.StopService(ctx, cid); err != nil {
-					ch <- svcResult{name, err}
+				stopErr := deps.Docker.StopService(ctx, cid)
+				rmErr := deps.Docker.RemoveService(ctx, cid)
+				if stopErr != nil {
+					ch <- svcResult{name, stopErr}
 					return
 				}
-				if err := deps.Docker.RemoveService(ctx, cid); err != nil {
-					ch <- svcResult{name, err}
-					return
-				}
-				ch <- svcResult{name, nil}
+				ch <- svcResult{name, rmErr}
 			}(svcName, cid)
 		}
 		for range rec.ContainerIDs {

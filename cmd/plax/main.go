@@ -623,6 +623,9 @@ func (d *cliDeps) Close() {
 	if d.Registry != nil {
 		d.Registry.Close()
 	}
+	if d.Pool != nil {
+		d.Pool.Close()
+	}
 	if d.bm != nil {
 		d.bm.Close()
 	}
@@ -671,15 +674,17 @@ func buildDeps(ctx context.Context, root, pgURL string) (*cliDeps, error) {
 		return nil, fmt.Errorf("portpool: %w", err)
 	}
 
+	deps, err := instance.NewUpDeps(bp, reg, pool, bm, drv, absRoot)
+	if err != nil {
+		pool.Close()
+		bm.Close()
+		_ = drv.Close()
+		reg.Close()
+		return nil, err
+	}
+
 	return &cliDeps{
-		Deps: &instance.Deps{
-			Blueprint: bp,
-			Registry:  reg,
-			Pool:      pool,
-			BM:        bm,
-			Docker:    drv,
-			RepoRoot:  absRoot,
-		},
+		Deps:   deps,
 		bm:     bm,
 		docker: drv,
 	}, nil
