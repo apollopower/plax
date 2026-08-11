@@ -22,7 +22,7 @@ func lockFile(path string, shared bool) (*fileLock, error) {
 		how = syscall.LOCK_SH
 	}
 	if err := syscall.Flock(int(f.Fd()), how); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("registry: acquire lock: %w", err)
 	}
 	return &fileLock{f: f}, nil
@@ -33,5 +33,5 @@ func unlockFile(l *fileLock) {
 		return
 	}
 	_ = syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
-	l.f.Close()
+	_ = l.f.Close()
 }
