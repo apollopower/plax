@@ -357,20 +357,20 @@ No new commands or flags. All changes are internal to existing packages.
 
 ## Acceptance criteria
 
-- [ ] `Terminate` returns `ErrGroupSurvivors` when leader dies but children survive
-- [ ] `Terminate` with `pgid <= 0` returns error without sending signals
-- [ ] Mailbox `Send` + concurrent `Recv` never produces torn reads
-- [ ] All Docker error classification uses `errdefs`, zero `strings.Contains` on error text
-- [ ] `dsnForDB` handles DSNs with slashes in query parameters
-- [ ] `InstanceProvenance` returns error on connection failure
-- [ ] `MatchesPin` returns `PinMatchUnverifiable` for `lts`/`latest`
-- [ ] Doctor reports Warn (not Fail) for non-semver pins
-- [ ] `SchemaFilesAtRef` propagates git errors
-- [ ] `codeDrift` always shows computed `behind` count
-- [ ] `Open` rejects registry files with unknown version
-- [ ] `InstanceRecord.State` uses typed constants throughout
-- [ ] All existing tests continue to pass
-- [ ] `go vet ./...` and `golangci-lint run` report no issues
+- [x] `Terminate` returns `ErrGroupSurvivors` when leader dies but children survive
+- [x] `Terminate` with `pgid <= 0` returns error without sending signals
+- [x] Mailbox `Send` + concurrent `Recv` never produces torn reads
+- [x] All Docker error classification uses `errdefs`, zero `strings.Contains` on error text
+- [x] `dsnForDB` handles DSNs with slashes in query parameters
+- [x] `InstanceProvenance` returns error on connection failure
+- [x] `MatchesPin` returns `PinMatchUnverifiable` for `lts`/`latest`
+- [x] Doctor reports Warn (not Fail) for non-semver pins
+- [x] `SchemaFilesAtRef` propagates git errors
+- [x] `codeDrift` always shows computed `behind` count
+- [x] `Open` rejects registry files with unknown version
+- [x] `InstanceRecord.State` uses typed constants throughout
+- [x] All existing tests continue to pass
+- [x] `go vet ./...` and `golangci-lint run` report no issues
 
 ---
 

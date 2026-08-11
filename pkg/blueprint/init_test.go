@@ -217,6 +217,8 @@ func TestBlueprint_InitSampleRepoPassesValidation(t *testing.T) {
 	}
 
 	bp.Env.Template = filepath.Join(root, bp.Env.Template)
+	bp.Seed.Migrate = "bun run db migrate"
+	bp.Seed.Command = "bun run db fixtures"
 
 	errs := ValidateBlueprint(bp)
 	if len(errs) > 0 {

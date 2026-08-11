@@ -391,19 +391,19 @@ No new commands or flags. All changes are internal.
 
 ## Acceptance criteria
 
-- [ ] All exported types in `pkg/blueprint` have doc comments
-- [ ] All exported functions in `pkg/toolchain` have doc comments
-- [ ] All exported functions in `pkg/mailbox` have doc comments
-- [ ] `Suspend` and `Resume` have doc comments
-- [ ] No `pkg/` package writes to `os.Stderr` (except `testutil`)
-- [ ] No dead code remains (`Reserve`, `sortedKeys`, `splitEnv`, `containsStr`, `deriveConnString`, `Dimension.Name`)
-- [ ] All test names follow `Test<Package>_<Behavior>` convention
-- [ ] `validate_test.go` uses per-test constructors
-- [ ] Golden file comparison uses `go-cmp`
-- [ ] `up.go` step numbering is sequential
-- [ ] `errors.Is` used consistently for errno checks
-- [ ] All existing tests continue to pass
-- [ ] `go vet ./...` and `golangci-lint run` report no issues
+- [x] All exported types in `pkg/blueprint` have doc comments
+- [x] All exported functions in `pkg/toolchain` have doc comments
+- [x] All exported functions in `pkg/mailbox` have doc comments
+- [x] `Suspend` and `Resume` have doc comments
+- [x] No `pkg/` package writes to `os.Stderr` (except `testutil`)
+- [x] No dead code remains (`Reserve`, `sortedKeys`, `splitEnv`, `containsStr`, `deriveConnString`, `Dimension.Name`)
+- [x] All test names follow `Test<Package>_<Behavior>` convention
+- [x] `validate_test.go` uses per-test constructors
+- [x] Golden file comparison uses `go-cmp`
+- [x] `up.go` step numbering is sequential
+- [x] `errors.Is` used consistently for errno checks
+- [x] All existing tests continue to pass
+- [x] `go vet ./...` and `golangci-lint run` report no issues
 
 ---
 

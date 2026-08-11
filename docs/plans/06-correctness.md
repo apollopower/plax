@@ -238,14 +238,14 @@ No new commands or flags. All changes are internal to existing commands.
 
 ## Acceptance criteria
 
-- [ ] `plax init` in a repo root produces a blueprint whose `name` matches the directory base name
-- [ ] `plax init` with a compose file containing `"8080:80"` produces a `PortDef` with `Default: "8080"`
-- [ ] Seed command runs against the correct database when parent has `DATABASE_URL` set
-- [ ] `terminateConnections` with a quote-containing database name succeeds
-- [ ] `plax doctor --json` exits 1 when any check fails
-- [ ] `plax init` + hand-edited `plax.json` with `"isolation": "dedicatd"` → `plax doctor` reports validation error
-- [ ] All existing tests continue to pass
-- [ ] `go vet ./...` and `golangci-lint run` report no issues
+- [x] `plax init` in a repo root produces a blueprint whose `name` matches the directory base name
+- [x] `plax init` with a compose file containing `"8080:80"` produces a `PortDef` with `Default: "8080"`
+- [x] Seed command runs against the correct database when parent has `DATABASE_URL` set
+- [x] `terminateConnections` with a quote-containing database name succeeds
+- [x] `plax doctor --json` exits 1 when any check fails
+- [x] `plax init` + hand-edited `plax.json` with `"isolation": "dedicatd"` → `plax doctor` reports validation error
+- [x] All existing tests continue to pass
+- [x] `go vet ./...` and `golangci-lint run` report no issues
 
 ---
 

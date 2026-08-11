@@ -7,8 +7,8 @@
   },
   "toolchain": ".tool-versions",
   "seed": {
-    "migrate": "TODO: add migrate command, e.g. 'bun run db migrate'",
-    "command": "TODO: add seed command, e.g. 'bun run db fixtures'",
+    "migrate": "",
+    "command": "",
     "workdir": "."
   },
   "services": {
