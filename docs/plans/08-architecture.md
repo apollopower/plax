@@ -350,17 +350,17 @@ No new commands or flags. The `main.go` refactor is internal only.
 
 ## Acceptance criteria
 
-- [ ] `go test -race` passes with 20 concurrent port allocations
-- [ ] Two concurrent `plax up` commands do not corrupt the registry
-- [ ] Container starts are concurrent (measurable: 3 containers start in ~1x single-container time, not 3x)
-- [ ] Process starts are concurrent
-- [ ] `main.go` contains no business logic (only routing, formatting, error display)
-- [ ] `pkg/stamp` is the single source of stamp computation
-- [ ] `doctor.go` imports `pkg/stamp` instead of duplicating logic
-- [ ] `DeriveMerged` writes atomically
-- [ ] `Deps` constructors validate required fields
-- [ ] All existing tests continue to pass
-- [ ] `go vet ./...` and `golangci-lint run` report no issues
+- [x] `go test -race` passes with 20 concurrent port allocations
+- [x] Two concurrent `plax up` commands do not corrupt the registry (file locking on Open/Save)
+- [x] Container starts are concurrent (channel-based fan-out in up.go, resume.go)
+- [x] Process starts are concurrent (channel-based fan-out in up.go, resume.go)
+- [x] `main.go` contains no business logic (only routing, formatting, error display)
+- [x] `pkg/stamp` is the single source of stamp computation
+- [x] `doctor.go` imports `pkg/stamp` instead of duplicating logic
+- [x] `DeriveMerged` writes atomically (temp file + rename)
+- [x] `Deps` constructors validate required fields
+- [x] All existing tests continue to pass
+- [x] `go vet ./...` and `golangci-lint run` report no issues
 
 ---
 

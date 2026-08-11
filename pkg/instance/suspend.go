@@ -22,24 +22,47 @@ func Suspend(ctx context.Context, deps *Deps, name string) error {
 		return nil
 	}
 
-	for procName, pgid := range rec.PIDs {
-		fmt.Fprintf(os.Stderr, "stopping %s...\n", procName)
-		err := process.Terminate(pgid, rec.PIDStarts[procName], 5*time.Second)
-		switch {
-		case errors.Is(err, process.ErrStaleProcess):
-			fmt.Fprintf(os.Stderr, "note: %s already gone (pgid %d reused by another process)\n", procName, pgid)
-		case errors.Is(err, process.ErrGroupSurvivors):
-			fmt.Fprintf(os.Stderr, "warning: %s process leader died but children survived (pgid %d) — suspend continuing\n", procName, pgid)
-		case err != nil:
-			fmt.Fprintf(os.Stderr, "warning: terminate %s (pgid %d): %v\n", procName, pgid, err)
+	{
+		type procResult struct {
+			name string
+			err  error
+		}
+		ch := make(chan procResult, len(rec.PIDs))
+		for procName, pgid := range rec.PIDs {
+			go func(name string, pgid int) {
+				err := process.Terminate(pgid, rec.PIDStarts[name], 5*time.Second)
+				ch <- procResult{name, err}
+			}(procName, pgid)
+		}
+		for range rec.PIDs {
+			r := <-ch
+			switch {
+			case errors.Is(r.err, process.ErrStaleProcess):
+				fmt.Fprintf(os.Stderr, "note: %s already gone (pgid %d reused by another process)\n", r.name, rec.PIDs[r.name])
+			case errors.Is(r.err, process.ErrGroupSurvivors):
+				fmt.Fprintf(os.Stderr, "warning: %s process leader died but children survived (pgid %d) — suspend continuing\n", r.name, rec.PIDs[r.name])
+			case r.err != nil:
+				fmt.Fprintf(os.Stderr, "warning: terminate %s (pgid %d): %v\n", r.name, rec.PIDs[r.name], r.err)
+			}
 		}
 	}
 
 	if deps.Docker != nil {
+		type svcResult struct {
+			name string
+			err  error
+		}
+		ch := make(chan svcResult, len(rec.ContainerIDs))
 		for svcName, cid := range rec.ContainerIDs {
-			fmt.Fprintf(os.Stderr, "stopping %s...\n", svcName)
-			if err := deps.Docker.StopService(ctx, cid); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: stop %s: %v\n", svcName, err)
+			go func(name, cid string) {
+				err := deps.Docker.StopService(ctx, cid)
+				ch <- svcResult{name, err}
+			}(svcName, cid)
+		}
+		for range rec.ContainerIDs {
+			r := <-ch
+			if r.err != nil {
+				fmt.Fprintf(os.Stderr, "warning: stop %s: %v\n", r.name, r.err)
 			}
 		}
 	} else if len(rec.ContainerIDs) > 0 {

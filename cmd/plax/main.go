@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +25,7 @@ import (
 	"github.com/apollopower/plax/pkg/mailbox"
 	"github.com/apollopower/plax/pkg/portpool"
 	"github.com/apollopower/plax/pkg/registry"
+	"github.com/apollopower/plax/pkg/stamp"
 	"github.com/apollopower/plax/pkg/status"
 	"github.com/apollopower/plax/pkg/worktree"
 )
@@ -406,7 +406,7 @@ func runUp(cmd UpCmd) error {
 
 	printStampNotice(cmd.Root, deps.Blueprint, deps.Registry)
 
-	deps.Registry.BlueprintStamp = computeStamp(cmd.Root, deps.Blueprint)
+	deps.Registry.BlueprintStamp = stamp.Compute(cmd.Root, deps.Blueprint)
 
 	deps.SourceRef = cmd.Ref
 	deps.ResolvedRef = resolvedRef
@@ -425,6 +425,7 @@ func runDown(cmd DownCmd) error {
 	if err != nil {
 		return err
 	}
+	defer reg.Close()
 	absRoot, err := filepath.Abs(cmd.Root)
 	if err != nil {
 		return fmt.Errorf("resolving repo root: %w", err)
@@ -457,6 +458,7 @@ func runLs(cmd LsCmd) error {
 	if err != nil {
 		return err
 	}
+	defer reg.Close()
 
 	bp, _ := loadBlueprint(cmd.Root)
 	printStampNotice(cmd.Root, bp, reg)
@@ -500,6 +502,7 @@ func runAttach(cmd AttachCmd) error {
 	if err != nil {
 		return err
 	}
+	defer reg.Close()
 
 	rec, found := reg.GetInstance(cmd.Name)
 	if !found {
@@ -519,7 +522,7 @@ func runAttach(cmd AttachCmd) error {
 
 	absRoot, _ := filepath.Abs(cmd.Root)
 	if bp != nil {
-		currentStamp := computeStamp(cmd.Root, bp)
+		currentStamp := stamp.Compute(cmd.Root, bp)
 		sdeps := &status.Deps{
 			Blueprint:    bp,
 			Registry:     reg,
@@ -578,6 +581,7 @@ func runExec(cmd ExecCmd) error {
 	if err != nil {
 		return err
 	}
+	defer reg.Close()
 
 	rec, found := reg.GetInstance(cmd.Name)
 	if !found {
@@ -617,6 +621,9 @@ type cliDeps struct {
 }
 
 func (d *cliDeps) Close() {
+	if d.Registry != nil {
+		d.Registry.Close()
+	}
 	if d.bm != nil {
 		d.bm.Close()
 	}
@@ -654,7 +661,12 @@ func buildDeps(ctx context.Context, root, pgURL string) (*cliDeps, error) {
 		return nil, err
 	}
 
-	pool := portpool.New(bp.PortPool.Start, bp.PortPool.End, reg)
+	pool, err := portpool.New(bp.PortPool.Start, bp.PortPool.End, reg)
+	if err != nil {
+		bm.Close()
+		_ = drv.Close()
+		return nil, fmt.Errorf("portpool: %w", err)
+	}
 
 	return &cliDeps{
 		Deps: &instance.Deps{
@@ -766,7 +778,7 @@ func loadBlueprintAndConnString(root, pgURL string) (*blueprint.Blueprint, strin
 		return &bp, pgURL, nil
 	}
 
-	connStr, err := pgConnString(&bp)
+	connStr, err := postgres.ConnString(&bp)
 	if err != nil {
 		return nil, "", err
 	}
@@ -786,40 +798,15 @@ func loadBlueprint(root string) (*blueprint.Blueprint, error) {
 	return &bp, nil
 }
 
-func computeStamp(repoRoot string, bp *blueprint.Blueprint) registry.BlueprintStamp {
-	hashFile := func(path string) string {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return ""
-		}
-		h := sha256.Sum256(data)
-		return fmt.Sprintf("%x", h[:])
-	}
-	return registry.BlueprintStamp{
-		ComposeHash:    hashFile(filepath.Join(repoRoot, "docker-compose.yml")),
-		EnvExampleHash: hashFile(filepath.Join(repoRoot, bp.Env.Template)),
-		ToolchainHash:  hashFile(filepath.Join(repoRoot, bp.Toolchain)),
-	}
-}
-
-func stampNotice(stamp registry.BlueprintStamp, reg *registry.Registry) {
-	stored := reg.BlueprintStamp
-	if stored.ComposeHash == "" && stored.EnvExampleHash == "" && stored.ToolchainHash == "" {
-		return
-	}
-	if stored.ComposeHash != stamp.ComposeHash ||
-		stored.EnvExampleHash != stamp.EnvExampleHash ||
-		stored.ToolchainHash != stamp.ToolchainHash {
-		fmt.Fprintln(os.Stderr, "note: blueprint inputs changed since last 'plax up' — run 'plax doctor' for details")
-	}
-}
-
 func printStampNotice(root string, bp *blueprint.Blueprint, reg *registry.Registry) {
 	if bp == nil {
 		return
 	}
-	current := computeStamp(root, bp)
-	stampNotice(current, reg)
+	current := stamp.Compute(root, bp)
+	msg, changed := stamp.Check(current, reg.BlueprintStamp)
+	if changed {
+		fmt.Fprintln(os.Stderr, msg)
+	}
 }
 
 func runSuspend(cmd SuspendCmd) error {
@@ -832,6 +819,7 @@ func runSuspend(cmd SuspendCmd) error {
 	if err != nil {
 		return err
 	}
+	defer reg.Close()
 
 	bp, _ := loadBlueprint(cmd.Root)
 	printStampNotice(cmd.Root, bp, reg)
@@ -866,6 +854,7 @@ func runResume(cmd ResumeCmd) error {
 	if err != nil {
 		return err
 	}
+	defer reg.Close()
 
 	printStampNotice(cmd.Root, bp, reg)
 
@@ -892,7 +881,7 @@ func runResume(cmd ResumeCmd) error {
 	}
 	defer bm.Close()
 
-	currentStamp := computeStamp(cmd.Root, bp)
+	currentStamp := stamp.Compute(cmd.Root, bp)
 	sdeps := &status.Deps{
 		Blueprint:    bp,
 		Registry:     reg,
@@ -921,6 +910,7 @@ func runStatus(cmd StatusCmd) error {
 	if err != nil {
 		return err
 	}
+	defer reg.Close()
 
 	if _, found := reg.GetInstance(cmd.Name); !found {
 		return fmt.Errorf("instance %q not found", cmd.Name)
@@ -936,7 +926,7 @@ func runStatus(cmd StatusCmd) error {
 		bp = &blueprint.Blueprint{}
 	}
 
-	currentStamp := computeStamp(cmd.Root, bp)
+	currentStamp := stamp.Compute(cmd.Root, bp)
 	sdeps := &status.Deps{
 		Blueprint:    bp,
 		Registry:     reg,
@@ -982,6 +972,7 @@ func runDoctor(cmd DoctorCmd) error {
 	if err != nil {
 		return err
 	}
+	defer reg.Close()
 
 	ddeps := &doctor.Deps{
 		Blueprint: bp,
@@ -1053,6 +1044,7 @@ func runRederive(cmd RederiveCmd) error {
 	if err != nil {
 		return err
 	}
+	defer reg.Close()
 
 	deps := &instance.Deps{Blueprint: bp, Registry: reg, RepoRoot: absRoot}
 	return instance.Rederive(context.Background(), deps)
@@ -1063,6 +1055,7 @@ func runSend(cmd SendCmd) error {
 	if err != nil {
 		return err
 	}
+	defer reg.Close()
 
 	if _, found := reg.GetInstance(cmd.Name); !found {
 		return fmt.Errorf("instance %q not found", cmd.Name)
@@ -1111,6 +1104,7 @@ func runRecv(cmd RecvCmd) error {
 	if err != nil {
 		return err
 	}
+	defer reg.Close()
 
 	if _, found := reg.GetInstance(cmd.Name); !found {
 		return fmt.Errorf("instance %q not found", cmd.Name)
@@ -1196,28 +1190,6 @@ func printReportTable(w *os.File, r *status.Report) {
 	}
 }
 
-func pgConnString(bp *blueprint.Blueprint) (string, error) {
-	user := "postgres"
-	password := "postgres"
-	found := false
-	for _, svc := range bp.Services {
-		if svc.Isolation == blueprint.IsolationLogical && svc.Type == "postgres" {
-			found = true
-			if u, ok := svc.Env["POSTGRES_USER"]; ok && u != "" {
-				user = u
-			}
-			if p, ok := svc.Env["POSTGRES_PASSWORD"]; ok && p != "" {
-				password = p
-			}
-			break
-		}
-	}
-	if !found {
-		return "", fmt.Errorf("no logical postgres service in blueprint")
-	}
-	return fmt.Sprintf("postgres://%s:%s@localhost:5432/postgres?sslmode=disable", user, password), nil
-}
-
 func deriveConnString(bp *blueprint.Blueprint) (string, error) {
-	return pgConnString(bp)
+	return postgres.ConnString(bp)
 }
