@@ -65,7 +65,7 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 	// When volumes are added, iterate the same list that Up used.
 
 	// Step 4: Drop all instance databases.
-	names := dbNamesFromRecord(rec)
+	names := registry.DBNamesFromRecord(rec)
 	if deps.BM != nil {
 		for _, dbName := range names {
 			fmt.Fprintf(os.Stderr, "dropping database %s...\n", dbName)
@@ -108,21 +108,4 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 
 	fmt.Fprintf(os.Stderr, "instance %s down\n", name)
 	return nil
-}
-
-// dbNamesFromRecord returns all database names from a record, falling back
-// to the deprecated DBName field if DBNames is nil.
-func dbNamesFromRecord(rec registry.InstanceRecord) []string {
-	names := rec.DBNames
-	if names == nil {
-		if rec.DBName != "" {
-			return []string{rec.DBName}
-		}
-		return nil
-	}
-	result := make([]string, 0, len(names))
-	for _, dbName := range names {
-		result = append(result, dbName)
-	}
-	return result
 }

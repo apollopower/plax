@@ -218,3 +218,41 @@ func TestGetInstance_Found(t *testing.T) {
 		}
 	})
 }
+
+func TestDBNamesFromRecord_WithDBNames(t *testing.T) {
+	rec := InstanceRecord{
+		DBName:  "plax_old",
+		DBNames: map[string]string{"": "plax_i1", "test": "plax_i1_test"},
+	}
+	names := DBNamesFromRecord(rec)
+	if len(names) != 2 {
+		t.Fatalf("got %d names, want 2: %v", len(names), names)
+	}
+	hasPrimary, hasTest := false, false
+	for _, n := range names {
+		if n == "plax_i1" {
+			hasPrimary = true
+		}
+		if n == "plax_i1_test" {
+			hasTest = true
+		}
+	}
+	if !hasPrimary || !hasTest {
+		t.Errorf("missing names: got %v", names)
+	}
+}
+
+func TestDBNamesFromRecord_OldFormatFallback(t *testing.T) {
+	rec := InstanceRecord{DBName: "plax_legacy"}
+	names := DBNamesFromRecord(rec)
+	if len(names) != 1 || names[0] != "plax_legacy" {
+		t.Errorf("got %v, want [plax_legacy]", names)
+	}
+}
+
+func TestDBNamesFromRecord_Empty(t *testing.T) {
+	names := DBNamesFromRecord(InstanceRecord{})
+	if names != nil {
+		t.Errorf("got %v, want nil", names)
+	}
+}
