@@ -92,9 +92,11 @@ func (f *fakeBM) droppedDBs() []string {
 
 type fakeDocker struct {
 	runErr       error
+	stopErr      error
 	running      bool
 	runningErr   error
 	createNetErr error
+	runErrFor    map[string]error
 
 	mu               sync.Mutex
 	createdNets      []string
@@ -103,6 +105,7 @@ type fakeDocker struct {
 	stopped          []string
 	removed          []string
 	removeNetCtxErrs []error // ctx.Err() observed at each RemoveNetwork call
+	runCfgs          []docker.ServiceConfig
 }
 
 func (f *fakeDocker) CreateNetwork(_ context.Context, name string) error {
@@ -124,13 +127,19 @@ func (f *fakeDocker) RemoveNetwork(ctx context.Context, name string) error {
 }
 
 func (f *fakeDocker) RunService(_ context.Context, cfg docker.ServiceConfig) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.runErr != nil {
 		return "", f.runErr
 	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	if f.runErrFor != nil {
+		if err, ok := f.runErrFor[cfg.ServiceName]; ok {
+			return "", err
+		}
+	}
 	id := "cid-" + cfg.ServiceName
 	f.started = append(f.started, cfg.ServiceName)
+	f.runCfgs = append(f.runCfgs, cfg)
 	return id, nil
 }
 
@@ -138,6 +147,9 @@ func (f *fakeDocker) StopService(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, id)
+	if f.stopErr != nil {
+		return f.stopErr
+	}
 	return nil
 }
 
@@ -240,10 +252,19 @@ func testDeps(t *testing.T, bp *blueprint.Blueprint) (*Deps, *fakeBM, *fakeDocke
 
 	reg.BlueprintStamp = hashStamp(repo, bp)
 
+	pool, err := portpool.New(bp.PortPool.Start, bp.PortPool.End, reg)
+	if err != nil {
+		reg.Close()
+		t.Fatalf("portpool.New: %v", err)
+	}
+	t.Cleanup(func() {
+		pool.Close()
+		reg.Close()
+	})
 	deps := &Deps{
 		Blueprint: bp,
 		Registry:  reg,
-		Pool:      portpool.New(bp.PortPool.Start, bp.PortPool.End, reg),
+		Pool:      pool,
 		BM:        bm,
 		Docker:    drv,
 		RepoRoot:  repo,
@@ -336,6 +357,15 @@ func TestUp_Success(t *testing.T) {
 	}
 	if len(drv.started) != 1 || drv.started[0] != "redis" {
 		t.Errorf("started = %v", drv.started)
+	}
+	if len(drv.runCfgs) != 1 {
+		t.Fatalf("runCfgs = %v", drv.runCfgs)
+	}
+	if drv.runCfgs[0].InstanceName != "i1" {
+		t.Errorf("InstanceName = %q, want i1", drv.runCfgs[0].InstanceName)
+	}
+	if drv.runCfgs[0].ServiceName != "redis" {
+		t.Errorf("ServiceName = %q, want redis", drv.runCfgs[0].ServiceName)
 	}
 	if !process.IsAlive(rec.PIDs["app"]) {
 		t.Error("native process should be alive after up")
@@ -469,6 +499,35 @@ func TestUp_RollbackOnCancel(t *testing.T) {
 	assertNoResidue(t, deps, "i1")
 }
 
+func TestUp_ConcurrentPartialFailure(t *testing.T) {
+	bp := testBlueprint()
+	bp.Services["redis2"] = blueprint.ServiceDef{
+		Isolation: blueprint.IsolationDedicated,
+		Image:     "redis:7",
+		Ports:     map[string]blueprint.PortDef{"6380": {Var: "REDIS2_PORT"}},
+	}
+
+	deps, _, drv := testDeps(t, bp)
+	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
+
+	drv.runErrFor = map[string]error{"redis2": errors.New("injected failure")}
+
+	err := Up(context.Background(), deps, "i1")
+	if err == nil || !strings.Contains(err.Error(), "injected failure") {
+		t.Fatalf("Up = %v, want injected failure error", err)
+	}
+
+	assertNoResidue(t, deps, "i1")
+
+	if len(drv.removedNets) != 1 {
+		t.Errorf("rollback did not remove network: %v", drv.removedNets)
+	}
+
+	if len(drv.stopped) != 1 || len(drv.removed) != 1 {
+		t.Errorf("successful containers should be stopped+removed during rollback: stopped=%v removed=%v", drv.stopped, drv.removed)
+	}
+}
+
 func TestDown_Success(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 
@@ -492,6 +551,28 @@ func TestDown_Success(t *testing.T) {
 	if len(drv.stopped) != 1 || len(drv.removed) != 1 || len(drv.removedNets) != 1 {
 		t.Errorf("docker teardown incomplete: stopped=%v removed=%v nets=%v", drv.stopped, drv.removed, drv.removedNets)
 	}
+}
+
+func TestDown_StopFailure_StillRemoves(t *testing.T) {
+	deps, _, drv := testDeps(t, testBlueprint())
+
+	if err := Up(context.Background(), deps, "i1"); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	drv.stopErr = errors.New("stop failed")
+
+	if err := Down(context.Background(), deps, "i1"); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	if len(drv.stopped) != 1 {
+		t.Errorf("StopService should have been called: stopped=%v", drv.stopped)
+	}
+	if len(drv.removed) != 1 {
+		t.Errorf("RemoveService should have been called despite stop failure: removed=%v", drv.removed)
+	}
+	assertNoResidue(t, deps, "i1")
 }
 
 func TestDown_NotFound(t *testing.T) {

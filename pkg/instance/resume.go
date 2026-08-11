@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/derive/env"
 	"github.com/apollopower/plax/pkg/portpool"
 	"github.com/apollopower/plax/pkg/process"
@@ -65,18 +66,39 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 				}
 			}
 		})
+		type containerResult struct {
+			name           string
+			cid            string
+			alreadyRunning bool
+			err            error
+		}
+		ch := make(chan containerResult, len(rec.ContainerIDs))
 		for svcName, cid := range rec.ContainerIDs {
-			fmt.Fprintf(os.Stderr, "starting %s...\n", svcName)
-			alreadyRunning, err := deps.Docker.StartService(ctx, cid)
-			if err != nil {
-				if errdefs.IsNotFound(err) {
-					return fmt.Errorf("container for %q no longer exists — run 'plax down %s' then 'plax up %s' to rebuild: %w", svcName, name, name, err)
+			go func(name, cid string) {
+				fmt.Fprintf(os.Stderr, "starting %s...\n", name)
+				alreadyRunning, err := deps.Docker.StartService(ctx, cid)
+				ch <- containerResult{name, cid, alreadyRunning, err}
+			}(svcName, cid)
+		}
+		var firstErr error
+		for range rec.ContainerIDs {
+			r := <-ch
+			if r.err != nil {
+				if firstErr == nil {
+					if errdefs.IsNotFound(r.err) {
+						firstErr = fmt.Errorf("container for %q no longer exists — run 'plax down %s' then 'plax up %s' to rebuild: %w", r.name, name, name, r.err)
+					} else {
+						firstErr = fmt.Errorf("starting %s: %w", r.name, r.err)
+					}
 				}
-				return fmt.Errorf("starting %s: %w", svcName, err)
+				continue
 			}
-			if !alreadyRunning {
-				startedContainers[svcName] = cid
+			if !r.alreadyRunning {
+				startedContainers[r.name] = r.cid
 			}
+		}
+		if firstErr != nil {
+			return firstErr
 		}
 	}
 
@@ -114,24 +136,44 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 				}
 			}
 		})
-		for _, proc := range deps.Blueprint.Processes {
-			fmt.Fprintf(os.Stderr, "starting %s...\n", proc.Name)
-			procEnv := buildProcessEnv(derivedEnv, rec.Ports, proc)
-
-			renderedCmd, err := env.Render(proc.Command, values)
-			if err != nil {
-				return fmt.Errorf("process %q: %w", proc.Name, err)
+		{
+			type procResult struct {
+				name      string
+				pgid      int
+				startTime int64
+				err       error
 			}
-
-			procDir := filepath.Join(rec.WorktreePath, proc.Workdir)
-			logPath := filepath.Join(logDir, proc.Name+".log")
-
-			pgid, startTime, err := process.Spawn(proc.Name, renderedCmd, procEnv, procDir, logPath)
-			if err != nil {
-				return err
+			ch := make(chan procResult, len(deps.Blueprint.Processes))
+			for _, proc := range deps.Blueprint.Processes {
+				go func(proc blueprint.ProcessDef) {
+					fmt.Fprintf(os.Stderr, "starting %s...\n", proc.Name)
+					procEnv := buildProcessEnv(derivedEnv, rec.Ports, proc)
+					renderedCmd, err := env.Render(proc.Command, values)
+					if err != nil {
+						ch <- procResult{name: proc.Name, err: fmt.Errorf("process %q: %w", proc.Name, err)}
+						return
+					}
+					procDir := filepath.Join(rec.WorktreePath, proc.Workdir)
+					logPath := filepath.Join(logDir, proc.Name+".log")
+					pgid, startTime, err := process.Spawn(proc.Name, renderedCmd, procEnv, procDir, logPath)
+					ch <- procResult{proc.Name, pgid, startTime, err}
+				}(proc)
 			}
-			pids[proc.Name] = pgid
-			pidStarts[proc.Name] = startTime
+			var firstErr error
+			for range deps.Blueprint.Processes {
+				r := <-ch
+				if r.err != nil {
+					if firstErr == nil {
+						firstErr = r.err
+					}
+					continue
+				}
+				pids[r.name] = r.pgid
+				pidStarts[r.name] = r.startTime
+			}
+			if firstErr != nil {
+				return firstErr
+			}
 		}
 	}
 

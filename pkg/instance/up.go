@@ -193,9 +193,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		baseRef, baseCommit = "", ""
 	}
 
-	// Step 7: Start dedicated containers.
-	// The cleanup is registered before the loop: closures capture the map,
-	// so the deferred rollback sees every container started before a failure.
+	// Step 7: Start dedicated containers concurrently.
 	containerIDs := map[string]string{}
 	cleanups = append(cleanups, func() {
 		for svcName, cid := range containerIDs {
@@ -207,45 +205,68 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 			}
 		}
 	})
-	for svcName, svc := range deps.Blueprint.Services {
-		if svc.Isolation != blueprint.IsolationDedicated {
-			if svc.Isolation != blueprint.IsolationLogical {
-				fmt.Fprintf(os.Stderr, "skipping %s (isolation %q not implemented)\n", svcName, svc.Isolation)
+	{
+		dedicatedServices := map[string]blueprint.ServiceDef{}
+		for svcName, svc := range deps.Blueprint.Services {
+			if svc.Isolation != blueprint.IsolationDedicated {
+				if svc.Isolation != blueprint.IsolationLogical {
+					fmt.Fprintf(os.Stderr, "skipping %s (isolation %q not implemented)\n", svcName, svc.Isolation)
+				}
+				continue
 			}
-			continue
-		}
-		fmt.Fprintf(os.Stderr, "starting %s...\n", svcName)
-
-		portMap := map[string]int{}
-		for containerPort, portDef := range svc.Ports {
-			portMap[containerPort] = allocated[portDef.Var]
+			dedicatedServices[svcName] = svc
 		}
 
-		svcEnv := map[string]string{}
-		for k, v := range svc.Env {
-			svcEnv[k] = v
+		type containerResult struct {
+			name string
+			id   string
+			err  error
 		}
-		for _, portDef := range svc.Ports {
-			svcEnv[portDef.Var] = strconv.Itoa(allocated[portDef.Var])
+		ch := make(chan containerResult, len(dedicatedServices))
+		for svcName, svc := range dedicatedServices {
+			go func(svcName string, svc blueprint.ServiceDef) {
+				fmt.Fprintf(os.Stderr, "starting %s...\n", svcName)
+				portMap := map[string]int{}
+				for containerPort, portDef := range svc.Ports {
+					portMap[containerPort] = allocated[portDef.Var]
+				}
+				svcEnv := map[string]string{}
+				for k, v := range svc.Env {
+					svcEnv[k] = v
+				}
+				for _, portDef := range svc.Ports {
+					svcEnv[portDef.Var] = strconv.Itoa(allocated[portDef.Var])
+				}
+				cfg := docker.ServiceConfig{
+					InstanceName: name,
+					ServiceName:  svcName,
+					Image:        svc.Image,
+					Command:      svc.Command,
+					Env:          svcEnv,
+					PortMap:      portMap,
+					NetworkName:  netName,
+				}
+				cid, err := deps.Docker.RunService(ctx, cfg)
+				ch <- containerResult{svcName, cid, err}
+			}(svcName, svc)
 		}
-
-		cfg := docker.ServiceConfig{
-			InstanceName: name,
-			ServiceName:  svcName,
-			Image:        svc.Image,
-			Command:      svc.Command,
-			Env:          svcEnv,
-			PortMap:      portMap,
-			NetworkName:  netName,
+		var firstErr error
+		for range dedicatedServices {
+			r := <-ch
+			if r.err != nil {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("starting %s: %w", r.name, r.err)
+				}
+				continue
+			}
+			containerIDs[r.name] = r.id
 		}
-		cid, err := deps.Docker.RunService(ctx, cfg)
-		if err != nil {
-			return fmt.Errorf("starting %s: %w", svcName, err)
+		if firstErr != nil {
+			return firstErr
 		}
-		containerIDs[svcName] = cid
 	}
 
-	// Step 8: Start native processes.
+	// Step 8: Start native processes concurrently.
 	pids := map[string]int{}
 	pidStarts := map[string]int64{}
 	cleanups = append(cleanups, func() {
@@ -267,25 +288,42 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 			}
 		}
 
+		type procResult struct {
+			name      string
+			pgid      int
+			startTime int64
+			err       error
+		}
+		ch := make(chan procResult, len(deps.Blueprint.Processes))
 		for _, proc := range deps.Blueprint.Processes {
-			fmt.Fprintf(os.Stderr, "starting %s...\n", proc.Name)
-
-			procEnv := buildProcessEnv(derivedEnv, allocated, proc)
-
-			renderedCmd, err := env.Render(proc.Command, values)
-			if err != nil {
-				return fmt.Errorf("process %q: %w", proc.Name, err)
+			go func(proc blueprint.ProcessDef) {
+				fmt.Fprintf(os.Stderr, "starting %s...\n", proc.Name)
+				procEnv := buildProcessEnv(derivedEnv, allocated, proc)
+				renderedCmd, err := env.Render(proc.Command, values)
+				if err != nil {
+					ch <- procResult{name: proc.Name, err: fmt.Errorf("process %q: %w", proc.Name, err)}
+					return
+				}
+				procDir := filepath.Join(worktreePath, proc.Workdir)
+				logPath := filepath.Join(logDir, proc.Name+".log")
+				pgid, startTime, err := process.Spawn(proc.Name, renderedCmd, procEnv, procDir, logPath)
+				ch <- procResult{proc.Name, pgid, startTime, err}
+			}(proc)
+		}
+		var firstErr error
+		for range deps.Blueprint.Processes {
+			r := <-ch
+			if r.err != nil {
+				if firstErr == nil {
+					firstErr = r.err
+				}
+				continue
 			}
-
-			procDir := filepath.Join(worktreePath, proc.Workdir)
-			logPath := filepath.Join(logDir, proc.Name+".log")
-
-			pgid, startTime, err := process.Spawn(proc.Name, renderedCmd, procEnv, procDir, logPath)
-			if err != nil {
-				return err
-			}
-			pids[proc.Name] = pgid
-			pidStarts[proc.Name] = startTime
+			pids[r.name] = r.pgid
+			pidStarts[r.name] = r.startTime
+		}
+		if firstErr != nil {
+			return firstErr
 		}
 	}
 

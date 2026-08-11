@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -67,8 +69,21 @@ func DeriveMerged(templatePath string, overrides map[string]string, holes map[st
 	}
 
 	out := strings.Join(lines, "\n") + "\n"
-	if err := os.WriteFile(outputPath, []byte(out), 0600); err != nil {
-		return fmt.Errorf("env: write output: %w", err)
+
+	dir := filepath.Dir(outputPath)
+	tmp, err := os.CreateTemp(dir, ".env-*.tmp")
+	if err != nil {
+		return fmt.Errorf("env: create temp: %w", err)
+	}
+	if _, err := tmp.WriteString(out); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return fmt.Errorf("env: write temp: %w", err)
+	}
+	_ = tmp.Close()
+	if err := os.Rename(tmp.Name(), outputPath); err != nil {
+		_ = os.Remove(tmp.Name())
+		return fmt.Errorf("env: rename: %w", err)
 	}
 
 	return nil
@@ -241,4 +256,33 @@ func parseFileRaw(path string) (map[string]string, error) {
 	}
 
 	return m, nil
+}
+
+// LoadInstanceEnv reads the derived .env from a worktree and merges it
+// over the host environment, then layers allocated ports on top. Returns
+// a list of KEY=VALUE strings suitable for exec.Cmd.Env.
+func LoadInstanceEnv(worktreePath string, ports map[string]int) ([]string, error) {
+	envPath := filepath.Join(worktreePath, ".env")
+	derived, err := ParseFile(envPath)
+	if err != nil {
+		return nil, fmt.Errorf("env: .env not found at %s — was the instance created with 'plax up'?", envPath)
+	}
+
+	envMap := map[string]string{}
+	for _, e := range os.Environ() {
+		k, v, _ := strings.Cut(e, "=")
+		envMap[k] = v
+	}
+	for k, v := range derived {
+		envMap[k] = v
+	}
+	for k, v := range ports {
+		envMap[k] = strconv.Itoa(v)
+	}
+
+	result := make([]string, 0, len(envMap))
+	for k, v := range envMap {
+		result = append(result, k+"="+v)
+	}
+	return result, nil
 }

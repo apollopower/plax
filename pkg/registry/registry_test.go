@@ -44,6 +44,7 @@ func TestOpen_ExistingFile(t *testing.T) {
 	if err := r1.Save(); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
+	r1.Close()
 
 	r2, err := Open(path)
 	if err != nil {
@@ -103,6 +104,7 @@ func TestSave_ReadBack(t *testing.T) {
 		if err := r1.Save(); err != nil {
 			t.Fatalf("Save: %v", err)
 		}
+		r1.Close()
 
 		r2, err := Open(r1.path)
 		if err != nil {

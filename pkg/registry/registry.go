@@ -24,6 +24,7 @@ type Registry struct {
 	PortAllocations map[int]PortAllocation    `json:"port_allocations"`
 
 	path string
+	lock *fileLock
 }
 
 type BlueprintStamp struct {
@@ -64,9 +65,16 @@ type Provenance struct {
 	ToolVersions map[string]string `json:"tool_versions"`
 }
 
+func lockPath(path string) string {
+	return path + ".lock"
+}
+
 // Opens an existing registry file or returns an empty, ready-to-use registry
 // if the file does not exist. A separate Create function is unnecessary — the
 // caller always wants a working registry, whether or not a file exists yet.
+//
+// Open acquires an exclusive file lock on the registry lock file. Callers must
+// call Close to release the lock when done.
 func Open(path string) (*Registry, error) {
 	r := &Registry{
 		Version:         1,
@@ -76,19 +84,33 @@ func Open(path string) (*Registry, error) {
 		path:            path,
 	}
 
+	lockP := lockPath(path)
+	dir := filepath.Dir(lockP)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("registry: mkdir lock: %w", err)
+	}
+	lk, err := lockFile(lockP, false)
+	if err != nil {
+		return nil, err
+	}
+	r.lock = lk
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return r, nil
 		}
+		r.Close()
 		return nil, fmt.Errorf("registry: reading %s: %w", path, err)
 	}
 
 	if err := json.Unmarshal(data, r); err != nil {
+		r.Close()
 		return nil, fmt.Errorf("registry: parsing %s: %w", path, err)
 	}
 
 	if r.Version != 1 {
+		r.Close()
 		return nil, fmt.Errorf("registry: unsupported version %d (want 1)", r.Version)
 	}
 
@@ -106,8 +128,6 @@ func Open(path string) (*Registry, error) {
 			r.Instances[id] = rec
 		}
 	}
-
-	r.path = path
 
 	return r, nil
 }
@@ -189,6 +209,13 @@ func (r *Registry) AllocPort(port int, inst, svc string) error {
 
 func (r *Registry) ReleasePort(port int) {
 	delete(r.PortAllocations, port)
+}
+
+func (r *Registry) Close() {
+	if r.lock != nil {
+		unlockFile(r.lock)
+		r.lock = nil
+	}
 }
 
 // DBNamesFromRecord returns all database names from a record, falling back
