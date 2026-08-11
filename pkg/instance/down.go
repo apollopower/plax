@@ -29,31 +29,58 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 		return fmt.Errorf("instance %q not found", name)
 	}
 
-	// Step 1: Terminate native processes. The recorded start time guards
-	// against PGID reuse: if the original process is gone and its PGID now
-	// belongs to an unrelated process, that process is never signaled.
-	for procName, pgid := range rec.PIDs {
-		fmt.Fprintf(os.Stderr, "stopping %s...\n", procName)
-		err := process.Terminate(pgid, rec.PIDStarts[procName], 5*time.Second)
-		switch {
-		case errors.Is(err, process.ErrStaleProcess):
-			fmt.Fprintf(os.Stderr, "note: %s already gone (pgid %d reused by another process)\n", procName, pgid)
-		case errors.Is(err, process.ErrGroupSurvivors):
-			fmt.Fprintf(os.Stderr, "warning: %s process leader died but children survived (pgid %d) — teardown continuing\n", procName, pgid)
-		case err != nil:
-			fmt.Fprintf(os.Stderr, "warning: terminate %s (pgid %d): %v\n", procName, pgid, err)
+	// Step 1: Terminate native processes concurrently. The recorded start
+	// time guards against PGID reuse: if the original process is gone and its
+	// PGID now belongs to an unrelated process, that process is never signaled.
+	{
+		type procResult struct {
+			name string
+			err  error
+		}
+		ch := make(chan procResult, len(rec.PIDs))
+		for procName, pgid := range rec.PIDs {
+			go func(name string, pgid int) {
+				err := process.Terminate(pgid, rec.PIDStarts[name], 5*time.Second)
+				ch <- procResult{name, err}
+			}(procName, pgid)
+		}
+		for range rec.PIDs {
+			r := <-ch
+			switch {
+			case errors.Is(r.err, process.ErrStaleProcess):
+				fmt.Fprintf(os.Stderr, "note: %s already gone (pgid %d reused by another process)\n", r.name, rec.PIDs[r.name])
+			case errors.Is(r.err, process.ErrGroupSurvivors):
+				fmt.Fprintf(os.Stderr, "warning: %s process leader died but children survived (pgid %d) — teardown continuing\n", r.name, rec.PIDs[r.name])
+			case r.err != nil:
+				fmt.Fprintf(os.Stderr, "warning: terminate %s (pgid %d): %v\n", r.name, rec.PIDs[r.name], r.err)
+			}
 		}
 	}
 
-	// Step 2: Stop and remove dedicated containers.
+	// Step 2: Stop and remove dedicated containers concurrently.
 	if deps.Docker != nil {
+		type svcResult struct {
+			name string
+			err  error
+		}
+		ch := make(chan svcResult, len(rec.ContainerIDs))
 		for svcName, cid := range rec.ContainerIDs {
-			fmt.Fprintf(os.Stderr, "stopping %s...\n", svcName)
-			if err := deps.Docker.StopService(ctx, cid); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: stop %s: %v\n", svcName, err)
-			}
-			if err := deps.Docker.RemoveService(ctx, cid); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: remove %s: %v\n", svcName, err)
+			go func(name, cid string) {
+				if err := deps.Docker.StopService(ctx, cid); err != nil {
+					ch <- svcResult{name, err}
+					return
+				}
+				if err := deps.Docker.RemoveService(ctx, cid); err != nil {
+					ch <- svcResult{name, err}
+					return
+				}
+				ch <- svcResult{name, nil}
+			}(svcName, cid)
+		}
+		for range rec.ContainerIDs {
+			r := <-ch
+			if r.err != nil {
+				fmt.Fprintf(os.Stderr, "warning: %s: %v\n", r.name, r.err)
 			}
 		}
 	} else if len(rec.ContainerIDs) > 0 {

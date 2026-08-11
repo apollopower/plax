@@ -648,5 +648,30 @@ func (bm *BaseManager) ListPlaxDatabases(ctx context.Context) ([]string, error) 
 	return names, nil
 }
 
+// ConnString builds a Postgres connection URL from a blueprint's logical
+// Postgres service definition, extracting user and password from the service
+// environment.
+func ConnString(bp *blueprint.Blueprint) (string, error) {
+	user := "postgres"
+	password := "postgres"
+	found := false
+	for _, svc := range bp.Services {
+		if svc.Isolation == blueprint.IsolationLogical && svc.Type == "postgres" {
+			found = true
+			if u, ok := svc.Env["POSTGRES_USER"]; ok && u != "" {
+				user = u
+			}
+			if p, ok := svc.Env["POSTGRES_PASSWORD"]; ok && p != "" {
+				password = p
+			}
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("no logical postgres service in blueprint")
+	}
+	return fmt.Sprintf("postgres://%s:%s@localhost:5432/postgres?sslmode=disable", user, password), nil
+}
+
 // connStringForTemplate will be re-added when Phase 3 needs it.
 // It renders a Postgres connection string from a blueprint hole template.

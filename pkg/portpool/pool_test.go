@@ -3,10 +3,20 @@ package portpool
 import (
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/apollopower/plax/pkg/registry"
 )
+
+func newPool(t *testing.T, start, end int, reg *registry.Registry) *PortPool {
+	t.Helper()
+	p, err := New(start, end, reg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return p
+}
 
 func TestAllocate_FirstFree(t *testing.T) {
 	reg := &registry.Registry{
@@ -14,7 +24,7 @@ func TestAllocate_FirstFree(t *testing.T) {
 		Instances:       map[string]registry.InstanceRecord{},
 		PortAllocations: map[int]registry.PortAllocation{},
 	}
-	p := New(3000, 3010, reg)
+	p := newPool(t, 3000, 3010, reg)
 	port, err := p.Allocate("i1", "app")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
@@ -30,7 +40,7 @@ func TestAllocate_SkipsAllocated(t *testing.T) {
 		Instances:       map[string]registry.InstanceRecord{},
 		PortAllocations: map[int]registry.PortAllocation{3000: {Instance: "i1", Service: "app"}},
 	}
-	p := New(3000, 3010, reg)
+	p := newPool(t, 3000, 3010, reg)
 	port, err := p.Allocate("i2", "web")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
@@ -48,13 +58,15 @@ func TestAllocate_Exhausted(t *testing.T) {
 	}
 	// Allocate ports 3000-3009 (10 ports)
 	for i := 3000; i < 3010; i++ {
-		_, err := New(3000, 3009, reg).Allocate("i1", "svc")
+		p := newPool(t, 3000, 3009, reg)
+		_, err := p.Allocate("i1", "svc")
 		if err != nil {
 			t.Fatalf("unexpected error at iteration %d: %v", i, err)
 		}
 	}
 	// Should fail now
-	_, err := New(3000, 3009, reg).Allocate("i2", "svc")
+	p := newPool(t, 3000, 3009, reg)
+	_, err := p.Allocate("i2", "svc")
 	if err == nil {
 		t.Fatal("expected error for exhausted pool")
 	}
@@ -72,7 +84,7 @@ func TestAllocate_OSProbe(t *testing.T) {
 	}
 	defer func() { _ = ln.Close() }()
 
-	p := New(3099, 3109, reg)
+	p := newPool(t, 3099, 3109, reg)
 	port, err := p.Allocate("i1", "app")
 	if err != nil {
 		t.Fatalf("Allocate should skip OS-bound 3099: %v", err)
@@ -88,7 +100,7 @@ func TestRelease_ReturnsPort(t *testing.T) {
 		Instances:       map[string]registry.InstanceRecord{},
 		PortAllocations: map[int]registry.PortAllocation{3000: {Instance: "i1", Service: "app"}},
 	}
-	p := New(3000, 3010, reg)
+	p := newPool(t, 3000, 3010, reg)
 
 	p.Release(3000)
 	if _, exists := reg.PortAllocations[3000]; exists {
@@ -109,7 +121,7 @@ func TestReserve_Success(t *testing.T) {
 		Version:         1,
 		PortAllocations: map[int]registry.PortAllocation{},
 	}
-	p := New(3000, 4000, reg)
+	p := newPool(t, 3000, 4000, reg)
 	if err := p.Reserve(3050, "i1", "app"); err != nil {
 		t.Fatalf("Reserve: %v", err)
 	}
@@ -123,7 +135,7 @@ func TestReserve_Taken(t *testing.T) {
 		Version:         1,
 		PortAllocations: map[int]registry.PortAllocation{3050: {Instance: "i1", Service: "app"}},
 	}
-	p := New(3000, 4000, reg)
+	p := newPool(t, 3000, 4000, reg)
 	if err := p.Reserve(3050, "i2", "web"); err == nil {
 		t.Fatal("expected error for reserved port")
 	}
@@ -140,7 +152,7 @@ func TestReserve_OSBound(t *testing.T) {
 		Version:         1,
 		PortAllocations: map[int]registry.PortAllocation{},
 	}
-	p := New(3000, 4000, reg)
+	p := newPool(t, 3000, 4000, reg)
 	if err := p.Reserve(3098, "i1", "app"); err == nil {
 		t.Fatal("expected error for OS-bound port")
 	}
@@ -153,7 +165,7 @@ func TestAllocate_DefaultRange(t *testing.T) {
 		PortAllocations: map[int]registry.PortAllocation{},
 	}
 	// start=0,end=0 should use defaults (3000-4000)
-	p := New(0, 0, reg)
+	p := newPool(t, 0, 0, reg)
 	port, err := p.Allocate("i1", "app")
 	if err != nil {
 		t.Fatalf("Allocate with defaults: %v", err)
@@ -169,7 +181,7 @@ func TestAllocate_CachesPort(t *testing.T) {
 		Instances:       map[string]registry.InstanceRecord{},
 		PortAllocations: map[int]registry.PortAllocation{},
 	}
-	p := New(5000, 5010, reg)
+	p := newPool(t, 5000, 5010, reg)
 	port, err := p.Allocate("i1", "svc")
 	if err != nil {
 		t.Fatalf("Allocate: %v", err)
@@ -181,6 +193,128 @@ func TestAllocate_CachesPort(t *testing.T) {
 	if alloc.Instance != "i1" || alloc.Service != "svc" {
 		t.Errorf("wrong allocation: %+v", alloc)
 	}
+}
+
+func TestNew_InvalidRange(t *testing.T) {
+	reg := &registry.Registry{
+		PortAllocations: map[int]registry.PortAllocation{},
+	}
+	_, err := New(5000, 4000, reg)
+	if err == nil {
+		t.Fatal("expected error for start >= end")
+	}
+}
+
+func TestNew_Below1024(t *testing.T) {
+	reg := &registry.Registry{
+		PortAllocations: map[int]registry.PortAllocation{},
+	}
+	_, err := New(100, 200, reg)
+	if err == nil {
+		t.Fatal("expected error for start < 1024")
+	}
+}
+
+func TestNew_Above65535(t *testing.T) {
+	reg := &registry.Registry{
+		PortAllocations: map[int]registry.PortAllocation{},
+	}
+	_, err := New(60000, 70000, reg)
+	if err == nil {
+		t.Fatal("expected error for end > 65535")
+	}
+}
+
+func TestNew_DefaultRange(t *testing.T) {
+	reg := &registry.Registry{
+		PortAllocations: map[int]registry.PortAllocation{},
+	}
+	p, err := New(0, 0, reg)
+	if err != nil {
+		t.Fatalf("New with defaults: %v", err)
+	}
+	if p.start != defaultStart || p.end != defaultEnd {
+		t.Errorf("got %d-%d, want %d-%d", p.start, p.end, defaultStart, defaultEnd)
+	}
+}
+
+func TestPortPool_ConcurrentAllocate(t *testing.T) {
+	reg := &registry.Registry{
+		Version:         1,
+		Instances:       map[string]registry.InstanceRecord{},
+		PortAllocations: map[int]registry.PortAllocation{},
+	}
+	p := newPool(t, 3000, 3019, reg)
+
+	type result struct {
+		port int
+		err  error
+	}
+	results := make(chan result, 20)
+	for i := 0; i < 20; i++ {
+		go func() {
+			port, err := p.Allocate("conc", "svc")
+			results <- result{port, err}
+		}()
+	}
+
+	ports := map[int]bool{}
+	for i := 0; i < 20; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Errorf("unexpected error: %v", r.err)
+			continue
+		}
+		if ports[r.port] {
+			t.Errorf("duplicate port %d", r.port)
+		}
+		ports[r.port] = true
+	}
+	if len(ports) != 20 {
+		t.Errorf("expected 20 unique ports, got %d", len(ports))
+	}
+}
+
+func TestPortPool_ConcurrentAllocateRelease(t *testing.T) {
+	reg := &registry.Registry{
+		Version:         1,
+		Instances:       map[string]registry.InstanceRecord{},
+		PortAllocations: map[int]registry.PortAllocation{},
+	}
+	p := newPool(t, 3000, 3049, reg)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 50)
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			port, err := p.Allocate("conc", "svc")
+			if err != nil {
+				errs <- err
+				return
+			}
+			p.Release(port)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent alloc/release: %v", err)
+		}
+	}
+}
+
+func TestPortPool_Close(t *testing.T) {
+	reg := &registry.Registry{
+		PortAllocations: map[int]registry.PortAllocation{},
+	}
+	p := newPool(t, 3000, 4000, reg)
+	p.Close()
+	// Closing again should not panic.
+	p.Close()
 }
 
 func TestProbeFree_RealPort(t *testing.T) {

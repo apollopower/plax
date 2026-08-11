@@ -240,10 +240,14 @@ func testDeps(t *testing.T, bp *blueprint.Blueprint) (*Deps, *fakeBM, *fakeDocke
 
 	reg.BlueprintStamp = hashStamp(repo, bp)
 
+	pool, err := portpool.New(bp.PortPool.Start, bp.PortPool.End, reg)
+	if err != nil {
+		t.Fatalf("portpool.New: %v", err)
+	}
 	deps := &Deps{
 		Blueprint: bp,
 		Registry:  reg,
-		Pool:      portpool.New(bp.PortPool.Start, bp.PortPool.End, reg),
+		Pool:      pool,
 		BM:        bm,
 		Docker:    drv,
 		RepoRoot:  repo,

@@ -4,7 +4,6 @@ package doctor
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"github.com/apollopower/plax/pkg/derive/postgres"
 	"github.com/apollopower/plax/pkg/process"
 	"github.com/apollopower/plax/pkg/registry"
+	"github.com/apollopower/plax/pkg/stamp"
 	"github.com/apollopower/plax/pkg/toolchain"
 	"github.com/apollopower/plax/pkg/worktree"
 	"github.com/goccy/go-yaml"
@@ -141,27 +141,9 @@ func runBlueprintVsRepo(r *Report, deps *Deps) {
 
 	stored := deps.Registry.BlueprintStamp
 	if stored.ComposeHash != "" || stored.EnvExampleHash != "" || stored.ToolchainHash != "" {
-		hf := func(path string) string {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return ""
-			}
-			h := sha256.Sum256(data)
-			return fmt.Sprintf("%x", h[:])
-		}
-		current := registry.BlueprintStamp{
-			ComposeHash:    hf(filepath.Join(deps.RepoRoot, "docker-compose.yml")),
-			EnvExampleHash: hf(filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)),
-			ToolchainHash:  hf(filepath.Join(deps.RepoRoot, deps.Blueprint.Toolchain)),
-		}
-		if stored.ComposeHash != current.ComposeHash {
-			r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: "docker-compose.yml changed since the last 'plax up' — recheck the blueprint"})
-		}
-		if stored.EnvExampleHash != current.EnvExampleHash {
-			r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: ".env example changed since the last 'plax up' — recheck the blueprint"})
-		}
-		if stored.ToolchainHash != current.ToolchainHash {
-			r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: "toolchain file changed since the last 'plax up' — recheck the blueprint"})
+		current := stamp.Compute(deps.RepoRoot, deps.Blueprint)
+		for _, msg := range stamp.ChangedInputs(current, stored) {
+			r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: msg})
 		}
 	}
 
