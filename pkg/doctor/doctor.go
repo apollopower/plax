@@ -18,23 +18,6 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// dbNamesFromRecord returns all database names from a record, falling back
-// to the deprecated DBName field if DBNames is nil.
-func dbNamesFromRecord(rec registry.InstanceRecord) []string {
-	names := rec.DBNames
-	if names == nil {
-		if rec.DBName != "" {
-			return []string{rec.DBName}
-		}
-		return nil
-	}
-	result := make([]string, 0, len(names))
-	for _, dbName := range names {
-		result = append(result, dbName)
-	}
-	return result
-}
-
 type Level string
 
 const (
@@ -230,7 +213,7 @@ func runBlueprintVsRegistry(ctx context.Context, r *Report, deps *Deps) {
 			hasFail = true
 		}
 		if deps.BM != nil {
-			dbNames := dbNamesFromRecord(rec)
+			dbNames := registry.DBNamesFromRecord(rec)
 			for _, dbName := range dbNames {
 				exists, err := deps.BM.InstanceDBExists(ctx, dbName)
 				switch {

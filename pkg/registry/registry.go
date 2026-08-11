@@ -189,3 +189,20 @@ func (r *Registry) AllocPort(port int, inst, svc string) error {
 func (r *Registry) ReleasePort(port int) {
 	delete(r.PortAllocations, port)
 }
+
+// DBNamesFromRecord returns all database names from a record, falling back
+// to the deprecated DBName field if DBNames is nil.
+func DBNamesFromRecord(rec InstanceRecord) []string {
+	names := rec.DBNames
+	if names == nil {
+		if rec.DBName != "" {
+			return []string{rec.DBName}
+		}
+		return nil
+	}
+	result := make([]string, 0, len(names))
+	for _, dbName := range names {
+		result = append(result, dbName)
+	}
+	return result
+}
