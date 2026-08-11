@@ -84,19 +84,33 @@ func Open(path string) (*Registry, error) {
 		path:            path,
 	}
 
+	lockP := lockPath(path)
+	dir := filepath.Dir(lockP)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("registry: mkdir lock: %w", err)
+	}
+	lk, err := lockFile(lockP, false)
+	if err != nil {
+		return nil, err
+	}
+	r.lock = lk
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return r, nil
 		}
+		r.Close()
 		return nil, fmt.Errorf("registry: reading %s: %w", path, err)
 	}
 
 	if err := json.Unmarshal(data, r); err != nil {
+		r.Close()
 		return nil, fmt.Errorf("registry: parsing %s: %w", path, err)
 	}
 
 	if r.Version != 1 {
+		r.Close()
 		return nil, fmt.Errorf("registry: unsupported version %d (want 1)", r.Version)
 	}
 
@@ -114,19 +128,6 @@ func Open(path string) (*Registry, error) {
 			r.Instances[id] = rec
 		}
 	}
-
-	r.path = path
-
-	lockP := lockPath(path)
-	dir := filepath.Dir(lockP)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, fmt.Errorf("registry: mkdir lock: %w", err)
-	}
-	lk, err := lockFile(lockP, false)
-	if err != nil {
-		return nil, err
-	}
-	r.lock = lk
 
 	return r, nil
 }

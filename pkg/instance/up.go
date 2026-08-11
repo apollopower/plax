@@ -224,8 +224,8 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		}
 		ch := make(chan containerResult, len(dedicatedServices))
 		for svcName, svc := range dedicatedServices {
-			go func(name string, svc blueprint.ServiceDef) {
-				fmt.Fprintf(os.Stderr, "starting %s...\n", name)
+			go func(svcName string, svc blueprint.ServiceDef) {
+				fmt.Fprintf(os.Stderr, "starting %s...\n", svcName)
 				portMap := map[string]int{}
 				for containerPort, portDef := range svc.Ports {
 					portMap[containerPort] = allocated[portDef.Var]
@@ -250,12 +250,19 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 				ch <- containerResult{svcName, cid, err}
 			}(svcName, svc)
 		}
+		var firstErr error
 		for range dedicatedServices {
 			r := <-ch
 			if r.err != nil {
-				return fmt.Errorf("starting %s: %w", r.name, r.err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("starting %s: %w", r.name, r.err)
+				}
+				continue
 			}
 			containerIDs[r.name] = r.id
+		}
+		if firstErr != nil {
+			return firstErr
 		}
 	}
 
@@ -303,13 +310,20 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 				ch <- procResult{proc.Name, pgid, startTime, err}
 			}(proc)
 		}
+		var firstErr error
 		for range deps.Blueprint.Processes {
 			r := <-ch
 			if r.err != nil {
-				return r.err
+				if firstErr == nil {
+					firstErr = r.err
+				}
+				continue
 			}
 			pids[r.name] = r.pgid
 			pidStarts[r.name] = r.startTime
+		}
+		if firstErr != nil {
+			return firstErr
 		}
 	}
 

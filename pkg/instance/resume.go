@@ -80,17 +80,25 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 				ch <- containerResult{name, cid, alreadyRunning, err}
 			}(svcName, cid)
 		}
+		var firstErr error
 		for range rec.ContainerIDs {
 			r := <-ch
 			if r.err != nil {
-				if errdefs.IsNotFound(r.err) {
-					return fmt.Errorf("container for %q no longer exists — run 'plax down %s' then 'plax up %s' to rebuild: %w", r.name, name, name, r.err)
+				if firstErr == nil {
+					if errdefs.IsNotFound(r.err) {
+						firstErr = fmt.Errorf("container for %q no longer exists — run 'plax down %s' then 'plax up %s' to rebuild: %w", r.name, name, name, r.err)
+					} else {
+						firstErr = fmt.Errorf("starting %s: %w", r.name, r.err)
+					}
 				}
-				return fmt.Errorf("starting %s: %w", r.name, r.err)
+				continue
 			}
 			if !r.alreadyRunning {
 				startedContainers[r.name] = r.cid
 			}
+		}
+		if firstErr != nil {
+			return firstErr
 		}
 	}
 
@@ -151,13 +159,20 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 					ch <- procResult{proc.Name, pgid, startTime, err}
 				}(proc)
 			}
+			var firstErr error
 			for range deps.Blueprint.Processes {
 				r := <-ch
 				if r.err != nil {
-					return r.err
+					if firstErr == nil {
+						firstErr = r.err
+					}
+					continue
 				}
 				pids[r.name] = r.pgid
 				pidStarts[r.name] = r.startTime
+			}
+			if firstErr != nil {
+				return firstErr
 			}
 		}
 	}

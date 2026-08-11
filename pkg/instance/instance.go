@@ -82,6 +82,38 @@ func validateName(name string) error {
 	return nil
 }
 
+// NewUpDeps validates and assembles the dependencies that Up requires.
+// Down does not use this constructor — it builds its own tolerant, partial
+// deps that tolerate nil BM and Docker.
+func NewUpDeps(bp *blueprint.Blueprint, reg *registry.Registry, pool *portpool.PortPool, bm BaseManager, docker DockerDriver, root string) (*Deps, error) {
+	if bp == nil {
+		return nil, fmt.Errorf("instance: blueprint is required")
+	}
+	if reg == nil {
+		return nil, fmt.Errorf("instance: registry is required")
+	}
+	if pool == nil {
+		return nil, fmt.Errorf("instance: port pool is required")
+	}
+	if bm == nil {
+		return nil, fmt.Errorf("instance: base manager is required")
+	}
+	if docker == nil {
+		return nil, fmt.Errorf("instance: docker driver is required")
+	}
+	if root == "" {
+		return nil, fmt.Errorf("instance: repo root is required")
+	}
+	return &Deps{
+		Blueprint: bp,
+		Registry:  reg,
+		Pool:      pool,
+		BM:        bm,
+		Docker:    docker,
+		RepoRoot:  root,
+	}, nil
+}
+
 // hashFile returns the SHA-256 hex digest of a file, or empty string if
 // the file does not exist.
 func hashFile(path string) string {
