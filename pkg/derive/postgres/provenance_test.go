@@ -41,7 +41,7 @@ func testDB(t *testing.T, ctx context.Context, name string) {
 	})
 }
 
-func TestCreateProvenance_RoundTrip(t *testing.T) {
+func TestPostgres_CreateProvenanceRoundTrip(t *testing.T) {
 	ctx := context.Background()
 	testDB(t, ctx, "prov_test_roundtrip")
 	pool := testPool(t, ctx)
@@ -89,7 +89,7 @@ func TestCreateProvenance_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestCreateProvenance_Idempotent(t *testing.T) {
+func TestPostgres_CreateProvenanceIdempotent(t *testing.T) {
 	ctx := context.Background()
 	testDB(t, ctx, "prov_test_idem")
 	pool := testPool(t, ctx)
@@ -134,7 +134,7 @@ func TestCreateProvenance_Idempotent(t *testing.T) {
 	}
 }
 
-func TestReadProvenance_NoTable(t *testing.T) {
+func TestPostgres_ReadProvenanceNoTable(t *testing.T) {
 	ctx := context.Background()
 	testDB(t, ctx, "prov_test_notable")
 	pool := testPool(t, ctx)
@@ -169,7 +169,7 @@ func TestReadProvenance_NoTable(t *testing.T) {
 	}
 }
 
-func TestComputeSchemaHash_Success(t *testing.T) {
+func TestPostgres_ComputeSchemaHashSuccess(t *testing.T) {
 	dir := filepath.Join("testdata", "migrations")
 	hash, err := ComputeSchemaHash(dir)
 	if err != nil {
@@ -180,7 +180,7 @@ func TestComputeSchemaHash_Success(t *testing.T) {
 	}
 }
 
-func TestComputeSchemaHash_NoDir(t *testing.T) {
+func TestPostgres_ComputeSchemaHashNoDir(t *testing.T) {
 	hash, err := ComputeSchemaHash("testdata/nonexistent")
 	if err != nil {
 		t.Fatalf("ComputeSchemaHash: %v", err)

@@ -4,11 +4,16 @@ package registry
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 )
+
+var ErrInstanceExists = errors.New("registry: instance already exists")
+var ErrInstanceNotFound = errors.New("registry: instance not found")
+var ErrPortAllocated = errors.New("registry: port already allocated")
 
 type State string
 
@@ -172,7 +177,7 @@ func (r *Registry) AddInstance(id string, rec InstanceRecord) error {
 		return fmt.Errorf("registry: record ID %q does not match key %q", rec.ID, id)
 	}
 	if _, exists := r.Instances[id]; exists {
-		return fmt.Errorf("registry: instance %q already exists", id)
+		return fmt.Errorf("%w: %s", ErrInstanceExists, id)
 	}
 	if rec.ID == "" {
 		rec.ID = id
@@ -183,7 +188,7 @@ func (r *Registry) AddInstance(id string, rec InstanceRecord) error {
 
 func (r *Registry) RemoveInstance(id string) error {
 	if _, exists := r.Instances[id]; !exists {
-		return fmt.Errorf("registry: instance %q not found", id)
+		return fmt.Errorf("%w: %s", ErrInstanceNotFound, id)
 	}
 	delete(r.Instances, id)
 	for port, alloc := range r.PortAllocations {
@@ -194,6 +199,14 @@ func (r *Registry) RemoveInstance(id string) error {
 	return nil
 }
 
+func (r *Registry) UpdateInstance(name string, rec InstanceRecord) error {
+	if _, ok := r.Instances[name]; !ok {
+		return fmt.Errorf("%w: %s", ErrInstanceNotFound, name)
+	}
+	r.Instances[name] = rec
+	return nil
+}
+
 func (r *Registry) GetInstance(id string) (InstanceRecord, bool) {
 	rec, ok := r.Instances[id]
 	return rec, ok
@@ -201,7 +214,7 @@ func (r *Registry) GetInstance(id string) (InstanceRecord, bool) {
 
 func (r *Registry) AllocPort(port int, inst, svc string) error {
 	if _, exists := r.PortAllocations[port]; exists {
-		return fmt.Errorf("registry: port %d already allocated", port)
+		return fmt.Errorf("%w: %d", ErrPortAllocated, port)
 	}
 	r.PortAllocations[port] = PortAllocation{Instance: inst, Service: svc}
 	return nil

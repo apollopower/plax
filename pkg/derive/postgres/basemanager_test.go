@@ -81,7 +81,7 @@ func countUsers(t *testing.T, ctx context.Context, bm *BaseManager, dbName strin
 	return n
 }
 
-func TestCreateBase_Success(t *testing.T) {
+func TestPostgres_CreateBaseSuccess(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -108,7 +108,7 @@ func TestCreateBase_Success(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestCreateBase_Idempotent(t *testing.T) {
+func TestPostgres_CreateBaseIdempotent(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -124,7 +124,7 @@ func TestCreateBase_Idempotent(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestCreateBase_ExistsUnlocked(t *testing.T) {
+func TestPostgres_CreateBaseExistsUnlocked(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -143,7 +143,7 @@ func TestCreateBase_ExistsUnlocked(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestSeedBase_Success(t *testing.T) {
+func TestPostgres_SeedBaseSuccess(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -175,7 +175,7 @@ func TestSeedBase_Success(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestSeedBase_NoBase(t *testing.T) {
+func TestPostgres_SeedBaseNoBase(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -187,7 +187,7 @@ func TestSeedBase_NoBase(t *testing.T) {
 	}
 }
 
-func TestSeedBase_CommandFails(t *testing.T) {
+func TestPostgres_SeedBaseCommandFails(t *testing.T) {
 	bm := testManagerWith(t, failingSeedBlueprint())
 	ctx := context.Background()
 
@@ -216,7 +216,7 @@ func TestSeedBase_CommandFails(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestResetBase_Success(t *testing.T) {
+func TestPostgres_ResetBaseSuccess(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -248,7 +248,7 @@ func TestResetBase_Success(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestResetBase_CleansBaseNext(t *testing.T) {
+func TestPostgres_ResetBaseCleansBaseNext(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -277,7 +277,7 @@ func TestResetBase_CleansBaseNext(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestCloneBase_Success(t *testing.T) {
+func TestPostgres_CloneBaseSuccess(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -313,7 +313,7 @@ func TestCloneBase_Success(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestCloneBase_BaseNotLocked(t *testing.T) {
+func TestPostgres_CloneBaseBaseNotLocked(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -334,7 +334,7 @@ func TestCloneBase_BaseNotLocked(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestCloneBase_AlreadyExists(t *testing.T) {
+func TestPostgres_CloneBaseAlreadyExists(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -357,7 +357,7 @@ func TestCloneBase_AlreadyExists(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestCloneBase_NoBase(t *testing.T) {
+func TestPostgres_CloneBaseNoBase(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -369,7 +369,7 @@ func TestCloneBase_NoBase(t *testing.T) {
 	}
 }
 
-func TestRefreshBase_Success(t *testing.T) {
+func TestPostgres_RefreshBaseSuccess(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -408,7 +408,7 @@ func TestRefreshBase_Success(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestRefreshBase_NoBase(t *testing.T) {
+func TestPostgres_RefreshBaseNoBase(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -430,7 +430,7 @@ func TestRefreshBase_NoBase(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestRefreshBase_BaseNextExists(t *testing.T) {
+func TestPostgres_RefreshBaseBaseNextExists(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -455,7 +455,7 @@ func TestRefreshBase_BaseNextExists(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestRefreshBase_ResumeDeferred(t *testing.T) {
+func TestPostgres_RefreshBaseResumeDeferred(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -512,7 +512,7 @@ func TestRefreshBase_ResumeDeferred(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestRefreshBase_SeedFails(t *testing.T) {
+func TestPostgres_RefreshBaseSeedFails(t *testing.T) {
 	bm := testManagerWith(t, failingSeedBlueprint())
 	ctx := context.Background()
 
@@ -545,7 +545,7 @@ func TestRefreshBase_SeedFails(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestDropInstanceDB_Success(t *testing.T) {
+func TestPostgres_DropInstanceDBSuccess(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -574,7 +574,7 @@ func TestDropInstanceDB_Success(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestDropInstanceDB_NoDB(t *testing.T) {
+func TestPostgres_DropInstanceDBNoDB(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -583,7 +583,7 @@ func TestDropInstanceDB_NoDB(t *testing.T) {
 	}
 }
 
-func TestDropInstanceDB_ActiveConnections(t *testing.T) {
+func TestPostgres_DropInstanceDBActiveConnections(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -613,7 +613,7 @@ func TestDropInstanceDB_ActiveConnections(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestBaseStatus_Exists(t *testing.T) {
+func TestPostgres_BaseStatusExists(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -637,7 +637,7 @@ func TestBaseStatus_Exists(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestBaseStatus_NotExists(t *testing.T) {
+func TestPostgres_BaseStatusNotExists(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -654,7 +654,7 @@ func TestBaseStatus_NotExists(t *testing.T) {
 	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
-func TestBaseStatus_BaseNext(t *testing.T) {
+func TestPostgres_BaseStatusBaseNext(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -685,7 +685,7 @@ func TestBaseStatus_BaseNext(t *testing.T) {
 // flight hold the template lock, so the swap's DROP must back off and retry
 // until they finish. Clones that collide with the brief provenance-read
 // unlock window fail with a recoverable error and are tolerated.
-func TestEndToEnd_RefreshWhileCloning(t *testing.T) {
+func TestPostgres_EndToEndRefreshWhileCloning(t *testing.T) {
 	bm := testManager(t)
 	ctx := context.Background()
 
@@ -765,7 +765,7 @@ func TestEndToEnd_RefreshWhileCloning(t *testing.T) {
 	t.Logf("%d clones succeeded, %d failed recoverably: %v", len(versions), len(cloneErrs), cloneErrs)
 }
 
-func TestDSNForDB_QueryParamSlash(t *testing.T) {
+func TestPostgres_DSNForDBQueryParamSlash(t *testing.T) {
 	bm := testManager(t)
 	// Simulate a DSN with slashes in query params.
 	bm.dsn = "postgres://user:pass@localhost:5432/postgres?search_path=foo/bar"

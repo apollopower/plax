@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/apollopower/plax/pkg/blueprint"
@@ -134,7 +135,7 @@ func TestDoctor_PortForUnknownInstance(t *testing.T) {
 
 	found := false
 	for _, c := range report.Checks {
-		if c.Level == Fail && containsStr(c.Message, "ghost") {
+		if c.Level == Fail && strings.Contains(c.Message, "ghost") {
 			found = true
 		}
 	}
@@ -156,7 +157,7 @@ func TestDoctor_ComposeServiceNotInBlueprint(t *testing.T) {
 
 	found := false
 	for _, c := range report.Checks {
-		if c.Level == Warn && containsStr(c.Message, "compose service") && containsStr(c.Message, "postgres") {
+		if c.Level == Warn && strings.Contains(c.Message, "compose service") && strings.Contains(c.Message, "postgres") {
 			found = true
 		}
 	}
@@ -182,7 +183,7 @@ func TestDoctor_BaseUnlocked(t *testing.T) {
 
 	found := false
 	for _, c := range report.Checks {
-		if c.Level == Fail && containsStr(c.Message, "not locked") {
+		if c.Level == Fail && strings.Contains(c.Message, "not locked") {
 			found = true
 		}
 	}
@@ -205,7 +206,7 @@ func TestDoctor_BaseMissing(t *testing.T) {
 
 	found := false
 	for _, c := range report.Checks {
-		if c.Level == Fail && containsStr(c.Message, "does not exist") {
+		if c.Level == Fail && strings.Contains(c.Message, "does not exist") {
 			found = true
 		}
 	}
@@ -224,10 +225,10 @@ func TestDoctor_NilBackends(t *testing.T) {
 	hasDockerFail := false
 	hasPgFail := false
 	for _, c := range report.Checks {
-		if c.Level == Fail && containsStr(c.Message, "docker") {
+		if c.Level == Fail && strings.Contains(c.Message, "docker") {
 			hasDockerFail = true
 		}
-		if c.Level == Fail && containsStr(c.Message, "postgres") {
+		if c.Level == Fail && strings.Contains(c.Message, "postgres") {
 			hasPgFail = true
 		}
 	}
@@ -253,7 +254,7 @@ func TestDoctor_BaseNextStaged(t *testing.T) {
 
 	found := false
 	for _, c := range report.Checks {
-		if c.Level == Warn && containsStr(c.Message, "plax_base_next") {
+		if c.Level == Warn && strings.Contains(c.Message, "plax_base_next") {
 			found = true
 		}
 	}
@@ -277,7 +278,7 @@ func TestDoctor_OrphanDatabase(t *testing.T) {
 
 	found := false
 	for _, c := range report.Checks {
-		if c.Area == "orphan-databases" && containsStr(c.Message, "plax_orphan_test") {
+		if c.Area == "orphan-databases" && strings.Contains(c.Message, "plax_orphan_test") {
 			found = true
 		}
 	}
@@ -291,7 +292,7 @@ func TestDoctor_OrphanDatabase(t *testing.T) {
 	// plax_i1 should also be reported as orphan since no registry entry declares it.
 	foundI1 := false
 	for _, c := range report.Checks {
-		if c.Area == "orphan-databases" && containsStr(c.Message, "plax_i1") {
+		if c.Area == "orphan-databases" && strings.Contains(c.Message, "plax_i1") {
 			foundI1 = true
 		}
 	}
@@ -366,18 +367,4 @@ func TestDoctor_OldRecord_Fallback(t *testing.T) {
 	}
 }
 
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		match := true
-		for j := 0; j < len(substr); j++ {
-			if s[i+j] != substr[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
-}
+var _ = strings.TrimSpace // keep import alive

@@ -18,6 +18,9 @@ func ProbeFree(port int) bool {
 	return true
 }
 
+// PortOwner returns the PID and command name of the process bound to port.
+// Linux-only: reads /proc/net/tcp and /proc/<pid>/. Returns ok=false on
+// other platforms. ProbeFree is the portable alternative.
 func PortOwner(port int) (pid int, cmdline string, ok bool) {
 	hexPort := fmt.Sprintf("%04X", port)
 	inode := findInode(hexPort)
@@ -62,6 +65,10 @@ func findInode(hexPort string) uint64 {
 				_ = f.Close()
 				return ino
 			}
+		}
+		if err := sc.Err(); err != nil {
+			_ = f.Close()
+			continue
 		}
 		_ = f.Close()
 	}

@@ -27,6 +27,8 @@ func binaryInfo(name string) (binary, flag string) {
 	return name, "--version"
 }
 
+// ParsePins reads a .tool-versions file and returns tool→version mappings.
+// Returns (nil, nil) if the file does not exist.
 func ParsePins(path string) (map[string]string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -61,13 +63,15 @@ func ParsePins(path string) (map[string]string, error) {
 	return pins, nil
 }
 
+// ResolveVersions probes each tool's binary and returns tool→resolved-version.
+// Tools whose binaries are missing are silently omitted.
 func ResolveVersions(pins map[string]string) map[string]string {
 	resolved := make(map[string]string)
 	for name := range pins {
 		binary, flag := binaryInfo(name)
-		ver := tryFlag(name, binary, flag)
+		ver := tryFlag(binary, flag)
 		if ver == "" && flag == "--version" {
-			ver = tryFlag(name, binary, "version")
+			ver = tryFlag(binary, "version")
 		}
 		if ver != "" {
 			resolved[name] = ver
@@ -76,7 +80,7 @@ func ResolveVersions(pins map[string]string) map[string]string {
 	return resolved
 }
 
-func tryFlag(name, binary, flag string) string {
+func tryFlag(binary, flag string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, flag)
@@ -87,6 +91,7 @@ func tryFlag(name, binary, flag string) string {
 	return strings.TrimSpace(firstLine(string(out)))
 }
 
+// PinMatch is the result of comparing a resolved version against a pin.
 type PinMatch int
 
 const (
@@ -108,12 +113,16 @@ func (m PinMatch) String() string {
 	}
 }
 
+// Diff describes a tool version difference between a recorded baseline and
+// the current machine state. Recorded or Current may be empty for added/removed.
 type Diff struct {
 	Tool     string `json:"tool"`
 	Recorded string `json:"recorded"`
 	Current  string `json:"current"`
 }
 
+// CompareVersions returns the names of tools whose resolved versions differ
+// from the baseline, or that were added/removed. Sorted for determinism.
 func CompareVersions(recorded, current map[string]string) []Diff {
 	var diffs []Diff
 	seen := map[string]bool{}
@@ -134,6 +143,8 @@ func CompareVersions(recorded, current map[string]string) []Diff {
 	return diffs
 }
 
+// MatchesPin reports whether a resolved version satisfies a pin.
+// Non-semver pins (lts, latest) return PinMatchUnverifiable.
 func MatchesPin(pin, resolved string) PinMatch {
 	lower := strings.ToLower(pin)
 	if lower == "lts" || lower == "latest" {

@@ -203,6 +203,8 @@ func main() {
 		ctx.FatalIfErrorf(runSend(cli.Send))
 	case "recv <name>":
 		ctx.FatalIfErrorf(runRecv(cli.Recv))
+	default:
+		ctx.FatalIfErrorf(fmt.Errorf("unknown command: %s", ctx.Command()))
 	}
 }
 
@@ -211,9 +213,13 @@ func runInit(cmd InitCmd) error {
 	if err != nil {
 		return fmt.Errorf("init: resolving root: %w", err)
 	}
-	bp, err := blueprint.InitFromRepo(absRoot)
+	bp, warnings, err := blueprint.InitFromRepo(absRoot)
 	if err != nil {
 		return fmt.Errorf("init: %w", err)
+	}
+
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, w)
 	}
 
 	enc := json.NewEncoder(os.Stdout)
@@ -519,7 +525,10 @@ func runAttach(cmd AttachCmd) error {
 		fmt.Fprintf(os.Stderr, "note: %d unread message(s) — run 'plax recv %s' to read\n", n, cmd.Name)
 	}
 
-	absRoot, _ := filepath.Abs(cmd.Root)
+	absRoot, err := filepath.Abs(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("resolving repo root: %w", err)
+	}
 	if bp != nil {
 		currentStamp := stamp.Compute(cmd.Root, bp)
 		sdeps := &status.Deps{
@@ -896,12 +905,9 @@ func runStatus(cmd StatusCmd) error {
 
 	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
 	if err != nil {
-		bp = nil
-		connStr = ""
-	}
-
-	if bp == nil {
+		fmt.Fprintf(os.Stderr, "warning: %v — showing degraded status\n", err)
 		bp = &blueprint.Blueprint{}
+		connStr = ""
 	}
 
 	currentStamp := stamp.Compute(cmd.Root, bp)
@@ -941,9 +947,9 @@ func runDoctor(cmd DoctorCmd) error {
 		return fmt.Errorf("resolving repo root: %w", err)
 	}
 
-	bp, err := loadBlueprint(cmd.Root)
+	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
 	if err != nil {
-		return fmt.Errorf("parsing plax.json: %w", err)
+		return err
 	}
 
 	reg, err := openRegistry(cmd.Root)
@@ -958,10 +964,7 @@ func runDoctor(cmd DoctorCmd) error {
 		RepoRoot:  absRoot,
 	}
 
-	pgURL := cmd.PgURL
-	if pgURL == "" {
-		pgURL, _ = deriveConnString(bp)
-	}
+	pgURL := connStr
 	if pgURL != "" {
 		bm, err := postgres.NewBaseManager(context.Background(), pgURL, absRoot, bp)
 		if err == nil {
@@ -1025,7 +1028,7 @@ func runRederive(cmd RederiveCmd) error {
 	defer reg.Close()
 
 	deps := &instance.Deps{Blueprint: bp, Registry: reg, RepoRoot: absRoot}
-	return instance.Rederive(context.Background(), deps)
+	return instance.Rederive(deps)
 }
 
 func runSend(cmd SendCmd) error {
@@ -1073,7 +1076,7 @@ func runSend(cmd SendCmd) error {
 		return enc.Encode(map[string]string{"status": "sent", "instance": cmd.Name, "file": filename})
 	}
 
-	fmt.Fprintf(os.Stderr, "message written: %s\n", filename)
+	fmt.Println(filename)
 	return nil
 }
 
@@ -1096,14 +1099,19 @@ func runRecv(cmd RecvCmd) error {
 		n = 1
 	}
 
-	var msgs []mailbox.Message
+	var result *mailbox.RecvResult
 	if cmd.All {
-		msgs, err = mailbox.RecvAll(cmd.Root, cmd.Name)
+		result, err = mailbox.RecvAll(cmd.Root, cmd.Name)
 	} else {
-		msgs, err = mailbox.Recv(cmd.Root, cmd.Name, n)
+		result, err = mailbox.Recv(cmd.Root, cmd.Name, n)
 	}
 	if err != nil {
 		return err
+	}
+	msgs := result.Messages
+
+	for _, name := range result.Skipped {
+		fmt.Fprintf(os.Stderr, "warning: skipped unreadable message: %s\n", name)
 	}
 
 	if cmd.JSON {
@@ -1168,6 +1176,4 @@ func printReportTable(w *os.File, r *status.Report) {
 	}
 }
 
-func deriveConnString(bp *blueprint.Blueprint) (string, error) {
-	return postgres.ConnString(bp)
-}
+// deriveConnString removed — call postgres.ConnString directly

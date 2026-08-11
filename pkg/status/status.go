@@ -25,7 +25,6 @@ const (
 )
 
 type Dimension struct {
-	Name   string `json:"-"`
 	Level  Level  `json:"status"`
 	Detail string `json:"detail"`
 }
@@ -82,11 +81,11 @@ func Build(ctx context.Context, deps *Deps, name string) (*Report, error) {
 	}
 
 	if provErr != nil {
-		report.Schema = Dimension{Name: "schema", Level: Unknown, Detail: fmt.Sprintf("instance provenance: %v", provErr)}
-		report.Data = Dimension{Name: "data", Level: Unknown, Detail: fmt.Sprintf("instance provenance: %v", provErr)}
+		report.Schema = Dimension{Level: Unknown, Detail: fmt.Sprintf("instance provenance: %v", provErr)}
+		report.Data = Dimension{Level: Unknown, Detail: fmt.Sprintf("instance provenance: %v", provErr)}
 	} else {
 		report.Schema = schemaDrift(deps.RepoRoot, base, migrationsDir, deps.BM, &rec, prov)
-		report.Data = dataDrift(ctx, deps.BM, &rec, prov)
+		report.Data = dataDrift(ctx, deps.BM, prov)
 	}
 
 	return report, nil
@@ -108,7 +107,7 @@ func resolveBase(rec *registry.InstanceRecord, repoRoot string) string {
 }
 
 func codeDrift(repoRoot, base string, rec *registry.InstanceRecord) Dimension {
-	d := Dimension{Name: "code"}
+	var d Dimension
 	if base == "" {
 		d.Level = Unknown
 		d.Detail = "no base ref recorded"
@@ -164,7 +163,7 @@ func codeDrift(repoRoot, base string, rec *registry.InstanceRecord) Dimension {
 }
 
 func hostDrift(repoRoot string, bp *blueprint.Blueprint, rec *registry.InstanceRecord) Dimension {
-	d := Dimension{Name: "host"}
+	var d Dimension
 	if rec.Provenance.ToolVersions == nil {
 		d.Level = Unknown
 		d.Detail = "recorded before Phase 4"
@@ -214,7 +213,7 @@ func hostDrift(repoRoot string, bp *blueprint.Blueprint, rec *registry.InstanceR
 }
 
 func configDrift(reg *registry.Registry, current registry.BlueprintStamp) Dimension {
-	d := Dimension{Name: "config"}
+	var d Dimension
 	stored := reg.BlueprintStamp
 	if stored.ComposeHash == "" && stored.EnvExampleHash == "" && stored.ToolchainHash == "" {
 		d.Level = Unknown
@@ -244,7 +243,7 @@ func configDrift(reg *registry.Registry, current registry.BlueprintStamp) Dimens
 }
 
 func schemaDrift(repoRoot, base, migrationsDir string, bm BaseManager, rec *registry.InstanceRecord, prov *postgres.ProvenanceRow) Dimension {
-	d := Dimension{Name: "schema"}
+	var d Dimension
 	if bm == nil || prov == nil || prov.SchemaHash == "" {
 		d.Level = Unknown
 		switch {
@@ -305,8 +304,8 @@ func schemaDrift(repoRoot, base, migrationsDir string, bm BaseManager, rec *regi
 	return d
 }
 
-func dataDrift(ctx context.Context, bm BaseManager, rec *registry.InstanceRecord, prov *postgres.ProvenanceRow) Dimension {
-	d := Dimension{Name: "data"}
+func dataDrift(ctx context.Context, bm BaseManager, prov *postgres.ProvenanceRow) Dimension {
+	var d Dimension
 	if bm == nil {
 		d.Level = Unknown
 		d.Detail = "postgres unreachable"

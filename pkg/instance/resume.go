@@ -17,6 +17,8 @@ import (
 	"github.com/docker/docker/errdefs"
 )
 
+// Resume restarts a suspended instance: starts stopped containers, probes
+// port availability, re-derives .env, and spawns processes.
 func Resume(ctx context.Context, deps *Deps, name string) error {
 	rec, found := deps.Registry.GetInstance(name)
 	if !found {
@@ -199,7 +201,9 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 	rec.State = registry.StateRunning
 	rec.PIDs = pids
 	rec.PIDStarts = pidStarts
-	deps.Registry.Instances[name] = rec
+	if err := deps.Registry.UpdateInstance(name, rec); err != nil {
+		return err
+	}
 
 	if err := deps.Registry.Save(); err != nil {
 		return fmt.Errorf("registry: write: %w", err)

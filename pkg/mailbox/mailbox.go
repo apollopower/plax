@@ -13,11 +13,18 @@ import (
 	"time"
 )
 
+// Message is a single inter-instance notification.
 type Message struct {
 	From      string `json:"from"`
 	Subject   string `json:"subject,omitempty"`
 	Body      string `json:"body"`
 	Timestamp string `json:"timestamp"`
+}
+
+// RecvResult holds the result of a Recv or RecvAll call.
+type RecvResult struct {
+	Messages []Message
+	Skipped  []string // filenames that could not be parsed
 }
 
 func Dir(root, name string) string {
@@ -32,6 +39,9 @@ func RemoveDir(root, name string) error {
 	return os.RemoveAll(Dir(root, name))
 }
 
+// Send writes a message to the named instance's mailbox.
+// The write is atomic: the message appears fully formed or not at all.
+// Returns an error if the mailbox directory does not exist.
 func Send(root, name string, msg Message) (string, error) {
 	dir := Dir(root, name)
 	ok, err := exists(dir)
@@ -76,24 +86,29 @@ func Send(root, name string, msg Message) (string, error) {
 	return finalName, nil
 }
 
-func Recv(root, name string, count int) ([]Message, error) {
+// Recv reads up to count messages from the named instance's mailbox,
+// oldest first, and removes them. Delivery is at-least-once: a message
+// whose removal fails will be redelivered on the next call.
+func Recv(root, name string, count int) (*RecvResult, error) {
 	if count < 1 {
 		return nil, fmt.Errorf("mailbox: recv count must be >= 1, got %d", count)
 	}
 	return recvFile(root, name, count, false)
 }
 
-func RecvAll(root, name string) ([]Message, error) {
+// RecvAll reads all messages from the named instance's mailbox, oldest
+// first, and removes them. Delivery is at-least-once.
+func RecvAll(root, name string) (*RecvResult, error) {
 	return recvFile(root, name, 0, true)
 }
 
-func recvFile(root, name string, count int, all bool) ([]Message, error) {
+func recvFile(root, name string, count int, all bool) (*RecvResult, error) {
 	files, err := listFiles(root, name)
 	if err != nil {
 		return nil, err
 	}
 	if len(files) == 0 {
-		return nil, nil
+		return &RecvResult{}, nil
 	}
 
 	if !all && count > 0 && count < len(files) {
@@ -101,16 +116,17 @@ func recvFile(root, name string, count int, all bool) ([]Message, error) {
 	}
 
 	var messages []Message
+	var skipped []string
 	var removed []string
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "recv: skipping %s: %v\n", filepath.Base(f), err)
+			skipped = append(skipped, filepath.Base(f))
 			continue
 		}
 		var msg Message
 		if err := json.Unmarshal(data, &msg); err != nil {
-			fmt.Fprintf(os.Stderr, "recv: skipping %s: %v\n", filepath.Base(f), err)
+			skipped = append(skipped, filepath.Base(f))
 			continue
 		}
 		messages = append(messages, msg)
@@ -119,15 +135,15 @@ func recvFile(root, name string, count int, all bool) ([]Message, error) {
 
 	for _, f := range removed {
 		if err := os.Remove(f); err != nil {
-			fmt.Fprintf(os.Stderr, "recv: remove %s: %v\n", filepath.Base(f), err)
+			skipped = append(skipped, filepath.Base(f))
 		}
 	}
 
-	if len(messages) == 0 && len(files) > 0 {
-		return nil, fmt.Errorf("recv: all %d messages unreadable", len(files))
+	if len(messages) == 0 && len(files) > 0 && len(skipped) == len(files) {
+		return &RecvResult{Skipped: skipped}, fmt.Errorf("recv: all %d messages unreadable", len(files))
 	}
 
-	return messages, nil
+	return &RecvResult{Messages: messages, Skipped: skipped}, nil
 }
 
 func Count(root, name string) (int, error) {

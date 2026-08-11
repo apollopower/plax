@@ -14,7 +14,7 @@ import (
 	"github.com/apollopower/plax/pkg/registry"
 )
 
-func TestSuspend_Success(t *testing.T) {
+func TestInstance_SuspendSuccess(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 
 	if err := Up(context.Background(), deps, "i1"); err != nil {
@@ -46,7 +46,7 @@ func TestSuspend_Success(t *testing.T) {
 	_ = bm
 }
 
-func TestSuspend_AlreadySuspended(t *testing.T) {
+func TestInstance_SuspendAlreadySuspended(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
 	if err := Up(context.Background(), deps, "i1"); err != nil {
@@ -65,7 +65,7 @@ func TestSuspend_AlreadySuspended(t *testing.T) {
 	}
 }
 
-func TestSuspend_NotFound(t *testing.T) {
+func TestInstance_SuspendNotFound(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
 	err := Suspend(context.Background(), deps, "nope")
@@ -74,7 +74,7 @@ func TestSuspend_NotFound(t *testing.T) {
 	}
 }
 
-func TestSuspend_NilDocker(t *testing.T) {
+func TestInstance_SuspendNilDocker(t *testing.T) {
 	deps, _, drv := testDeps(t, testBlueprint())
 
 	if err := Up(context.Background(), deps, "i1"); err != nil {
@@ -98,7 +98,7 @@ func TestSuspend_NilDocker(t *testing.T) {
 	}
 }
 
-func TestResume_Success(t *testing.T) {
+func TestInstance_ResumeSuccess(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
 	if err := Up(context.Background(), deps, "i1"); err != nil {
@@ -145,7 +145,7 @@ func TestResume_Success(t *testing.T) {
 	}
 }
 
-func TestResume_NotSuspended(t *testing.T) {
+func TestInstance_ResumeNotSuspended(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
 	if err := Up(context.Background(), deps, "i1"); err != nil {
@@ -159,7 +159,7 @@ func TestResume_NotSuspended(t *testing.T) {
 	}
 }
 
-func TestResume_PortTaken(t *testing.T) {
+func TestInstance_ResumePortTaken(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
 	if err := Up(context.Background(), deps, "i1"); err != nil {
@@ -202,7 +202,7 @@ func TestResume_PortTaken(t *testing.T) {
 	}
 }
 
-func TestUp_RecordsBaseRefAndToolVersions(t *testing.T) {
+func TestInstance_UpRecordsBaseRefAndToolVersions(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {
 		t.Skip("go not on PATH — cannot resolve toolchain versions")
 	}

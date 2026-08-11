@@ -18,7 +18,9 @@ type composeService struct {
 	Command     any    `yaml:"command"`     // string or list
 }
 
-func InitFromRepo(root string) (*Blueprint, error) {
+func InitFromRepo(root string) (*Blueprint, []string, error) {
+	var warnings []string
+
 	bp := &Blueprint{
 		Version:   1,
 		PortPool:  PortPool{Start: 3000, End: 4000},
@@ -38,21 +40,22 @@ func InitFromRepo(root string) (*Blueprint, error) {
 
 	composePath := filepath.Join(root, "docker-compose.yml")
 	if _, err := os.Stat(composePath); err != nil {
-		return nil, fmt.Errorf("init: docker-compose.yml not found at %s", composePath)
+		return nil, nil, fmt.Errorf("init: docker-compose.yml not found at %s", composePath)
 	}
 
-	svcs, err := parseComposeFile(composePath)
+	svcs, warnings, err := parseComposeFile(composePath)
 	if err != nil {
-		return nil, fmt.Errorf("init: invalid compose YAML: %w", err)
+		return nil, nil, fmt.Errorf("init: invalid compose YAML: %w", err)
 	}
 
 	for name, s := range svcs {
 		if s.Image == "" {
-			fmt.Fprintf(os.Stderr, "init: service %q has no image, skipping\n", name)
+			warnings = append(warnings, fmt.Sprintf("init: service %q has no image, skipping", name))
 			continue
 		}
-		def := buildServiceDef(name, s)
-		bp.Services[name] = def
+		res := buildServiceDef(name, s)
+		warnings = append(warnings, res.warnings...)
+		bp.Services[name] = res.def
 	}
 
 	portVarMap := buildPortVarMap(bp.Services, bp.Processes)
@@ -60,7 +63,7 @@ func InitFromRepo(root string) (*Blueprint, error) {
 	envPath := filepath.Join(root, ".env.example")
 	envVars, err := parseEnvExample(envPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "init: .env.example not found at %s — env.holes will be empty\n", envPath)
+		warnings = append(warnings, fmt.Sprintf("init: .env.example not found at %s — env.holes will be empty", envPath))
 		envVars = map[string]string{}
 	}
 
@@ -68,22 +71,23 @@ func InitFromRepo(root string) (*Blueprint, error) {
 
 	bp.Name = filepath.Base(root)
 
-	return bp, nil
+	return bp, warnings, nil
 }
 
-func parseComposeFile(path string) (map[string]composeService, error) {
+func parseComposeFile(path string) (map[string]composeService, []string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	var cf struct {
 		Services yaml.MapSlice `yaml:"services"`
 	}
 	if err := yaml.Unmarshal(data, &cf); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
+	var warnings []string
 	result := map[string]composeService{}
 	for _, item := range cf.Services {
 		name, ok := item.Key.(string)
@@ -92,18 +96,18 @@ func parseComposeFile(path string) (map[string]composeService, error) {
 		}
 		svcData, err := yaml.Marshal(item.Value)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "init: warning: service %q has unparseable definition: %v\n", name, err)
+			warnings = append(warnings, fmt.Sprintf("init: warning: service %q has unparseable definition: %v", name, err))
 			continue
 		}
 		var svc composeService
 		if err := yaml.Unmarshal(svcData, &svc); err != nil {
-			fmt.Fprintf(os.Stderr, "init: warning: service %q has unparseable definition: %v\n", name, err)
+			warnings = append(warnings, fmt.Sprintf("init: warning: service %q has unparseable definition: %v", name, err))
 			continue
 		}
 		result[name] = svc
 	}
 
-	return result, nil
+	return result, warnings, nil
 }
 
 // Matches compose port expressions: ${VAR:-default}:container and ${VAR}:container.
@@ -114,36 +118,46 @@ var composePortExpr = regexp.MustCompile(
 
 var barePortExpr = regexp.MustCompile(`^(\d+):(\d+)$`)
 
-func buildServiceDef(name string, s composeService) ServiceDef {
+type serviceDefResult struct {
+	def      ServiceDef
+	warnings []string
+}
+
+func buildServiceDef(name string, s composeService) serviceDefResult {
 	def := ServiceDef{
 		Image: s.Image,
 		Env:   parseEnvironment(s.Environment),
 	}
 
-	// Postgres supports template-clone for fast per-instance databases sharing one host port,
-	// so it gets logical isolation. Other services with volumes get dedicated containers.
+	var warnings []string
+
 	if img := strings.ToLower(s.Image); strings.Contains(img, "postgres") || strings.Contains(img, "pgvector") {
 		def.Isolation = IsolationLogical
 		def.Type = "postgres"
 		def.Ports = nil
 	} else if len(s.Volumes) > 0 {
 		def.Isolation = IsolationDedicated
-		def.Ports = buildPorts(s.Ports, name)
+		ports, portWarnings := buildPorts(s.Ports, name)
+		def.Ports = ports
+		warnings = append(warnings, portWarnings...)
 	} else {
 		def.Isolation = IsolationShared
-		def.Ports = buildPorts(s.Ports, name)
-		fmt.Fprintf(os.Stderr, "init: service %q has no volumes, defaulting to shared — verify isolation\n", name)
+		ports, portWarnings := buildPorts(s.Ports, name)
+		def.Ports = ports
+		warnings = append(warnings, portWarnings...)
+		warnings = append(warnings, fmt.Sprintf("init: service %q has no volumes, defaulting to shared — verify isolation", name))
 	}
 
 	if s.Command != nil {
 		def.Command = normalizeCommand(s.Command)
 	}
 
-	return def
+	return serviceDefResult{def: def, warnings: warnings}
 }
 
-func buildPorts(ports []any, svcName string) map[string]PortDef {
+func buildPorts(ports []any, svcName string) (map[string]PortDef, []string) {
 	result := map[string]PortDef{}
+	var warnings []string
 	for _, p := range ports {
 		portStr := fmt.Sprint(p)
 
@@ -161,12 +175,12 @@ func buildPorts(ports []any, svcName string) map[string]PortDef {
 		} else if _, err := fmt.Sscanf(portStr, "%d", new(int)); err == nil {
 			containerPort = portStr
 		} else {
-			fmt.Fprintf(os.Stderr, "init: warning: unparseable port %q, skipping\n", portStr)
+			warnings = append(warnings, fmt.Sprintf("init: warning: unparseable port %q, skipping", portStr))
 			continue
 		}
 
 		if containerPort == "" {
-			fmt.Fprintf(os.Stderr, "init: warning: unparseable port %q, skipping\n", portStr)
+			warnings = append(warnings, fmt.Sprintf("init: warning: unparseable port %q, skipping", portStr))
 			continue
 		}
 
@@ -176,7 +190,7 @@ func buildPorts(ports []any, svcName string) map[string]PortDef {
 
 		result[containerPort] = PortDef{Var: varName, Default: defaultHostPort}
 	}
-	return result
+	return result, warnings
 }
 
 func parseEnvironment(env any) map[string]string {
