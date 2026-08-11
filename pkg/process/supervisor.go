@@ -32,7 +32,8 @@ var ErrGroupSurvivors = errors.New("process: group leader dead but children surv
 // start time, which callers persist so a later Terminate can detect PID
 // reuse. startTime is 0 on platforms without /proc.
 //
-// The process is NOT waited on — it outlives the plax command that spawned it.
+// Wait runs in a goroutine to reap the child if it dies while plax lives.
+// If plax exits first, the child is reparented to init and reaped there.
 func Spawn(name, command string, env []string, dir string, logPath string) (int, int64, error) {
 	if err := os.MkdirAll(filepath.Dir(logPath), 0755); err != nil {
 		return 0, 0, fmt.Errorf("process: mkdir for log: %w", err)
@@ -133,7 +134,7 @@ func Terminate(pgid int, startTime int64, timeout time.Duration) error {
 
 	// Signal the process group (negative PID).
 	if err := syscall.Kill(-pgid, syscall.SIGTERM); err != nil {
-		if err == syscall.ESRCH {
+		if errors.Is(err, syscall.ESRCH) {
 			return nil
 		}
 		return fmt.Errorf("process: sigterm pgid %d: %w", pgid, err)
@@ -162,7 +163,7 @@ func Terminate(pgid int, startTime int64, timeout time.Duration) error {
 		return nil
 	}
 	if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil {
-		if err == syscall.ESRCH {
+		if errors.Is(err, syscall.ESRCH) {
 			return nil
 		}
 		return fmt.Errorf("process: sigkill pgid %d: %w", pgid, err)

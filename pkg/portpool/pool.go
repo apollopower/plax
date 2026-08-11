@@ -23,7 +23,6 @@ type portOp int
 const (
 	opAllocate portOp = iota
 	opRelease
-	opReserve
 )
 
 type portRequest struct {
@@ -85,9 +84,6 @@ func (p *PortPool) run() {
 			case opRelease:
 				p.registry.ReleasePort(req.port)
 				req.reply <- portResult{}
-			case opReserve:
-				port, err := p.reserve(req.port, req.instance, req.service)
-				req.reply <- portResult{port: port, err: err}
 			}
 		case <-p.done:
 			return
@@ -111,19 +107,6 @@ func (p *PortPool) allocate(instance, service string) (int, error) {
 	return 0, fmt.Errorf("portpool: no free port in range %d-%d", p.start, p.end)
 }
 
-func (p *PortPool) reserve(port int, instance, service string) (int, error) {
-	if _, exists := p.registry.PortAllocations[port]; exists {
-		return 0, fmt.Errorf("portpool: port %d already allocated", port)
-	}
-	if !ProbeFree(port) {
-		return 0, fmt.Errorf("portpool: port %d is in use on the host", port)
-	}
-	if err := p.registry.AllocPort(port, instance, service); err != nil {
-		return 0, err
-	}
-	return port, nil
-}
-
 func (p *PortPool) Allocate(instance, service string) (int, error) {
 	reply := make(chan portResult, 1)
 	p.reqCh <- portRequest{op: opAllocate, instance: instance, service: service, reply: reply}
@@ -135,13 +118,6 @@ func (p *PortPool) Release(port int) {
 	reply := make(chan portResult, 1)
 	p.reqCh <- portRequest{op: opRelease, port: port, reply: reply}
 	<-reply
-}
-
-func (p *PortPool) Reserve(port int, instance, service string) error {
-	reply := make(chan portResult, 1)
-	p.reqCh <- portRequest{op: opReserve, port: port, instance: instance, service: service, reply: reply}
-	r := <-reply
-	return r.err
 }
 
 func (p *PortPool) Close() {

@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestDerive_BasicSubstitution(t *testing.T) {
+func TestEnv_DeriveBasicSubstitution(t *testing.T) {
 	holes := map[string]string{
 		"DATABASE_URL": "postgres://localhost:5432/{{DB_NAME}}",
 		"REDIS_PORT":   "{{REDIS_PORT}}",
@@ -34,7 +34,7 @@ func TestDerive_BasicSubstitution(t *testing.T) {
 	}
 }
 
-func TestDerive_NonHoleLinesPreserved(t *testing.T) {
+func TestEnv_DeriveNonHoleLinesPreserved(t *testing.T) {
 	holes := map[string]string{
 		"PORT": "{{PORT}}",
 	}
@@ -60,7 +60,7 @@ func TestDerive_NonHoleLinesPreserved(t *testing.T) {
 	}
 }
 
-func TestDerive_MissingHoleInTemplate(t *testing.T) {
+func TestEnv_DeriveMissingHoleInTemplate(t *testing.T) {
 	holes := map[string]string{
 		"PORT":          "{{PORT}}",
 		"GOTENBERG_URL": "http://localhost:{{GOTENBERG_PORT}}",
@@ -87,7 +87,7 @@ func TestDerive_MissingHoleInTemplate(t *testing.T) {
 	}
 }
 
-func TestDerive_DBNameSubstitution(t *testing.T) {
+func TestEnv_DeriveDBNameSubstitution(t *testing.T) {
 	holes := map[string]string{
 		"DATABASE_URL": "postgres://localhost/{{DB_NAME}}",
 	}
@@ -105,7 +105,7 @@ func TestDerive_DBNameSubstitution(t *testing.T) {
 	}
 }
 
-func TestDerive_MultipleHolesInOneValue(t *testing.T) {
+func TestEnv_DeriveMultipleHolesInOneValue(t *testing.T) {
 	holes := map[string]string{
 		"DATABASE_URL": "postgres://localhost:{{PG_PORT}}/{{DB_NAME}}",
 	}
@@ -126,7 +126,7 @@ func TestDerive_MultipleHolesInOneValue(t *testing.T) {
 	}
 }
 
-func TestDerive_UnknownVar(t *testing.T) {
+func TestEnv_DeriveUnknownVar(t *testing.T) {
 	holes := map[string]string{
 		"PORT": "{{NONEXISTENT}}",
 	}
@@ -142,7 +142,7 @@ func TestDerive_UnknownVar(t *testing.T) {
 	}
 }
 
-func TestDerive_OverridesFromUserEnv(t *testing.T) {
+func TestEnv_DeriveOverridesFromUserEnv(t *testing.T) {
 	// Write a user .env with real secrets.
 	userEnv := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(userEnv, []byte("NEXTAUTH_SECRET=real-secret-from-user\nOPENAI_KEY=sk-real\n"), 0644); err != nil {
@@ -177,7 +177,7 @@ func TestDerive_OverridesFromUserEnv(t *testing.T) {
 	}
 }
 
-func TestDerive_OverridesIgnoredForHoles(t *testing.T) {
+func TestEnv_DeriveOverridesIgnoredForHoles(t *testing.T) {
 	// Even if the user's .env has a value for a hole key, the hole wins.
 	userEnv := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(userEnv, []byte("PORT=9999\n"), 0644); err != nil {
@@ -201,7 +201,7 @@ func TestDerive_OverridesIgnoredForHoles(t *testing.T) {
 	}
 }
 
-func TestDerive_NoOverridesFile(t *testing.T) {
+func TestEnv_DeriveNoOverridesFile(t *testing.T) {
 	// Missing overrides file is fine — template is the fallback.
 	holes := map[string]string{
 		"PORT": "{{PORT}}",
@@ -223,7 +223,7 @@ func TestDerive_NoOverridesFile(t *testing.T) {
 	}
 }
 
-func TestParseFile_Basic(t *testing.T) {
+func TestEnv_ParseFileBasic(t *testing.T) {
 	m, err := ParseFile("testdata/basic.env.example")
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
@@ -236,7 +236,7 @@ func TestParseFile_Basic(t *testing.T) {
 	}
 }
 
-func TestParseFile_Comments(t *testing.T) {
+func TestEnv_ParseFileComments(t *testing.T) {
 	m, err := ParseFile("testdata/comments.env.example")
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
@@ -258,7 +258,7 @@ func TestParseFile_Comments(t *testing.T) {
 	}
 }
 
-func TestParseFile_QuotedValues(t *testing.T) {
+func TestEnv_ParseFileQuotedValues(t *testing.T) {
 	m, err := ParseFile("testdata/comments.env.example")
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
@@ -268,7 +268,7 @@ func TestParseFile_QuotedValues(t *testing.T) {
 	}
 }
 
-func TestParseFile_EmptyValue(t *testing.T) {
+func TestEnv_ParseFileEmptyValue(t *testing.T) {
 	m, err := ParseFile("testdata/comments.env.example")
 	if err != nil {
 		t.Fatalf("ParseFile: %v", err)
@@ -278,7 +278,7 @@ func TestParseFile_EmptyValue(t *testing.T) {
 	}
 }
 
-func TestParseFile_ExportPrefix(t *testing.T) {
+func TestEnv_ParseFileExportPrefix(t *testing.T) {
 	f := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(f, []byte("export EXPORTED=val\nPLAIN=x\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -296,7 +296,7 @@ func TestParseFile_ExportPrefix(t *testing.T) {
 	}
 }
 
-func TestParseFile_QuotedWithTrailingComment(t *testing.T) {
+func TestEnv_ParseFileQuotedWithTrailingComment(t *testing.T) {
 	f := filepath.Join(t.TempDir(), ".env")
 	content := `QUOTED_COMMENT="abc" # note
 QUOTED_HASH_COMMENT="abc # literal" # note
@@ -321,7 +321,7 @@ SINGLE='single quoted' # note
 	}
 }
 
-func TestDerive_ExportPrefixedHole(t *testing.T) {
+func TestEnv_DeriveExportPrefixedHole(t *testing.T) {
 	tmpl := filepath.Join(t.TempDir(), ".env.example")
 	if err := os.WriteFile(tmpl, []byte("export PORT=3000\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -343,7 +343,7 @@ func TestDerive_ExportPrefixedHole(t *testing.T) {
 	}
 }
 
-func TestDerive_ExportPrefixedOverride(t *testing.T) {
+func TestEnv_DeriveExportPrefixedOverride(t *testing.T) {
 	tmpl := filepath.Join(t.TempDir(), ".env.example")
 	if err := os.WriteFile(tmpl, []byte("export API_KEY=placeholder\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -364,7 +364,7 @@ func TestDerive_ExportPrefixedOverride(t *testing.T) {
 	}
 }
 
-func TestDerive_OverridePreservesQuoting(t *testing.T) {
+func TestEnv_DeriveOverridePreservesQuoting(t *testing.T) {
 	tmpl := filepath.Join(t.TempDir(), ".env.example")
 	if err := os.WriteFile(tmpl, []byte("TOKEN=\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -389,7 +389,7 @@ func TestDerive_OverridePreservesQuoting(t *testing.T) {
 	}
 }
 
-func TestRender_Basic(t *testing.T) {
+func TestEnv_RenderBasic(t *testing.T) {
 	got, err := Render("http://localhost:{{PORT}}", map[string]string{"PORT": "3001"})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -399,7 +399,7 @@ func TestRender_Basic(t *testing.T) {
 	}
 }
 
-func TestRender_UnknownVar(t *testing.T) {
+func TestEnv_RenderUnknownVar(t *testing.T) {
 	_, err := Render("{{FOO}}", map[string]string{"BAR": "1"})
 	if err == nil {
 		t.Fatal("expected error")
@@ -409,7 +409,7 @@ func TestRender_UnknownVar(t *testing.T) {
 	}
 }
 
-func TestRender_NoPlaceholders(t *testing.T) {
+func TestEnv_RenderNoPlaceholders(t *testing.T) {
 	got, err := Render("no holes here", nil)
 	if err != nil {
 		t.Fatalf("Render: %v", err)

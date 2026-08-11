@@ -11,6 +11,9 @@ import (
 	"github.com/apollopower/plax/pkg/registry"
 )
 
+// Suspend terminates all processes and stops all containers for the named
+// instance without removing its worktree, database, or registry entry.
+// The instance can be restored with Resume.
 func Suspend(ctx context.Context, deps *Deps, name string) error {
 	rec, found := deps.Registry.GetInstance(name)
 	if !found {
@@ -72,7 +75,9 @@ func Suspend(ctx context.Context, deps *Deps, name string) error {
 	rec.State = registry.StateSuspended
 	rec.PIDs = nil
 	rec.PIDStarts = nil
-	deps.Registry.Instances[name] = rec
+	if err := deps.Registry.UpdateInstance(name, rec); err != nil {
+		return err
+	}
 
 	if err := deps.Registry.Save(); err != nil {
 		return fmt.Errorf("registry: write: %w", err)

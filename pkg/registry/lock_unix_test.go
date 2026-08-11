@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestOpen_HoldsFileLock(t *testing.T) {
+func TestRegistry_OpenHoldsFileLock(t *testing.T) {
 	path := tempPath(t)
 	r, err := Open(path)
 	if err != nil {
@@ -30,7 +30,7 @@ func TestOpen_HoldsFileLock(t *testing.T) {
 	}
 }
 
-func TestOpen_ReleaseAllowsLock(t *testing.T) {
+func TestRegistry_OpenReleaseAllowsLock(t *testing.T) {
 	path := tempPath(t)
 	r, err := Open(path)
 	if err != nil {
@@ -51,7 +51,7 @@ func TestOpen_ReleaseAllowsLock(t *testing.T) {
 	}
 }
 
-func TestOpen_CreateDirBeforeLock(t *testing.T) {
+func TestRegistry_OpenCreateDirBeforeLock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "dir", "registry.json")
 

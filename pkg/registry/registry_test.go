@@ -23,7 +23,7 @@ func openNew(t *testing.T, fn func(r *Registry)) {
 	fn(r)
 }
 
-func TestOpen_NewFile(t *testing.T) {
+func TestRegistry_OpenNewFile(t *testing.T) {
 	r, err := Open(tempPath(t))
 	if err != nil {
 		t.Fatalf("Open on new file: %v", err)
@@ -33,7 +33,7 @@ func TestOpen_NewFile(t *testing.T) {
 	}
 }
 
-func TestOpen_ExistingFile(t *testing.T) {
+func TestRegistry_OpenExistingFile(t *testing.T) {
 	path := tempPath(t)
 	r1, err := Open(path)
 	if err != nil {
@@ -62,7 +62,7 @@ func TestOpen_ExistingFile(t *testing.T) {
 	}
 }
 
-func TestOpen_UnsupportedVersion(t *testing.T) {
+func TestRegistry_OpenUnsupportedVersion(t *testing.T) {
 	path := tempPath(t)
 	data := `{"version":2,"instances":{}}`
 	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
@@ -74,7 +74,7 @@ func TestOpen_UnsupportedVersion(t *testing.T) {
 	}
 }
 
-func TestState_Constants(t *testing.T) {
+func TestRegistry_StateConstants(t *testing.T) {
 	if StateRunning != "running" {
 		t.Errorf("StateRunning = %q, want running", StateRunning)
 	}
@@ -87,7 +87,7 @@ func TestState_Constants(t *testing.T) {
 	}
 }
 
-func TestOpen_InvalidJSON(t *testing.T) {
+func TestRegistry_OpenInvalidJSON(t *testing.T) {
 	path := tempPath(t)
 	if err := os.WriteFile(path, []byte("not json"), 0644); err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestOpen_InvalidJSON(t *testing.T) {
 	}
 }
 
-func TestSave_ReadBack(t *testing.T) {
+func TestRegistry_SaveReadBack(t *testing.T) {
 	openNew(t, func(r1 *Registry) {
 		_ = r1.AddInstance("i2", InstanceRecord{ID: "i2", Branch: "feat/x", State: StateSuspended})
 		if err := r1.Save(); err != nil {
@@ -120,7 +120,7 @@ func TestSave_ReadBack(t *testing.T) {
 	})
 }
 
-func TestSave_AtomicWrite(t *testing.T) {
+func TestRegistry_SaveAtomicWrite(t *testing.T) {
 	openNew(t, func(r *Registry) {
 		if err := r.Save(); err != nil {
 			t.Fatalf("Save: %v", err)
@@ -139,7 +139,7 @@ func TestSave_AtomicWrite(t *testing.T) {
 	})
 }
 
-func TestAddInstance_Duplicate(t *testing.T) {
+func TestRegistry_AddInstanceDuplicate(t *testing.T) {
 	openNew(t, func(r *Registry) {
 		r.Instances["i1"] = InstanceRecord{ID: "i1"}
 		err := r.AddInstance("i1", InstanceRecord{ID: "i1"})
@@ -149,7 +149,7 @@ func TestAddInstance_Duplicate(t *testing.T) {
 	})
 }
 
-func TestRemoveInstance_NotFound(t *testing.T) {
+func TestRegistry_RemoveInstanceNotFound(t *testing.T) {
 	openNew(t, func(r *Registry) {
 		err := r.RemoveInstance("nonexistent")
 		if err == nil {
@@ -158,7 +158,7 @@ func TestRemoveInstance_NotFound(t *testing.T) {
 	})
 }
 
-func TestRemoveInstance_CleansPorts(t *testing.T) {
+func TestRegistry_RemoveInstanceCleansPorts(t *testing.T) {
 	openNew(t, func(r *Registry) {
 		_ = r.AddInstance("i1", InstanceRecord{ID: "i1"})
 		_ = r.AddInstance("i2", InstanceRecord{ID: "i2"})
@@ -178,7 +178,7 @@ func TestRemoveInstance_CleansPorts(t *testing.T) {
 	})
 }
 
-func TestAllocPort_Duplicate(t *testing.T) {
+func TestRegistry_AllocPortDuplicate(t *testing.T) {
 	openNew(t, func(r *Registry) {
 		_ = r.AllocPort(3000, "i1", "app")
 		err := r.AllocPort(3000, "i2", "db")
@@ -188,7 +188,7 @@ func TestAllocPort_Duplicate(t *testing.T) {
 	})
 }
 
-func TestReleasePort_NotAllocated(t *testing.T) {
+func TestRegistry_ReleasePortNotAllocated(t *testing.T) {
 	openNew(t, func(r *Registry) {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -199,7 +199,7 @@ func TestReleasePort_NotAllocated(t *testing.T) {
 	})
 }
 
-func TestGetInstance_NotFound(t *testing.T) {
+func TestRegistry_GetInstanceNotFound(t *testing.T) {
 	openNew(t, func(r *Registry) {
 		_, ok := r.GetInstance("nonexistent")
 		if ok {
@@ -208,7 +208,7 @@ func TestGetInstance_NotFound(t *testing.T) {
 	})
 }
 
-func TestGetInstance_Found(t *testing.T) {
+func TestRegistry_GetInstanceFound(t *testing.T) {
 	openNew(t, func(r *Registry) {
 		_ = r.AddInstance("x", InstanceRecord{ID: "x", State: "running"})
 		rec, ok := r.GetInstance("x")
@@ -221,7 +221,7 @@ func TestGetInstance_Found(t *testing.T) {
 	})
 }
 
-func TestDBNamesFromRecord_WithDBNames(t *testing.T) {
+func TestRegistry_DBNamesFromRecordWithDBNames(t *testing.T) {
 	rec := InstanceRecord{
 		DBName:  "plax_old",
 		DBNames: map[string]string{"": "plax_i1", "test": "plax_i1_test"},
@@ -244,7 +244,7 @@ func TestDBNamesFromRecord_WithDBNames(t *testing.T) {
 	}
 }
 
-func TestDBNamesFromRecord_OldFormatFallback(t *testing.T) {
+func TestRegistry_DBNamesFromRecordOldFormatFallback(t *testing.T) {
 	rec := InstanceRecord{DBName: "plax_legacy"}
 	names := DBNamesFromRecord(rec)
 	if len(names) != 1 || names[0] != "plax_legacy" {
@@ -252,7 +252,7 @@ func TestDBNamesFromRecord_OldFormatFallback(t *testing.T) {
 	}
 }
 
-func TestDBNamesFromRecord_Empty(t *testing.T) {
+func TestRegistry_DBNamesFromRecordEmpty(t *testing.T) {
 	names := DBNamesFromRecord(InstanceRecord{})
 	if names != nil {
 		t.Errorf("got %v, want nil", names)

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestSendAndRecv(t *testing.T) {
+func TestMailbox_SendAndRecv(t *testing.T) {
 	root := t.TempDir()
 	if err := CreateDir(root, "i1"); err != nil {
 		t.Fatalf("CreateDir: %v", err)
@@ -28,15 +28,15 @@ func TestSendAndRecv(t *testing.T) {
 		t.Errorf("Count = %d, want 1", n)
 	}
 
-	msgs, err := Recv(root, "i1", 1)
+	result, err := Recv(root, "i1", 1)
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("got %d messages, want 1", len(msgs))
+	if len(result.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(result.Messages))
 	}
-	if msgs[0].From != "i2" || msgs[0].Subject != "hello" || msgs[0].Body != "world" {
-		t.Errorf("message = %+v", msgs[0])
+	if result.Messages[0].From != "i2" || result.Messages[0].Subject != "hello" || result.Messages[0].Body != "world" {
+		t.Errorf("message = %+v", result.Messages[0])
 	}
 
 	n, err = Count(root, "i1")
@@ -48,7 +48,7 @@ func TestSendAndRecv(t *testing.T) {
 	}
 }
 
-func TestRecvAll(t *testing.T) {
+func TestMailbox_RecvAll(t *testing.T) {
 	root := t.TempDir()
 	if err := CreateDir(root, "i1"); err != nil {
 		t.Fatalf("CreateDir: %v", err)
@@ -69,12 +69,12 @@ func TestRecvAll(t *testing.T) {
 		t.Errorf("Count = %d, want 3", n)
 	}
 
-	msgs, err := RecvAll(root, "i1")
+	result, err := RecvAll(root, "i1")
 	if err != nil {
 		t.Fatalf("RecvAll: %v", err)
 	}
-	if len(msgs) != 3 {
-		t.Fatalf("got %d messages, want 3", len(msgs))
+	if len(result.Messages) != 3 {
+		t.Fatalf("got %d messages, want 3", len(result.Messages))
 	}
 
 	n, _ = Count(root, "i1")
@@ -83,19 +83,19 @@ func TestRecvAll(t *testing.T) {
 	}
 }
 
-func TestRecvEmptyMailbox(t *testing.T) {
+func TestMailbox_RecvEmptyMailbox(t *testing.T) {
 	root := t.TempDir()
 
-	msgs, err := Recv(root, "nobody", 1)
+	result, err := Recv(root, "nobody", 1)
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	if len(msgs) != 0 {
-		t.Errorf("got %d messages, want 0", len(msgs))
+	if len(result.Messages) != 0 {
+		t.Errorf("got %d messages, want 0", len(result.Messages))
 	}
 }
 
-func TestCountEmptyMailbox(t *testing.T) {
+func TestMailbox_CountEmptyMailbox(t *testing.T) {
 	root := t.TempDir()
 
 	n, err := Count(root, "nobody")
@@ -107,7 +107,7 @@ func TestCountEmptyMailbox(t *testing.T) {
 	}
 }
 
-func TestSendNonExistentDir(t *testing.T) {
+func TestMailbox_SendNonExistentDir(t *testing.T) {
 	root := t.TempDir()
 
 	_, err := Send(root, "newinst", Message{Body: "hi"})
@@ -119,7 +119,7 @@ func TestSendNonExistentDir(t *testing.T) {
 	}
 }
 
-func TestRemoveDir(t *testing.T) {
+func TestMailbox_RemoveDir(t *testing.T) {
 	root := t.TempDir()
 
 	if err := CreateDir(root, "i1"); err != nil {
@@ -142,7 +142,7 @@ func TestRemoveDir(t *testing.T) {
 	}
 }
 
-func TestChronologicalOrder(t *testing.T) {
+func TestMailbox_ChronologicalOrder(t *testing.T) {
 	root := t.TempDir()
 	if err := CreateDir(root, "i1"); err != nil {
 		t.Fatalf("CreateDir: %v", err)
@@ -155,18 +155,18 @@ func TestChronologicalOrder(t *testing.T) {
 		}
 	}
 
-	msgs, err := RecvAll(root, "i1")
+	result, err := RecvAll(root, "i1")
 	if err != nil {
 		t.Fatalf("RecvAll: %v", err)
 	}
-	for i := 1; i < len(msgs); i++ {
-		if msgs[i].Timestamp < msgs[i-1].Timestamp {
-			t.Fatalf("messages out of order at index %d: %s < %s", i, msgs[i].Timestamp, msgs[i-1].Timestamp)
+	for i := 1; i < len(result.Messages); i++ {
+		if result.Messages[i].Timestamp < result.Messages[i-1].Timestamp {
+			t.Fatalf("messages out of order at index %d: %s < %s", i, result.Messages[i].Timestamp, result.Messages[i-1].Timestamp)
 		}
 	}
 }
 
-func TestRecvMultipleMessages(t *testing.T) {
+func TestMailbox_RecvMultipleMessages(t *testing.T) {
 	root := t.TempDir()
 	if err := CreateDir(root, "i1"); err != nil {
 		t.Fatalf("CreateDir: %v", err)
@@ -178,12 +178,12 @@ func TestRecvMultipleMessages(t *testing.T) {
 		}
 	}
 
-	msgs, err := Recv(root, "i1", 2)
+	result, err := Recv(root, "i1", 2)
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	if len(msgs) != 2 {
-		t.Fatalf("got %d messages, want 2", len(msgs))
+	if len(result.Messages) != 2 {
+		t.Fatalf("got %d messages, want 2", len(result.Messages))
 	}
 
 	n, _ := Count(root, "i1")
@@ -192,7 +192,7 @@ func TestRecvMultipleMessages(t *testing.T) {
 	}
 }
 
-func TestFileSuffixIsRandom(t *testing.T) {
+func TestMailbox_FileSuffixIsRandom(t *testing.T) {
 	root := t.TempDir()
 	if err := CreateDir(root, "i1"); err != nil {
 		t.Fatalf("CreateDir: %v", err)
@@ -215,7 +215,7 @@ func TestFileSuffixIsRandom(t *testing.T) {
 	}
 }
 
-func TestSendDefaultTimestamp(t *testing.T) {
+func TestMailbox_SendDefaultTimestamp(t *testing.T) {
 	root := t.TempDir()
 	if err := CreateDir(root, "i1"); err != nil {
 		t.Fatalf("CreateDir: %v", err)
@@ -225,19 +225,19 @@ func TestSendDefaultTimestamp(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	msgs, err := RecvAll(root, "i1")
+	result, err := RecvAll(root, "i1")
 	if err != nil {
 		t.Fatalf("RecvAll: %v", err)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(msgs))
+	if len(result.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(result.Messages))
 	}
-	if msgs[0].Timestamp == "" {
+	if result.Messages[0].Timestamp == "" {
 		t.Fatal("Timestamp was not filled in")
 	}
 }
 
-func TestSendEmptyBody(t *testing.T) {
+func TestMailbox_SendEmptyBody(t *testing.T) {
 	root := t.TempDir()
 	if err := CreateDir(root, "i1"); err != nil {
 		t.Fatalf("CreateDir: %v", err)
@@ -252,19 +252,19 @@ func TestSendEmptyBody(t *testing.T) {
 	}
 }
 
-func TestRecvNotExistingInstance(t *testing.T) {
+func TestMailbox_RecvNotExistingInstance(t *testing.T) {
 	root := t.TempDir()
 
-	msgs, err := Recv(root, "nonexistent", 1)
+	result, err := Recv(root, "nonexistent", 1)
 	if err != nil {
 		t.Fatalf("Recv on nonexistent instance should not error: %v", err)
 	}
-	if len(msgs) != 0 {
-		t.Errorf("got %d messages, want 0", len(msgs))
+	if len(result.Messages) != 0 {
+		t.Errorf("got %d messages, want 0", len(result.Messages))
 	}
 }
 
-func TestCreateAndRemoveDir(t *testing.T) {
+func TestMailbox_CreateAndRemoveDir(t *testing.T) {
 	root := t.TempDir()
 
 	if err := CreateDir(root, "i1"); err != nil {
@@ -285,7 +285,7 @@ func TestCreateAndRemoveDir(t *testing.T) {
 	}
 }
 
-func TestDir(t *testing.T) {
+func TestMailbox_Dir(t *testing.T) {
 	got := Dir("/repo", "i1")
 	want := filepath.Join("/repo", ".plax", "mail", "i1")
 	if got != want {
@@ -293,7 +293,7 @@ func TestDir(t *testing.T) {
 	}
 }
 
-func TestRecvUnreadableFile(t *testing.T) {
+func TestMailbox_RecvUnreadableFile(t *testing.T) {
 	root := t.TempDir()
 	if err := CreateDir(root, "i1"); err != nil {
 		t.Fatalf("CreateDir: %v", err)
@@ -323,15 +323,15 @@ func TestRecvUnreadableFile(t *testing.T) {
 		}
 	}
 
-	msgs, err := Recv(root, "i1", 2)
+	result, err := Recv(root, "i1", 2)
 	if err != nil {
 		t.Fatalf("Recv: %v", err)
 	}
-	if len(msgs) != 1 {
-		t.Fatalf("got %d messages, want 1", len(msgs))
+	if len(result.Messages) != 1 {
+		t.Fatalf("got %d messages, want 1", len(result.Messages))
 	}
-	if msgs[0].Body != "good" {
-		t.Errorf("message body = %q, want %q", msgs[0].Body, "good")
+	if result.Messages[0].Body != "good" {
+		t.Errorf("message body = %q, want %q", result.Messages[0].Body, "good")
 	}
 
 	n, _ := Count(root, "i1")
@@ -340,7 +340,7 @@ func TestRecvUnreadableFile(t *testing.T) {
 	}
 }
 
-func TestRecv_ZeroCount(t *testing.T) {
+func TestMailbox_RecvZeroCount(t *testing.T) {
 	root := t.TempDir()
 	_, err := Recv(root, "i1", 0)
 	if err == nil || !strings.Contains(err.Error(), "count must be >= 1") {
@@ -348,7 +348,7 @@ func TestRecv_ZeroCount(t *testing.T) {
 	}
 }
 
-func TestRecv_NegativeCount(t *testing.T) {
+func TestMailbox_RecvNegativeCount(t *testing.T) {
 	root := t.TempDir()
 	_, err := Recv(root, "i1", -1)
 	if err == nil || !strings.Contains(err.Error(), "count must be >= 1") {
@@ -356,7 +356,7 @@ func TestRecv_NegativeCount(t *testing.T) {
 	}
 }
 
-func TestSend_ConcurrentNoTornReads(t *testing.T) {
+func TestMailbox_SendConcurrentNoTornReads(t *testing.T) {
 	root := t.TempDir()
 	if err := CreateDir(root, "i1"); err != nil {
 		t.Fatalf("CreateDir: %v", err)
@@ -375,21 +375,21 @@ func TestSend_ConcurrentNoTornReads(t *testing.T) {
 	}
 	wg.Wait()
 
-	msgs, err := RecvAll(root, "i1")
+	result, err := RecvAll(root, "i1")
 	if err != nil {
 		t.Fatalf("RecvAll: %v", err)
 	}
-	if len(msgs) != 50 {
-		t.Fatalf("got %d messages, want 50", len(msgs))
+	if len(result.Messages) != 50 {
+		t.Fatalf("got %d messages, want 50", len(result.Messages))
 	}
-	for _, msg := range msgs {
+	for _, msg := range result.Messages {
 		if msg.Body != "hello" {
 			t.Errorf("got body %q, want hello", msg.Body)
 		}
 	}
 }
 
-func TestRecvAllUnreadable(t *testing.T) {
+func TestMailbox_RecvAllUnreadable(t *testing.T) {
 	root := t.TempDir()
 	if err := CreateDir(root, "i1"); err != nil {
 		t.Fatalf("CreateDir: %v", err)

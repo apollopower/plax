@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestParsePins_Basic(t *testing.T) {
+func TestToolchain_ParsePinsBasic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".tool-versions")
 	if err := os.WriteFile(path, []byte("nodejs 22.19.0\n"), 0644); err != nil {
@@ -21,7 +21,7 @@ func TestParsePins_Basic(t *testing.T) {
 	}
 }
 
-func TestParsePins_CommentsAndBlanks(t *testing.T) {
+func TestToolchain_ParsePinsCommentsAndBlanks(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".tool-versions")
 	content := "# comment\n\nnodejs 22.19.0\n# another\n\ngolang 1.26\n"
@@ -43,7 +43,7 @@ func TestParsePins_CommentsAndBlanks(t *testing.T) {
 	}
 }
 
-func TestParsePins_MultiVersion(t *testing.T) {
+func TestToolchain_ParsePinsMultiVersion(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".tool-versions")
 	if err := os.WriteFile(path, []byte("python 3.12.1 3.11.7\n"), 0644); err != nil {
@@ -58,7 +58,7 @@ func TestParsePins_MultiVersion(t *testing.T) {
 	}
 }
 
-func TestParsePins_Missing(t *testing.T) {
+func TestToolchain_ParsePinsMissing(t *testing.T) {
 	pins, err := ParsePins(filepath.Join(t.TempDir(), ".tool-versions"))
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestParsePins_Missing(t *testing.T) {
 	}
 }
 
-func TestCompareVersions(t *testing.T) {
+func TestToolchain_CompareVersions(t *testing.T) {
 	recorded := map[string]string{"nodejs": "v22.19.0", "bun": "1.3.11"}
 	current := map[string]string{"nodejs": "v22.20.1", "golang": "1.26.5"}
 	diffs := CompareVersions(recorded, current)
@@ -93,7 +93,7 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
-func TestMatchesPin(t *testing.T) {
+func TestToolchain_MatchesPin(t *testing.T) {
 	tests := []struct {
 		pin, resolved string
 		want          PinMatch
@@ -112,28 +112,28 @@ func TestMatchesPin(t *testing.T) {
 	}
 }
 
-func TestMatchesPin_VPrefixedPin(t *testing.T) {
+func TestToolchain_MatchesPinVPrefixedPin(t *testing.T) {
 	got := MatchesPin("v22.19.0", "v22.19.0")
 	if got != PinMatchYes {
 		t.Errorf("MatchesPin(v22.19.0, v22.19.0) = %v, want PinMatchYes", got)
 	}
 }
 
-func TestMatchesPin_LTS(t *testing.T) {
+func TestToolchain_MatchesPinLTS(t *testing.T) {
 	got := MatchesPin("lts", "v20.0.0")
 	if got != PinMatchUnverifiable {
 		t.Errorf("MatchesPin(lts, v20.0.0) = %v, want PinMatchUnverifiable", got)
 	}
 }
 
-func TestMatchesPin_Latest(t *testing.T) {
+func TestToolchain_MatchesPinLatest(t *testing.T) {
 	got := MatchesPin("latest", "v20.0.0")
 	if got != PinMatchUnverifiable {
 		t.Errorf("MatchesPin(latest, v20.0.0) = %v, want PinMatchUnverifiable", got)
 	}
 }
 
-func TestTryFlag_StderrOutput(t *testing.T) {
+func TestToolchain_TryFlagStderrOutput(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "stderr-test")
 	script := "#!/bin/sh\necho 'version 1.2.3' >&2\nexit 0"
@@ -141,7 +141,7 @@ func TestTryFlag_StderrOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ver := tryFlag("test", binary, "--version")
+	ver := tryFlag(binary, "--version")
 	if ver != "version 1.2.3" {
 		t.Errorf("tryFlag with stderr output = %q, want 'version 1.2.3'", ver)
 	}

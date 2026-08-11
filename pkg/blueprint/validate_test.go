@@ -7,56 +7,58 @@ import (
 	"testing"
 )
 
-var validBP = &Blueprint{
-	Version:   1,
-	Name:      "test",
-	PortPool:  PortPool{Start: 3000, End: 4000},
-	Toolchain: ".tool-versions",
-	Seed:      SeedConfig{Migrate: "bun run db migrate", Command: "bun run db fixtures", Workdir: "."},
-	Services: map[string]ServiceDef{
-		"db": {
-			Isolation: IsolationLogical,
-			Type:      "postgres",
-			Image:     "postgres:16",
+func newValidBP() *Blueprint {
+	return &Blueprint{
+		Version:   1,
+		Name:      "test",
+		PortPool:  PortPool{Start: 3000, End: 4000},
+		Toolchain: ".tool-versions",
+		Seed:      SeedConfig{Migrate: "bun run db migrate", Command: "bun run db fixtures", Workdir: "."},
+		Services: map[string]ServiceDef{
+			"db": {
+				Isolation: IsolationLogical,
+				Type:      "postgres",
+				Image:     "postgres:16",
+			},
+			"redis": {
+				Isolation: IsolationDedicated,
+				Image:     "redis:7",
+				Ports:     map[string]PortDef{"6379": {Var: "REDIS_PORT"}},
+			},
 		},
-		"redis": {
-			Isolation: IsolationDedicated,
-			Image:     "redis:7",
-			Ports:     map[string]PortDef{"6379": {Var: "REDIS_PORT"}},
+		Processes: []ProcessDef{
+			{Name: "app", Isolation: "native", Command: "next dev", Workdir: ".", PortVar: "PORT", DefaultPort: 3000},
 		},
-	},
-	Processes: []ProcessDef{
-		{Name: "app", Isolation: "native", Command: "next dev", Workdir: ".", PortVar: "PORT", DefaultPort: 3000},
-	},
-	Env: EnvConfig{Template: ".env.example", Holes: map[string]string{}},
+		Env: EnvConfig{Template: ".env.example", Holes: map[string]string{}},
+	}
 }
 
-func TestValidate_ValidBlueprint(t *testing.T) {
-	errs := ValidateBlueprint(validBP)
+func TestBlueprint_ValidateValidBlueprint(t *testing.T) {
+	errs := ValidateBlueprint(newValidBP())
 	if len(errs) > 0 {
 		t.Errorf("expected no errors, got: %v", errs)
 	}
 }
 
-func TestValidate_VersionNotOne(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateVersionNotOne(t *testing.T) {
+	bp := newValidBP()
 	bp.Version = 2
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "unsupported version 2") {
 		t.Errorf("expected unsupported version error, got %v", errs)
 	}
 }
 
-func TestValidate_MissingName(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateMissingName(t *testing.T) {
+	bp := newValidBP()
 	bp.Name = ""
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "name is required") {
 		t.Errorf("expected name required error, got %v", errs)
 	}
 }
 
-func TestValidate_PortPoolInvalid(t *testing.T) {
+func TestBlueprint_ValidatePortPoolInvalid(t *testing.T) {
 	tests := []struct {
 		name string
 		pp   PortPool
@@ -66,9 +68,9 @@ func TestValidate_PortPoolInvalid(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			bp := *validBP
+			bp := newValidBP()
 			bp.PortPool = tc.pp
-			errs := ValidateBlueprint(&bp)
+			errs := ValidateBlueprint(bp)
 			if !containsErr(t, errs, "port_pool") {
 				t.Errorf("expected range invalid, got %v", errs)
 			}
@@ -76,141 +78,141 @@ func TestValidate_PortPoolInvalid(t *testing.T) {
 	}
 }
 
-func TestValidate_MapOverwrite_NoDuplicateErrors(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateMapOverwriteNoDuplicateErrors(t *testing.T) {
+	bp := newValidBP()
 	bp.Services["db"] = ServiceDef{Isolation: IsolationLogical, Type: "postgres"}
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if len(errs) != 0 {
 		t.Errorf("overwriting a map key should not produce a duplicate error, got %d: %v", len(errs), errs)
 	}
 }
 
-func TestValidate_LogicalMissingType(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateLogicalMissingType(t *testing.T) {
+	bp := newValidBP()
 	bp.Services["other"] = ServiceDef{
 		Isolation: IsolationLogical,
 		Image:     "postgres:16",
 	}
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "is logical but missing type") {
 		t.Errorf("expected missing type error, got %v", errs)
 	}
 }
 
-func TestValidate_LogicalHasPorts(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateLogicalHasPorts(t *testing.T) {
+	bp := newValidBP()
 	bp.Services["bad"] = ServiceDef{
 		Isolation: IsolationLogical,
 		Type:      "postgres",
 		Ports:     map[string]PortDef{"5432": {Var: "PGPORT"}},
 	}
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "is logical but declares ports") {
 		t.Errorf("expected declares ports error, got %v", errs)
 	}
 }
 
-func TestValidate_PortVarConflict(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidatePortVarConflict(t *testing.T) {
+	bp := newValidBP()
 	bp.Services["svc2"] = ServiceDef{
 		Isolation: IsolationDedicated,
 		Image:     "some-image",
 		Ports:     map[string]PortDef{"9000": {Var: "REDIS_PORT"}},
 	}
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "port var") {
 		t.Errorf("expected port var collision error, got %v", errs)
 	}
 }
 
-func TestValidate_DuplicateProcess(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateDuplicateProcess(t *testing.T) {
+	bp := newValidBP()
 	bp.Processes = append(bp.Processes, ProcessDef{Name: "app"})
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "duplicate process") {
 		t.Errorf("expected duplicate process error, got %v", errs)
 	}
 }
 
-func TestValidate_PortVarProcessCollision(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidatePortVarProcessCollision(t *testing.T) {
+	bp := newValidBP()
 	bp.Services["compress"] = ServiceDef{
 		Isolation: IsolationDedicated,
 		Image:     "img",
 		Ports:     map[string]PortDef{"5000": {Var: "PORT"}},
 	}
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "port var") {
 		t.Errorf("expected port var collision, got %v", errs)
 	}
 }
 
-func TestValidate_DependsOnMissing(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateDependsOnMissing(t *testing.T) {
+	bp := newValidBP()
 	bp.Processes = append(bp.Processes, ProcessDef{Name: "cron", Isolation: "native", Command: "echo hi", DependsOn: []string{"nonexistent"}})
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "depends_on") {
 		t.Errorf("expected depends_on error, got %v", errs)
 	}
 }
 
-func TestValidate_SeedMigrateMissing(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateSeedMigrateMissing(t *testing.T) {
+	bp := newValidBP()
 	bp.Seed.Migrate = ""
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "seed.migrate is required") {
 		t.Errorf("expected seed.migrate error, got %v", errs)
 	}
 }
 
-func TestValidate_SeedCommandMissing(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateSeedCommandMissing(t *testing.T) {
+	bp := newValidBP()
 	bp.Seed.Command = ""
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "seed.command is required") {
 		t.Errorf("expected seed.command error, got %v", errs)
 	}
 }
 
-func TestValidate_SeedWorkdirMissing(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateSeedWorkdirMissing(t *testing.T) {
+	bp := newValidBP()
 	bp.Seed.Workdir = ""
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "seed.workdir is required") {
 		t.Errorf("expected seed.workdir error, got %v", errs)
 	}
 }
 
-func TestValidate_EnvTemplateMissing(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateEnvTemplateMissing(t *testing.T) {
+	bp := newValidBP()
 	bp.Env.Template = ""
 	bp.Env.Holes = map[string]string{"K": "v"}
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "env.template is required") {
 		t.Errorf("expected env.template error, got %v", errs)
 	}
 }
 
-func TestValidate_HoleNotInTemplate(t *testing.T) {
+func TestBlueprint_ValidateHoleNotInTemplate(t *testing.T) {
 	dir := t.TempDir()
 	tmplPath := filepath.Join(dir, ".env.example")
 	if err := os.WriteFile(tmplPath, []byte("EXISTING_KEY=hello\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	bp := *validBP
+	bp := newValidBP()
 	bp.Env.Template = tmplPath
 	bp.Env.Holes = map[string]string{
 		"EXISTING_KEY": "postgres://localhost:{{PORT}}/db",
 		"MISSING_KEY":  "redis://localhost:{{REDIS_PORT}}/0",
 	}
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "hole") {
 		t.Errorf("expected hole not found warning, got %v", errs)
 	}
 }
 
-func TestValidateStructural_IgnoresMissingHoles(t *testing.T) {
+func TestBlueprint_ValidateStructuralIgnoresMissingHoles(t *testing.T) {
 	// Minimal fresh blueprint: other tests mutate validBP's shared maps.
 	bp := &Blueprint{
 		Version:  1,
@@ -228,65 +230,65 @@ func TestValidateStructural_IgnoresMissingHoles(t *testing.T) {
 	}
 }
 
-func TestValidate_DockerNameCollision(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateDockerNameCollision(t *testing.T) {
+	bp := newValidBP()
 	bp.Services["foo_bar"] = ServiceDef{Isolation: IsolationDedicated, Image: "img"}
 	bp.Services["foo-bar"] = ServiceDef{Isolation: IsolationDedicated, Image: "img"}
 
-	errs := ValidateStructural(&bp)
+	errs := ValidateStructural(bp)
 	if !containsErr(t, errs, "both map to docker name") {
 		t.Errorf("expected docker name collision error, got %v", errs)
 	}
 }
 
-func TestValidate_BadServiceName(t *testing.T) {
+func TestBlueprint_ValidateBadServiceName(t *testing.T) {
 	for _, name := range []string{"Bad", "bad.name", "bad/name", "-bad"} {
-		bp := *validBP
+		bp := newValidBP()
 		bp.Services[name] = ServiceDef{Isolation: IsolationDedicated, Image: "img"}
 
-		errs := ValidateStructural(&bp)
+		errs := ValidateStructural(bp)
 		if !containsErr(t, errs, "must match ^[a-z0-9]") {
 			t.Errorf("service %q: expected charset error, got %v", name, errs)
 		}
 	}
 }
 
-func TestValidate_BadProcessName(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateBadProcessName(t *testing.T) {
+	bp := newValidBP()
 	bp.Processes = append(bp.Processes, ProcessDef{Name: "../escape", Command: "true", Workdir: "."})
 
-	errs := ValidateStructural(&bp)
+	errs := ValidateStructural(bp)
 	if !containsErr(t, errs, "must match ^[a-z0-9]") {
 		t.Errorf("expected charset error, got %v", errs)
 	}
 }
 
-func TestValidate_EmptyPortVar(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateEmptyPortVar(t *testing.T) {
+	bp := newValidBP()
 	bp.Services["bad"] = ServiceDef{
 		Isolation: IsolationDedicated,
 		Image:     "img",
 		Ports:     map[string]PortDef{"8080": {Var: ""}},
 	}
-	errs := ValidateBlueprint(&bp)
+	errs := ValidateBlueprint(bp)
 	if !containsErr(t, errs, "empty var name") {
 		t.Errorf("expected empty var name error, got %v", errs)
 	}
 }
 
-func TestValidate_UnknownServiceIsolation(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateUnknownServiceIsolation(t *testing.T) {
+	bp := newValidBP()
 	bp.Services["bad"] = ServiceDef{
 		Isolation: "dedicatd",
 		Image:     "img",
 	}
-	errs := ValidateStructural(&bp)
+	errs := ValidateStructural(bp)
 	if !containsErr(t, errs, "unknown isolation") {
 		t.Errorf("expected unknown isolation error, got %v", errs)
 	}
 }
 
-func TestValidateStructural_DatabaseOnNonPostgres(t *testing.T) {
+func TestBlueprint_ValidateStructuralDatabaseOnNonPostgres(t *testing.T) {
 	bp := &Blueprint{
 		Version:  1,
 		Name:     "t",
@@ -307,7 +309,7 @@ func TestValidateStructural_DatabaseOnNonPostgres(t *testing.T) {
 	}
 }
 
-func TestValidateStructural_DatabaseOnNonPostgresLogical(t *testing.T) {
+func TestBlueprint_ValidateStructuralDatabaseOnNonPostgresLogical(t *testing.T) {
 	bp := &Blueprint{
 		Version:  1,
 		Name:     "t",
@@ -329,7 +331,7 @@ func TestValidateStructural_DatabaseOnNonPostgresLogical(t *testing.T) {
 	}
 }
 
-func TestValidateStructural_DuplicateDatabaseKey(t *testing.T) {
+func TestBlueprint_ValidateStructuralDuplicateDatabaseKey(t *testing.T) {
 	bp := &Blueprint{
 		Version:  1,
 		Name:     "t",
@@ -354,7 +356,7 @@ func TestValidateStructural_DuplicateDatabaseKey(t *testing.T) {
 	}
 }
 
-func TestValidateStructural_ValidDatabaseDeclarations(t *testing.T) {
+func TestBlueprint_ValidateStructuralValidDatabaseDeclarations(t *testing.T) {
 	bp := &Blueprint{
 		Version:  1,
 		Name:     "t",
@@ -381,21 +383,21 @@ func TestValidateStructural_ValidDatabaseDeclarations(t *testing.T) {
 	}
 }
 
-func TestValidate_UnknownProcessIsolation(t *testing.T) {
-	bp := *validBP
+func TestBlueprint_ValidateUnknownProcessIsolation(t *testing.T) {
+	bp := newValidBP()
 	bp.Processes = append(bp.Processes, ProcessDef{
 		Name:      "bad",
 		Isolation: "container",
 		Command:   "true",
 		Workdir:   ".",
 	})
-	errs := ValidateStructural(&bp)
+	errs := ValidateStructural(bp)
 	if !containsErr(t, errs, "unknown isolation") {
 		t.Errorf("expected unknown isolation error, got %v", errs)
 	}
 }
 
-func TestValidate_AllKnownServiceIsolations(t *testing.T) {
+func TestBlueprint_ValidateAllKnownServiceIsolations(t *testing.T) {
 	for _, iso := range []ServiceIsolation{IsolationLogical, IsolationDedicated, IsolationShared, IsolationExternal} {
 		bp := &Blueprint{
 			Version:  1,
@@ -416,7 +418,7 @@ func TestValidate_AllKnownServiceIsolations(t *testing.T) {
 	}
 }
 
-func TestValidateStructural_DatabaseInvalidFrom(t *testing.T) {
+func TestBlueprint_ValidateStructuralDatabaseInvalidFrom(t *testing.T) {
 	bp := &Blueprint{
 		Version:  1,
 		Name:     "t",
@@ -438,7 +440,7 @@ func TestValidateStructural_DatabaseInvalidFrom(t *testing.T) {
 	}
 }
 
-func TestValidateStructural_DatabaseEmptyName(t *testing.T) {
+func TestBlueprint_ValidateStructuralDatabaseEmptyName(t *testing.T) {
 	bp := &Blueprint{
 		Version:  1,
 		Name:     "t",

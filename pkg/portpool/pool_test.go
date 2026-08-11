@@ -18,7 +18,7 @@ func newPool(t *testing.T, start, end int, reg *registry.Registry) *PortPool {
 	return p
 }
 
-func TestAllocate_FirstFree(t *testing.T) {
+func TestPortPool_AllocateFirstFree(t *testing.T) {
 	reg := &registry.Registry{
 		Version:         1,
 		Instances:       map[string]registry.InstanceRecord{},
@@ -34,7 +34,7 @@ func TestAllocate_FirstFree(t *testing.T) {
 	}
 }
 
-func TestAllocate_SkipsAllocated(t *testing.T) {
+func TestPortPool_AllocateSkipsAllocated(t *testing.T) {
 	reg := &registry.Registry{
 		Version:         1,
 		Instances:       map[string]registry.InstanceRecord{},
@@ -50,7 +50,7 @@ func TestAllocate_SkipsAllocated(t *testing.T) {
 	}
 }
 
-func TestAllocate_Exhausted(t *testing.T) {
+func TestPortPool_AllocateExhausted(t *testing.T) {
 	reg := &registry.Registry{
 		Version:         1,
 		Instances:       map[string]registry.InstanceRecord{},
@@ -72,7 +72,7 @@ func TestAllocate_Exhausted(t *testing.T) {
 	}
 }
 
-func TestAllocate_OSProbe(t *testing.T) {
+func TestPortPool_AllocateOSProbe(t *testing.T) {
 	reg := &registry.Registry{
 		Version:         1,
 		Instances:       map[string]registry.InstanceRecord{},
@@ -94,7 +94,7 @@ func TestAllocate_OSProbe(t *testing.T) {
 	}
 }
 
-func TestRelease_ReturnsPort(t *testing.T) {
+func TestPortPool_ReleaseReturnsPort(t *testing.T) {
 	reg := &registry.Registry{
 		Version:         1,
 		Instances:       map[string]registry.InstanceRecord{},
@@ -116,49 +116,7 @@ func TestRelease_ReturnsPort(t *testing.T) {
 	}
 }
 
-func TestReserve_Success(t *testing.T) {
-	reg := &registry.Registry{
-		Version:         1,
-		PortAllocations: map[int]registry.PortAllocation{},
-	}
-	p := newPool(t, 3000, 4000, reg)
-	if err := p.Reserve(3050, "i1", "app"); err != nil {
-		t.Fatalf("Reserve: %v", err)
-	}
-	if _, exists := reg.PortAllocations[3050]; !exists {
-		t.Error("reserved port should be in allocations")
-	}
-}
-
-func TestReserve_Taken(t *testing.T) {
-	reg := &registry.Registry{
-		Version:         1,
-		PortAllocations: map[int]registry.PortAllocation{3050: {Instance: "i1", Service: "app"}},
-	}
-	p := newPool(t, 3000, 4000, reg)
-	if err := p.Reserve(3050, "i2", "web"); err == nil {
-		t.Fatal("expected error for reserved port")
-	}
-}
-
-func TestReserve_OSBound(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:3098")
-	if err != nil {
-		t.Skipf("cannot bind test port: %v", err)
-	}
-	defer func() { _ = ln.Close() }()
-
-	reg := &registry.Registry{
-		Version:         1,
-		PortAllocations: map[int]registry.PortAllocation{},
-	}
-	p := newPool(t, 3000, 4000, reg)
-	if err := p.Reserve(3098, "i1", "app"); err == nil {
-		t.Fatal("expected error for OS-bound port")
-	}
-}
-
-func TestAllocate_DefaultRange(t *testing.T) {
+func TestPortPool_AllocateDefaultRange(t *testing.T) {
 	reg := &registry.Registry{
 		Version:         1,
 		Instances:       map[string]registry.InstanceRecord{},
@@ -175,7 +133,7 @@ func TestAllocate_DefaultRange(t *testing.T) {
 	}
 }
 
-func TestAllocate_CachesPort(t *testing.T) {
+func TestPortPool_AllocateCachesPort(t *testing.T) {
 	reg := &registry.Registry{
 		Version:         1,
 		Instances:       map[string]registry.InstanceRecord{},
@@ -195,7 +153,7 @@ func TestAllocate_CachesPort(t *testing.T) {
 	}
 }
 
-func TestNew_InvalidRange(t *testing.T) {
+func TestPortPool_NewInvalidRange(t *testing.T) {
 	reg := &registry.Registry{
 		PortAllocations: map[int]registry.PortAllocation{},
 	}
@@ -205,7 +163,7 @@ func TestNew_InvalidRange(t *testing.T) {
 	}
 }
 
-func TestNew_Below1024(t *testing.T) {
+func TestPortPool_NewBelow1024(t *testing.T) {
 	reg := &registry.Registry{
 		PortAllocations: map[int]registry.PortAllocation{},
 	}
@@ -215,7 +173,7 @@ func TestNew_Below1024(t *testing.T) {
 	}
 }
 
-func TestNew_Above65535(t *testing.T) {
+func TestPortPool_NewAbove65535(t *testing.T) {
 	reg := &registry.Registry{
 		PortAllocations: map[int]registry.PortAllocation{},
 	}
@@ -225,7 +183,7 @@ func TestNew_Above65535(t *testing.T) {
 	}
 }
 
-func TestNew_DefaultRange(t *testing.T) {
+func TestPortPool_NewDefaultRange(t *testing.T) {
 	reg := &registry.Registry{
 		PortAllocations: map[int]registry.PortAllocation{},
 	}
@@ -317,7 +275,7 @@ func TestPortPool_Close(t *testing.T) {
 	p.Close()
 }
 
-func TestProbeFree_RealPort(t *testing.T) {
+func TestPortPool_ProbeFreeRealPort(t *testing.T) {
 	if !ProbeFree(getFreePort(t)) {
 		t.Error("ProbeFree should return true for free port")
 	}

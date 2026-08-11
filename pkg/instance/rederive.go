@@ -1,7 +1,6 @@
 package instance
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,7 +11,7 @@ import (
 	"github.com/apollopower/plax/pkg/derive/env"
 )
 
-func Rederive(ctx context.Context, deps *Deps) error {
+func Rederive(deps *Deps) error {
 	if deps.Blueprint.Env.Template == "" {
 		fmt.Fprintln(os.Stderr, "nothing to rederive: blueprint has no env template")
 		return nil

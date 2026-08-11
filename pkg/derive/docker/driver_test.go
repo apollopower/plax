@@ -22,7 +22,7 @@ func testDriver(t *testing.T) *Driver {
 	return d
 }
 
-func TestRunService_Success(t *testing.T) {
+func TestDocker_RunServiceSuccess(t *testing.T) {
 	d := testDriver(t)
 	ctx := context.Background()
 
@@ -47,7 +47,7 @@ func TestRunService_Success(t *testing.T) {
 	}
 }
 
-func TestRunService_PortBinding(t *testing.T) {
+func TestDocker_RunServicePortBinding(t *testing.T) {
 	d := testDriver(t)
 	ctx := context.Background()
 
@@ -68,7 +68,7 @@ func TestRunService_PortBinding(t *testing.T) {
 	})
 }
 
-func TestRunService_StartFailureCleansUp(t *testing.T) {
+func TestDocker_RunServiceStartFailureCleansUp(t *testing.T) {
 	d := testDriver(t)
 	ctx := context.Background()
 
@@ -99,7 +99,7 @@ func TestRunService_StartFailureCleansUp(t *testing.T) {
 	}
 }
 
-func TestServiceRunning(t *testing.T) {
+func TestDocker_ServiceRunning(t *testing.T) {
 	d := testDriver(t)
 	ctx := context.Background()
 
@@ -143,7 +143,7 @@ func TestServiceRunning(t *testing.T) {
 	}
 }
 
-func TestStopService_NotRunning(t *testing.T) {
+func TestDocker_StopServiceNotRunning(t *testing.T) {
 	d := testDriver(t)
 	ctx := context.Background()
 
@@ -153,7 +153,7 @@ func TestStopService_NotRunning(t *testing.T) {
 	}
 }
 
-func TestRemoveService_Success(t *testing.T) {
+func TestDocker_RemoveServiceSuccess(t *testing.T) {
 	d := testDriver(t)
 	ctx := context.Background()
 
@@ -173,7 +173,7 @@ func TestRemoveService_Success(t *testing.T) {
 	}
 }
 
-func TestRemoveVolume_NotExists(t *testing.T) {
+func TestDocker_RemoveVolumeNotExists(t *testing.T) {
 	d := testDriver(t)
 	ctx := context.Background()
 
@@ -183,7 +183,7 @@ func TestRemoveVolume_NotExists(t *testing.T) {
 	}
 }
 
-func TestCreateNetwork_Idempotent(t *testing.T) {
+func TestDocker_CreateNetworkIdempotent(t *testing.T) {
 	d := testDriver(t)
 	ctx := context.Background()
 
@@ -203,7 +203,7 @@ func TestCreateNetwork_Idempotent(t *testing.T) {
 	}
 }
 
-func TestRemoveNetwork_Success(t *testing.T) {
+func TestDocker_RemoveNetworkSuccess(t *testing.T) {
 	d := testDriver(t)
 	ctx := context.Background()
 

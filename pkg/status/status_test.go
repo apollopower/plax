@@ -103,7 +103,7 @@ func hashStamp(dir string, bp *blueprint.Blueprint) registry.BlueprintStamp {
 	}
 }
 
-func TestBuild_AllOK(t *testing.T) {
+func TestStatus_BuildAllOK(t *testing.T) {
 	dir, bp, reg, wtPath := initStatusRepo(t)
 
 	bm := &fakeBM{
@@ -155,7 +155,7 @@ func TestBuild_AllOK(t *testing.T) {
 	}
 }
 
-func TestBuild_CodeDifferentBranch(t *testing.T) {
+func TestStatus_BuildCodeDifferentBranch(t *testing.T) {
 	dir, bp, reg, wtPath := initStatusRepo(t)
 
 	run := func(args ...string) {
@@ -214,7 +214,7 @@ func TestBuild_CodeDifferentBranch(t *testing.T) {
 	}
 }
 
-func TestBuild_NotFound(t *testing.T) {
+func TestStatus_BuildNotFound(t *testing.T) {
 	_, bp, reg, _ := initStatusRepo(t)
 	deps := &Deps{Blueprint: bp, Registry: reg, CurrentStamp: registry.BlueprintStamp{}}
 	_, err := Build(context.Background(), deps, "nope")
@@ -223,7 +223,7 @@ func TestBuild_NotFound(t *testing.T) {
 	}
 }
 
-func TestBuild_DataUnknown_NoBM(t *testing.T) {
+func TestStatus_BuildDataUnknownNoBM(t *testing.T) {
 	dir, bp, reg, wtPath := initStatusRepo(t)
 	rec := registry.InstanceRecord{
 		ID:           "i1",
@@ -257,7 +257,7 @@ func TestBuild_DataUnknown_NoBM(t *testing.T) {
 	}
 }
 
-func TestBuild_HostUnknown_Phase3Record(t *testing.T) {
+func TestStatus_BuildHostUnknownPhase3Record(t *testing.T) {
 	dir, bp, reg, wtPath := initStatusRepo(t)
 	rec := registry.InstanceRecord{
 		ID:           "i1",
@@ -288,7 +288,7 @@ func TestBuild_HostUnknown_Phase3Record(t *testing.T) {
 	}
 }
 
-func TestBuild_ConfigDrift(t *testing.T) {
+func TestStatus_BuildConfigDrift(t *testing.T) {
 	dir, bp, reg, wtPath := initStatusRepo(t)
 	rec := registry.InstanceRecord{
 		ID:           "i1",
