@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ func initRepo(t *testing.T) string {
 	dir := t.TempDir()
 
 	cmds := [][]string{
-		{"git", "init"},
+		{"git", "init", "-b", "main"},
 		{"git", "config", "user.email", "test@test.com"},
 		{"git", "config", "user.name", "Test"},
 		{"git", "commit", "--allow-empty", "-m", "init"},
@@ -45,7 +46,7 @@ func TestWorktreeRelPath(t *testing.T) {
 func TestCreate_Success(t *testing.T) {
 	repo := initRepo(t)
 
-	absPath, err := Create(repo, "i1")
+	absPath, err := Create(repo, "i1", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -67,20 +68,74 @@ func TestCreate_Success(t *testing.T) {
 func TestCreate_BranchExists(t *testing.T) {
 	repo := initRepo(t)
 
-	if _, err := Create(repo, "i1"); err != nil {
+	if _, err := Create(repo, "i1", ""); err != nil {
 		t.Fatalf("first Create: %v", err)
 	}
 
-	_, err := Create(repo, "i1")
+	_, err := Create(repo, "i1", "")
 	if err == nil {
 		t.Fatal("second Create should fail")
+	}
+}
+
+func TestCreate_WithRef(t *testing.T) {
+	repo := initRepoWithOtherBranch(t)
+
+	absPath, err := Create(repo, "i1", "other")
+	if err != nil {
+		t.Fatalf("Create with ref: %v", err)
+	}
+
+	if !BranchExists(repo, "i1") {
+		t.Error("branch plax/i1 should exist")
+	}
+
+	// The worktree should be at other's HEAD.
+	wtRef, wtCommit, err := WorktreeHead(absPath)
+	if err != nil {
+		t.Fatalf("WorktreeHead: %v", err)
+	}
+	if wtRef != "plax/i1" {
+		t.Errorf("worktree ref = %q, want plax/i1", wtRef)
+	}
+
+	otherCommit := revParse(t, repo, "other")
+	if wtCommit != otherCommit {
+		t.Errorf("worktree at %s, want other branch's HEAD (%s)", wtCommit, otherCommit)
+	}
+}
+
+func TestCreate_WithDetachedRef(t *testing.T) {
+	repo := initRepo(t)
+
+	// Get the HEAD commit SHA.
+	_, sha, err := HeadRef(repo)
+	if err != nil {
+		t.Fatalf("HeadRef: %v", err)
+	}
+
+	absPath, err := Create(repo, "i1", sha)
+	if err != nil {
+		t.Fatalf("Create with sha: %v", err)
+	}
+
+	// The worktree should be on branch plax/i1 at the given SHA.
+	wtRef, wtCommit, err := WorktreeHead(absPath)
+	if err != nil {
+		t.Fatalf("WorktreeHead: %v", err)
+	}
+	if wtRef != "plax/i1" {
+		t.Errorf("worktree ref = %q, want plax/i1", wtRef)
+	}
+	if wtCommit != sha {
+		t.Errorf("worktree at %s, want %s", wtCommit, sha)
 	}
 }
 
 func TestRemove_Success(t *testing.T) {
 	repo := initRepo(t)
 
-	absPath, err := Create(repo, "i1")
+	absPath, err := Create(repo, "i1", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -101,7 +156,7 @@ func TestRemove_Success(t *testing.T) {
 func TestRemove_MissingWorktreeStillDeletesBranch(t *testing.T) {
 	repo := initRepo(t)
 
-	absPath, err := Create(repo, "i1")
+	absPath, err := Create(repo, "i1", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -144,7 +199,7 @@ func TestSchemaFilesAtRef_MissingRef(t *testing.T) {
 
 func TestBranchExists_True(t *testing.T) {
 	repo := initRepo(t)
-	if _, err := Create(repo, "i1"); err != nil {
+	if _, err := Create(repo, "i1", ""); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if !BranchExists(repo, "i1") {
@@ -154,7 +209,7 @@ func TestBranchExists_True(t *testing.T) {
 
 func TestWorktreeHead_NormalBranch(t *testing.T) {
 	repo := initRepo(t)
-	wtPath, err := Create(repo, "i1")
+	wtPath, err := Create(repo, "i1", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -173,7 +228,7 @@ func TestWorktreeHead_NormalBranch(t *testing.T) {
 
 func TestWorktreeHead_DetachedHead(t *testing.T) {
 	repo := initRepo(t)
-	wtPath, err := Create(repo, "i1")
+	wtPath, err := Create(repo, "i1", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -200,5 +255,178 @@ func TestWorktreeHead_MissingPath(t *testing.T) {
 	_, _, err := WorktreeHead("/nonexistent/path")
 	if err == nil {
 		t.Fatal("expected error for missing worktree path")
+	}
+}
+
+// --- ResolveRef tests ---
+
+func TestResolveRef_Empty(t *testing.T) {
+	repo := initRepo(t)
+	got, err := ResolveRef(repo, "")
+	if err != nil {
+		t.Fatalf("ResolveRef(\"\"): %v", err)
+	}
+	if got != "" {
+		t.Errorf("ResolveRef(\"\") = %q, want \"\"", got)
+	}
+}
+
+func TestResolveRef_PRNumber(t *testing.T) {
+	repo := initRepo(t)
+	// Seed a local ref to avoid a real fetch.
+	seedPRRef(t, repo, "42")
+
+	got, err := ResolveRef(repo, "42")
+	if err != nil {
+		t.Fatalf("ResolveRef(\"42\"): %v", err)
+	}
+	if got != "refs/pull/42/head" {
+		t.Errorf("ResolveRef(\"42\") = %q, want refs/pull/42/head", got)
+	}
+}
+
+func TestResolveRef_PRNumberPrefixed(t *testing.T) {
+	repo := initRepo(t)
+	seedPRRef(t, repo, "42")
+
+	got, err := ResolveRef(repo, "pr/42")
+	if err != nil {
+		t.Fatalf("ResolveRef(\"pr/42\"): %v", err)
+	}
+	if got != "refs/pull/42/head" {
+		t.Errorf("ResolveRef(\"pr/42\") = %q, want refs/pull/42/head", got)
+	}
+}
+
+func TestResolveRef_BranchName(t *testing.T) {
+	repo := initRepo(t)
+
+	got, err := ResolveRef(repo, "main")
+	if err != nil {
+		t.Fatalf("ResolveRef(\"main\"): %v", err)
+	}
+	if got != "main" {
+		t.Errorf("ResolveRef(\"main\") = %q, want \"main\"", got)
+	}
+}
+
+func TestResolveRef_OriginBranch(t *testing.T) {
+	repo := initRepo(t)
+	// Seed an origin/main ref locally.
+	seedOriginRef(t, repo, "main")
+
+	got, err := ResolveRef(repo, "origin/main")
+	if err != nil {
+		t.Fatalf("ResolveRef(\"origin/main\"): %v", err)
+	}
+	if got != "origin/main" {
+		t.Errorf("ResolveRef(\"origin/main\") = %q, want \"origin/main\"", got)
+	}
+}
+
+func TestResolveRef_CommitSHA(t *testing.T) {
+	repo := initRepo(t)
+
+	_, sha, err := HeadRef(repo)
+	if err != nil {
+		t.Fatalf("HeadRef: %v", err)
+	}
+
+	got, err := ResolveRef(repo, sha)
+	if err != nil {
+		t.Fatalf("ResolveRef(%q): %v", sha, err)
+	}
+	if got != sha {
+		t.Errorf("ResolveRef(%q) = %q, want %q", sha, got, sha)
+	}
+}
+
+func TestResolveRef_ExplicitRef(t *testing.T) {
+	repo := initRepo(t)
+
+	got, err := ResolveRef(repo, "refs/heads/main")
+	if err != nil {
+		t.Fatalf("ResolveRef(\"refs/heads/main\"): %v", err)
+	}
+	if got != "refs/heads/main" {
+		t.Errorf("ResolveRef(\"refs/heads/main\") = %q, want \"refs/heads/main\"", got)
+	}
+}
+
+func TestResolveRef_NotFound(t *testing.T) {
+	repo := initRepo(t)
+
+	_, err := ResolveRef(repo, "nonexistent-branch")
+	if err == nil {
+		t.Fatal("ResolveRef(\"nonexistent-branch\") should fail")
+	}
+}
+
+func TestResolveRef_BareIntegerFetched(t *testing.T) {
+	// When a PR ref is not present locally, ResolveRef attempts git fetch.
+	// Without a remote, this fails gracefully.
+	repo := initRepo(t)
+
+	_, err := ResolveRef(repo, "99999")
+	if err == nil {
+		t.Fatal("ResolveRef(\"99999\") should fail without a remote")
+	}
+}
+
+// --- helpers ---
+
+func initRepoWithOtherBranch(t *testing.T) string {
+	t.Helper()
+	dir := initRepo(t)
+
+	// Create a second commit and branch "other" at it.
+	cmd := exec.Command("git", "commit", "--allow-empty", "-m", "other-commit")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("second commit: %s", out)
+	}
+
+	cmd = exec.Command("git", "branch", "other")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git branch other: %s", out)
+	}
+
+	// Reset main back to the first commit so the branches diverge.
+	cmd = exec.Command("git", "reset", "--hard", "HEAD~1")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git reset: %s", out)
+	}
+
+	return dir
+}
+
+func seedPRRef(t *testing.T, repo, n string) {
+	t.Helper()
+	cmd := exec.Command("git", "update-ref", "refs/pull/"+n+"/head", "HEAD")
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("seed PR ref: %s", out)
+	}
+}
+
+func revParse(t *testing.T, repo, ref string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", ref)
+	cmd.Dir = repo
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %s: %v", ref, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func seedOriginRef(t *testing.T, repo, name string) {
+	t.Helper()
+	cmd := exec.Command("git", "update-ref", "refs/remotes/origin/"+name, "HEAD")
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("seed origin ref: %s", out)
 	}
 }
