@@ -388,6 +388,16 @@ func runUp(cmd UpCmd) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	absRoot, err := filepath.Abs(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("resolving repo root: %w", err)
+	}
+
+	resolvedRef, err := worktree.ResolveRef(absRoot, cmd.Ref)
+	if err != nil {
+		return err
+	}
+
 	deps, err := buildDeps(ctx, cmd.Root, cmd.PgURL)
 	if err != nil {
 		return err
@@ -398,10 +408,6 @@ func runUp(cmd UpCmd) error {
 
 	deps.Registry.BlueprintStamp = computeStamp(cmd.Root, deps.Blueprint)
 
-	resolvedRef, err := worktree.ResolveRef(deps.RepoRoot, cmd.Ref)
-	if err != nil {
-		return err
-	}
 	deps.SourceRef = cmd.Ref
 	deps.ResolvedRef = resolvedRef
 

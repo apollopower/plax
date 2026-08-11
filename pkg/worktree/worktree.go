@@ -78,11 +78,12 @@ func Create(repoRoot, name, sourceRef string) (string, error) {
 //	"refs/..."           → verified as-is
 //	branch/tag/SHA       → verified via git rev-parse --verify
 func ResolveRef(repoRoot, ref string) (string, error) {
+	// Step 1: empty string — caller uses repo-root HEAD.
 	if ref == "" {
 		return "", nil
 	}
 
-	// Step 2: PR number (bare integer or pr/N).
+	// PR number (bare integer or pr/N).
 	n := strings.TrimPrefix(ref, "pr/")
 	isPR := strings.HasPrefix(ref, "pr/")
 	if !isPR {
@@ -107,7 +108,7 @@ func ResolveRef(repoRoot, ref string) (string, error) {
 		return fetchRef, nil
 	}
 
-	// Step 3: explicit refs/ prefix.
+	// Explicit refs/ prefix.
 	if strings.HasPrefix(ref, "refs/") {
 		if !RefExists(repoRoot, ref) {
 			return "", fmt.Errorf("ref %q not found", ref)
@@ -115,7 +116,7 @@ func ResolveRef(repoRoot, ref string) (string, error) {
 		return ref, nil
 	}
 
-	// Step 4: branch, tag, or short SHA.
+	// Branch, tag, or short SHA.
 	if RefExists(repoRoot, ref) {
 		return ref, nil
 	}
