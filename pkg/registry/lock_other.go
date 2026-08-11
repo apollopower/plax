@@ -13,6 +13,4 @@ func lockFile(path string, shared bool) (*fileLock, error) {
 func unlockFile(l *fileLock) {
 }
 
-func lockPath(path string) string {
-	return path + ".lock"
-}
+// lockPath is defined in registry.go (single definition for all platforms).

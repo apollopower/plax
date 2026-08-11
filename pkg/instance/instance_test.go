@@ -242,8 +242,13 @@ func testDeps(t *testing.T, bp *blueprint.Blueprint) (*Deps, *fakeBM, *fakeDocke
 
 	pool, err := portpool.New(bp.PortPool.Start, bp.PortPool.End, reg)
 	if err != nil {
+		reg.Close()
 		t.Fatalf("portpool.New: %v", err)
 	}
+	t.Cleanup(func() {
+		pool.Close()
+		reg.Close()
+	})
 	deps := &Deps{
 		Blueprint: bp,
 		Registry:  reg,
