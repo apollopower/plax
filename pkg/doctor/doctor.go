@@ -18,6 +18,23 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
+// dbNamesFromRecord returns all database names from a record, falling back
+// to the deprecated DBName field if DBNames is nil.
+func dbNamesFromRecord(rec registry.InstanceRecord) []string {
+	names := rec.DBNames
+	if names == nil {
+		if rec.DBName != "" {
+			return []string{rec.DBName}
+		}
+		return nil
+	}
+	result := make([]string, 0, len(names))
+	for _, dbName := range names {
+		result = append(result, dbName)
+	}
+	return result
+}
+
 type Level string
 
 const (
@@ -213,13 +230,16 @@ func runBlueprintVsRegistry(ctx context.Context, r *Report, deps *Deps) {
 			hasFail = true
 		}
 		if deps.BM != nil {
-			exists, err := deps.BM.InstanceDBExists(ctx, rec.DBName)
-			switch {
-			case err != nil:
-				r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: fmt.Sprintf("%s: cannot check database: %v", name, err)})
-			case !exists:
-				r.Checks = append(r.Checks, Check{Area: area, Level: Fail, Message: fmt.Sprintf("%s: database %s missing — 'plax down' + 'plax up' to rebuild", name, rec.DBName)})
-				hasFail = true
+			dbNames := dbNamesFromRecord(rec)
+			for _, dbName := range dbNames {
+				exists, err := deps.BM.InstanceDBExists(ctx, dbName)
+				switch {
+				case err != nil:
+					r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: fmt.Sprintf("%s: cannot check database %s: %v", name, dbName, err)})
+				case !exists:
+					r.Checks = append(r.Checks, Check{Area: area, Level: Fail, Message: fmt.Sprintf("%s: database %s missing — 'plax down' + 'plax up' to rebuild", name, dbName)})
+					hasFail = true
+				}
 			}
 		}
 		if deps.Docker != nil {

@@ -159,8 +159,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 
 	// Step 5: Clone all databases (primary + any declared databases).
 	clonedDBs := []string{}
-	for key, physicalName := range dbNames {
-		_ = key
+	for _, physicalName := range dbNames {
 		fmt.Fprintf(os.Stderr, "cloning database %s...\n", physicalName)
 		if err := deps.BM.CloneBase(ctx, physicalName); err != nil {
 			return fmt.Errorf("cloning database: %w", err)
@@ -338,8 +337,12 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	fmt.Fprintf(os.Stderr, "  worktree:  %s\n", worktree.WorktreeRelPath(name))
 	fmt.Fprintf(os.Stderr, "  branch:    %s\n", worktree.BranchName(name))
 	if len(dbNames) > 0 {
-		dbList := sortedDBKeys(dbNames)
-		fmt.Fprintf(os.Stderr, "  database:  %s\n", strings.Join(dbList, " "))
+		dbList := sortedDBNames(dbNames)
+		label := "  databases:"
+		if len(dbList) == 1 {
+			label = "  database:"
+		}
+		fmt.Fprintf(os.Stderr, "%s %s\n", label, strings.Join(dbList, ", "))
 	}
 	if len(allocated) > 0 {
 		fmt.Fprintf(os.Stderr, "  ports:")
@@ -429,7 +432,7 @@ func splitEnv(s string) (string, string, bool) {
 	return s, "", false
 }
 
-func sortedDBKeys(m map[string]string) []string {
+func sortedDBNames(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

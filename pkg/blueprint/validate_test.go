@@ -416,6 +416,50 @@ func TestValidate_AllKnownServiceIsolations(t *testing.T) {
 	}
 }
 
+func TestValidateStructural_DatabaseInvalidFrom(t *testing.T) {
+	bp := &Blueprint{
+		Version:  1,
+		Name:     "t",
+		PortPool: PortPool{Start: 3000, End: 4000},
+		Seed:     SeedConfig{Migrate: "m", Command: "c", Workdir: "."},
+		Services: map[string]ServiceDef{
+			"db": {
+				Isolation: IsolationLogical,
+				Type:      "postgres",
+				Image:     "postgres:16",
+				Databases: []DatabaseDef{{Name: "test", From: "shadow"}},
+			},
+		},
+		Env: EnvConfig{Template: ".env.example", Holes: map[string]string{}},
+	}
+	errs := ValidateStructural(bp)
+	if !containsErr(t, errs, "unsupported from") {
+		t.Errorf("expected unsupported from error, got %v", errs)
+	}
+}
+
+func TestValidateStructural_DatabaseEmptyName(t *testing.T) {
+	bp := &Blueprint{
+		Version:  1,
+		Name:     "t",
+		PortPool: PortPool{Start: 3000, End: 4000},
+		Seed:     SeedConfig{Migrate: "m", Command: "c", Workdir: "."},
+		Services: map[string]ServiceDef{
+			"db": {
+				Isolation: IsolationLogical,
+				Type:      "postgres",
+				Image:     "postgres:16",
+				Databases: []DatabaseDef{{Name: "", From: "base"}},
+			},
+		},
+		Env: EnvConfig{Template: ".env.example", Holes: map[string]string{}},
+	}
+	errs := ValidateStructural(bp)
+	if !containsErr(t, errs, "must not be empty") {
+		t.Errorf("expected empty name error, got %v", errs)
+	}
+}
+
 func containsErr(t *testing.T, errs []error, substr string) bool {
 	t.Helper()
 	for _, e := range errs {

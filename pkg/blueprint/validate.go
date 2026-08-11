@@ -80,6 +80,12 @@ func ValidateStructural(bp *Blueprint) []error {
 					errs = append(errs, fmt.Errorf("blueprint: service %q: duplicate database key %q", svcName, db.Name))
 				}
 				seen[db.Name] = true
+				if db.Name == "" {
+					errs = append(errs, fmt.Errorf("blueprint: service %q: database name must not be empty", svcName))
+				}
+				if db.From != "" && db.From != "base" {
+					errs = append(errs, fmt.Errorf("blueprint: service %q: database %q has unsupported from %q (only \"base\" supported)", svcName, db.Name, db.From))
+				}
 			}
 		}
 		for portKey, pd := range svc.Ports {
