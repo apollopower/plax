@@ -520,6 +520,43 @@ func TestEnv_DeriveMerged_UserKeyDoesNotShadowHole(t *testing.T) {
 	}
 }
 
+func TestEnv_DeriveMerged_HoleAbsentFromTemplateUserHasKey_NoDuplicate(t *testing.T) {
+	overrides := map[string]string{
+		"GOTENBERG_URL": "http://localhost:3031",
+	}
+	holes := map[string]string{
+		"GOTENBERG_URL": "http://localhost:{{GOTENBERG_PORT}}",
+	}
+	values := map[string]string{"GOTENBERG_PORT": "3032"}
+
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("PORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := DeriveMerged(fakeTmpl, overrides, holes, values, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(content), "\n") {
+		if strings.HasPrefix(line, "GOTENBERG_URL=") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("GOTENBERG_URL appears %d times, want 1\n%s", count, content)
+	}
+	if !strings.Contains(content, "GOTENBERG_URL=http://localhost:3032") {
+		t.Error("hole value should take precedence over user override")
+	}
+}
+
 func TestEnv_DeriveMerged_DeterministicOrder(t *testing.T) {
 	overrides := map[string]string{
 		"Z_KEY": "z",
