@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -27,7 +28,7 @@ func DeriveMerged(templatePath string, overrides map[string]string, holes map[st
 	}
 	defer func() { _ = f.Close() }()
 
-	found := make(map[string]bool, len(holes))
+	found := make(map[string]bool, len(holes)+len(merged))
 	var lines []string
 
 	scanner := bufio.NewScanner(f)
@@ -49,6 +50,7 @@ func DeriveMerged(templatePath string, overrides map[string]string, holes map[st
 			found[key] = true
 		} else if userVal, ok := merged[key]; ok {
 			lines = append(lines, key+"="+userVal)
+			found[key] = true
 		} else {
 			lines = append(lines, line)
 		}
@@ -66,6 +68,17 @@ func DeriveMerged(templatePath string, overrides map[string]string, holes map[st
 			return fmt.Errorf("env: hole %q: %w", key, err)
 		}
 		lines = append(lines, key+"="+rendered)
+	}
+
+	unwritten := make([]string, 0, len(merged))
+	for key := range merged {
+		if !found[key] {
+			unwritten = append(unwritten, key)
+		}
+	}
+	sort.Strings(unwritten)
+	for _, key := range unwritten {
+		lines = append(lines, key+"="+merged[key])
 	}
 
 	out := strings.Join(lines, "\n") + "\n"

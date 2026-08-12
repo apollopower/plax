@@ -122,6 +122,7 @@ JSON, checked into the repo root as `plax.json`. No comments.
 | 10 | [`10-status-worktree-head.md`](10-status-worktree-head.md) | Fix status drift: measure worktree HEAD instead of recorded branch |
 | 11 | [`11-multi-database.md`](11-multi-database.md) | Multiple databases per logical Postgres service: clone, migrate, drop, and detect orphans |
 | 12 | [`12-up-ref-flag.md`](12-up-ref-flag.md) | `plax up --ref` flag: build instances from branches, PRs, tags, or commits |
+| 13 | [`13-user-env-keys-not-dropped.md`](13-user-env-keys-not-dropped.md) | User `.env` keys absent from template are no longer dropped; `doctor` warns about them |
 
 ---
 
