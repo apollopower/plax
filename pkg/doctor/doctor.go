@@ -411,9 +411,15 @@ func runScrubbedKeysWithRealValues(r *Report, deps *Deps) {
 			if userVal == "" {
 				continue
 			}
+			var msg string
+			if !inTmpl {
+				msg = fmt.Sprintf("scrubbed key %q has a real value in your .env (%q) but is not in the template — it will NOT reach instances", key, userVal)
+			} else {
+				msg = fmt.Sprintf("scrubbed key %q has a real value in your .env (%q) that differs from the template placeholder — it will NOT reach instances", key, userVal)
+			}
 			r.Checks = append(r.Checks, Check{
 				Area: area, Level: Warn,
-				Message: fmt.Sprintf("scrubbed key %q has a real value in your .env (%q) that differs from the template placeholder — it will NOT reach instances", key, userVal),
+				Message: msg,
 			})
 			hasWarn = true
 		}
