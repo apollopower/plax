@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/apollopower/plax/pkg/blueprint"
+	"github.com/apollopower/plax/pkg/derive/env"
 	"github.com/apollopower/plax/pkg/derive/postgres"
 	"github.com/apollopower/plax/pkg/process"
 	"github.com/apollopower/plax/pkg/registry"
@@ -71,6 +73,7 @@ func Run(ctx context.Context, deps *Deps) *Report {
 	runOrphanDatabases(ctx, r, deps)
 	runRepoVsMachine(r, deps)
 	runBase(ctx, r, deps)
+	runUserEnvMissingFromTemplate(r, deps)
 	return r
 }
 
@@ -365,6 +368,50 @@ func runOrphanDatabases(ctx context.Context, r *Report, deps *Deps) {
 		r.Checks = append(r.Checks, Check{
 			Area: area, Level: Warn,
 			Message: fmt.Sprintf("%s is an unreferenced database — run `psql -c \"DROP DATABASE %s\"` to remove it", db, db),
+		})
+	}
+}
+
+func runUserEnvMissingFromTemplate(r *Report, deps *Deps) {
+	area := "user-env-vs-template"
+
+	userEnvPath := filepath.Join(deps.RepoRoot, ".env")
+	userKeys, err := env.ParseFile(userEnvPath)
+	if err != nil {
+		r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: "user .env not found or unreadable — skipped"})
+		return
+	}
+
+	templatePath := filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)
+	tmplKeys, err := env.ParseFile(templatePath)
+	if err != nil {
+		r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: fmt.Sprintf("template %s not found or unreadable — skipped", deps.Blueprint.Env.Template)})
+		return
+	}
+
+	holes := deps.Blueprint.Env.Holes
+
+	var missing []string
+	for key := range userKeys {
+		if _, inTmpl := tmplKeys[key]; inTmpl {
+			continue
+		}
+		if _, inHoles := holes[key]; inHoles {
+			continue
+		}
+		missing = append(missing, key)
+	}
+
+	if len(missing) == 0 {
+		r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: "all user .env keys are present in the template"})
+		return
+	}
+
+	sort.Strings(missing)
+	for _, key := range missing {
+		r.Checks = append(r.Checks, Check{
+			Area: area, Level: Warn,
+			Message: fmt.Sprintf("user .env key %q is not in template — it will appear in derived .env files but may be surprising", key),
 		})
 	}
 }
