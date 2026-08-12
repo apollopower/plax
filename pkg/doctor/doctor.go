@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/derive/env"
@@ -413,9 +414,9 @@ func runScrubbedKeysWithRealValues(r *Report, deps *Deps) {
 			}
 			var msg string
 			if !inTmpl {
-				msg = fmt.Sprintf("scrubbed key %q has a real value in your .env (%q) but is not in the template — it will NOT reach instances", key, userVal)
+				msg = fmt.Sprintf("scrubbed key %q has a non-placeholder value in your .env but is not in the template — it will NOT reach instances", key)
 			} else {
-				msg = fmt.Sprintf("scrubbed key %q has a real value in your .env (%q) that differs from the template placeholder — it will NOT reach instances", key, userVal)
+				msg = fmt.Sprintf("scrubbed key %q has a non-placeholder value in your .env that differs from the template placeholder — it will NOT reach instances", key)
 			}
 			r.Checks = append(r.Checks, Check{
 				Area: area, Level: Warn,
@@ -466,10 +467,25 @@ func runUserEnvMissingFromTemplate(r *Report, deps *Deps) {
 	}
 
 	sort.Strings(missing)
-	for _, key := range missing {
-		r.Checks = append(r.Checks, Check{
-			Area: area, Level: Warn,
-			Message: fmt.Sprintf("user .env key %q is not in template — it will appear in derived .env files but may be surprising", key),
-		})
+	const maxDisplay = 10
+	displayKeys := missing
+	extra := 0
+	if len(missing) > maxDisplay {
+		displayKeys = missing[:maxDisplay]
+		extra = len(missing) - maxDisplay
 	}
+	quoted := make([]string, len(displayKeys))
+	for i, k := range displayKeys {
+		quoted[i] = fmt.Sprintf("%q", k)
+	}
+	keyList := strings.Join(quoted, ", ")
+	msg := fmt.Sprintf("%d keys in your .env are not in .env.example — they will appear in derived .env files: %s",
+		len(missing), keyList)
+	if extra > 0 {
+		msg += fmt.Sprintf(" (+%d more)", extra)
+	}
+	r.Checks = append(r.Checks, Check{
+		Area: area, Level: Warn,
+		Message: msg,
+	})
 }
