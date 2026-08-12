@@ -68,6 +68,7 @@ func DeriveMerged(templatePath string, overrides map[string]string, holes map[st
 			return fmt.Errorf("env: hole %q: %w", key, err)
 		}
 		lines = append(lines, key+"="+rendered)
+		found[key] = true
 	}
 
 	unwritten := make([]string, 0, len(merged))

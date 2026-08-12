@@ -453,10 +453,17 @@ func TestDoctor_UserEnvHoleKeysExcluded(t *testing.T) {
 	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
 	report := Run(context.Background(), deps)
 
+	hasPass := false
 	for _, c := range report.Checks {
 		if c.Area == "user-env-vs-template" && c.Level == Warn {
 			t.Errorf("should not warn about hole key REDIS_PORT: %s", c.Message)
 		}
+		if c.Area == "user-env-vs-template" && c.Level == Pass {
+			hasPass = true
+		}
+	}
+	if !hasPass {
+		t.Error("expected a pass-level check for user-env-vs-template area")
 	}
 }
 
