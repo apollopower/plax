@@ -157,6 +157,10 @@ func ValidateBlueprint(bp *Blueprint) []error {
 		errs = append(errs, checkHolesInTemplate(bp.Env.Template, bp.Env.Holes)...)
 	}
 
+	if bp.Env.Template != "" && len(bp.Env.Scrub) > 0 {
+		errs = append(errs, checkScrubInTemplate(bp.Env.Template, bp.Env.Scrub, bp.Env.Holes)...)
+	}
+
 	return errs
 }
 
@@ -192,4 +196,27 @@ func lineHasKey(content, key string) bool {
 		}
 	}
 	return false
+}
+
+func checkScrubInTemplate(templatePath string, scrub []string, holes map[string]string) []error {
+	data, err := os.ReadFile(templatePath)
+	if err != nil {
+		return []error{fmt.Errorf("blueprint: cannot read template file %q: %w", templatePath, err)}
+	}
+	content := string(data)
+	var errs []error
+	seen := map[string]bool{}
+	for _, key := range scrub {
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if _, isHole := holes[key]; isHole {
+			continue
+		}
+		if !lineHasKey(content, key) {
+			errs = append(errs, fmt.Errorf("blueprint: scrubbed key %q not found in template file %q (warning) — the key will be absent from every instance's .env", key, templatePath))
+		}
+	}
+	return errs
 }

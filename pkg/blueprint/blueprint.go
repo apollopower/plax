@@ -83,9 +83,12 @@ type ProcessDef struct {
 	DependsOn   []string         `json:"depends_on,omitempty"`
 }
 
-// EnvConfig controls per-instance .env derivation from a template and
-// a set of template holes ({{VAR}}) that are filled with per-instance values.
+// EnvConfig controls per-instance .env derivation from a template,
+// a set of template holes ({{VAR}}) that are filled with per-instance
+// values, and a scrub list of keys whose real values must not reach
+// instances.
 type EnvConfig struct {
 	Template string            `json:"template"`
 	Holes    map[string]string `json:"holes"`
+	Scrub    []string          `json:"scrub,omitempty"`
 }

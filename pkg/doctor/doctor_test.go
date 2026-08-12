@@ -467,4 +467,151 @@ func TestDoctor_UserEnvHoleKeysExcluded(t *testing.T) {
 	}
 }
 
+func TestDoctor_ScrubbedKeyHasRealValue_Warns(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	bp.Env.Scrub = []string{"SENDGRID_API_KEY"}
+	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("SENDGRID_API_KEY=placeholder\nPORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SENDGRID_API_KEY=real\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	found := false
+	for _, c := range report.Checks {
+		if c.Area == "scrubbed-env-keys" && c.Level == Warn && strings.Contains(c.Message, "SENDGRID_API_KEY") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("should warn about scrubbed key with real value")
+	}
+}
+
+func TestDoctor_ScrubbedKeyMatchesTemplate_Passes(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	bp.Env.Scrub = []string{"SENDGRID_API_KEY"}
+	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("SENDGRID_API_KEY=placeholder\nPORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SENDGRID_API_KEY=placeholder\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	hasPass := false
+	for _, c := range report.Checks {
+		if c.Area == "scrubbed-env-keys" {
+			if c.Level == Pass {
+				hasPass = true
+			} else {
+				t.Errorf("unexpected check: [%s] %s", c.Level, c.Message)
+			}
+		}
+	}
+	if !hasPass {
+		t.Error("expected pass when scrubbed key matches template")
+	}
+}
+
+func TestDoctor_ScrubbedKeyEmptyInBoth_Passes(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	bp.Env.Scrub = []string{"SENDGRID_API_KEY"}
+	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("SENDGRID_API_KEY=\nPORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SENDGRID_API_KEY=\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	hasPass := false
+	for _, c := range report.Checks {
+		if c.Area == "scrubbed-env-keys" {
+			if c.Level == Pass {
+				hasPass = true
+			} else {
+				t.Errorf("unexpected check: [%s] %s", c.Level, c.Message)
+			}
+		}
+	}
+	if !hasPass {
+		t.Error("expected pass when both empty")
+	}
+}
+
+func TestDoctor_ScrubbedKeyNoUserEnv_Skips(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	bp.Env.Scrub = []string{"SENDGRID_API_KEY"}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	hasPass := false
+	for _, c := range report.Checks {
+		if c.Area == "scrubbed-env-keys" {
+			if c.Level == Pass {
+				hasPass = true
+			}
+		}
+	}
+	if !hasPass {
+		t.Error("expected pass when user .env does not exist")
+	}
+}
+
+func TestDoctor_ScrubbedKeyHoleExcluded(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	bp.Env.Scrub = []string{"REDIS_PORT"}
+	bp.Env.Holes = map[string]string{"REDIS_PORT": "{{REDIS_PORT}}"}
+	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("PORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("REDIS_PORT=9999\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	for _, c := range report.Checks {
+		if c.Area == "scrubbed-env-keys" && c.Level == Warn {
+			t.Errorf("should not warn about hole key REDIS_PORT: %s", c.Message)
+		}
+	}
+}
+
+func TestDoctor_NoScrubList_Passes(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	hasPass := false
+	for _, c := range report.Checks {
+		if c.Area == "scrubbed-env-keys" {
+			if c.Level == Pass {
+				hasPass = true
+			} else {
+				t.Errorf("unexpected check: [%s] %s", c.Level, c.Message)
+			}
+		}
+	}
+	if !hasPass {
+		t.Error("expected pass when no scrub list")
+	}
+}
+
 var _ = strings.TrimSpace // keep import alive

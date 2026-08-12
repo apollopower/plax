@@ -356,6 +356,34 @@ func TestBlueprint_ValidateStructuralDuplicateDatabaseKey(t *testing.T) {
 	}
 }
 
+func TestBlueprint_ScrubKeyNotInTemplate_Warns(t *testing.T) {
+	dir := t.TempDir()
+	tmplPath := filepath.Join(dir, ".env.example")
+	if err := os.WriteFile(tmplPath, []byte("EXISTING_KEY=hello\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	bp := newValidBP()
+	bp.Env.Template = tmplPath
+	bp.Env.Scrub = []string{"EXISTING_KEY", "MISSING_KEY"}
+
+	errs := ValidateBlueprint(bp)
+	if !containsErr(t, errs, "scrubbed key") {
+		t.Errorf("expected scrub key warning, got %v", errs)
+	}
+	// EXISTING_KEY is in template so no warning for it.
+	// Only MISSING_KEY should trigger a warning.
+	warnCount := 0
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "scrubbed key") {
+			warnCount++
+		}
+	}
+	if warnCount != 1 {
+		t.Errorf("expected exactly 1 scrub key warning (for MISSING_KEY), got %d", warnCount)
+	}
+}
+
 func TestBlueprint_ValidateStructuralValidDatabaseDeclarations(t *testing.T) {
 	bp := &Blueprint{
 		Version:  1,

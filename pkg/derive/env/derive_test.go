@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+var noScrub map[string]bool
+
 func TestEnv_DeriveBasicSubstitution(t *testing.T) {
 	holes := map[string]string{
 		"DATABASE_URL": "postgres://localhost:5432/{{DB_NAME}}",
@@ -18,7 +20,7 @@ func TestEnv_DeriveBasicSubstitution(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := Derive("testdata/basic.env.example", "", holes, values, out)
+	err := Derive("testdata/basic.env.example", "", holes, values, noScrub, out)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -41,7 +43,7 @@ func TestEnv_DeriveNonHoleLinesPreserved(t *testing.T) {
 	values := map[string]string{"PORT": "3001"}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := Derive("testdata/basic.env.example", "", holes, values, out)
+	err := Derive("testdata/basic.env.example", "", holes, values, noScrub, out)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -71,7 +73,7 @@ func TestEnv_DeriveMissingHoleInTemplate(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := Derive("testdata/sparse.env.example", "", holes, values, out)
+	err := Derive("testdata/sparse.env.example", "", holes, values, noScrub, out)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -94,7 +96,7 @@ func TestEnv_DeriveDBNameSubstitution(t *testing.T) {
 	values := map[string]string{"DB_NAME": "plax_test1"}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := Derive("testdata/basic.env.example", "", holes, values, out)
+	err := Derive("testdata/basic.env.example", "", holes, values, noScrub, out)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -115,7 +117,7 @@ func TestEnv_DeriveMultipleHolesInOneValue(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := Derive("testdata/basic.env.example", "", holes, values, out)
+	err := Derive("testdata/basic.env.example", "", holes, values, noScrub, out)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -133,7 +135,7 @@ func TestEnv_DeriveUnknownVar(t *testing.T) {
 	values := map[string]string{}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := Derive("testdata/basic.env.example", "", holes, values, out)
+	err := Derive("testdata/basic.env.example", "", holes, values, noScrub, out)
 	if err == nil {
 		t.Fatal("expected error for unknown variable")
 	}
@@ -155,7 +157,7 @@ func TestEnv_DeriveOverridesFromUserEnv(t *testing.T) {
 	values := map[string]string{"PORT": "3001"}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := Derive("testdata/basic.env.example", userEnv, holes, values, out)
+	err := Derive("testdata/basic.env.example", userEnv, holes, values, noScrub, out)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -194,7 +196,7 @@ func TestEnv_DeriveOverridesIgnoredForHoles(t *testing.T) {
 	values := map[string]string{"PORT": "3001"}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := Derive("testdata/basic.env.example", userEnv, holes, values, out)
+	err := Derive("testdata/basic.env.example", userEnv, holes, values, noScrub, out)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -213,7 +215,7 @@ func TestEnv_DeriveNoOverridesFile(t *testing.T) {
 	values := map[string]string{"PORT": "3001"}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := Derive("testdata/basic.env.example", "/nonexistent/.env", holes, values, out)
+	err := Derive("testdata/basic.env.example", "/nonexistent/.env", holes, values, noScrub, out)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -332,7 +334,7 @@ func TestEnv_DeriveExportPrefixedHole(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := Derive(tmpl, "", map[string]string{"PORT": "{{PORT}}"}, map[string]string{"PORT": "3001"}, out)
+	err := Derive(tmpl, "", map[string]string{"PORT": "{{PORT}}"}, map[string]string{"PORT": "3001"}, noScrub, out)
 	if err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
@@ -358,7 +360,7 @@ func TestEnv_DeriveExportPrefixedOverride(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	if err := Derive(tmpl, userEnv, nil, nil, out); err != nil {
+	if err := Derive(tmpl, userEnv, nil, nil, noScrub, out); err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
 
@@ -379,7 +381,7 @@ func TestEnv_DeriveOverridePreservesQuoting(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	if err := Derive(tmpl, userEnv, nil, nil, out); err != nil {
+	if err := Derive(tmpl, userEnv, nil, nil, noScrub, out); err != nil {
 		t.Fatalf("Derive: %v", err)
 	}
 
@@ -439,7 +441,7 @@ func TestEnv_DeriveMerged_UserKeysAbsentFromTemplate_Appended(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := DeriveMerged(fakeTmpl, overrides, holes, values, out)
+	err := DeriveMerged(fakeTmpl, overrides, holes, values, noScrub, out)
 	if err != nil {
 		t.Fatalf("DeriveMerged: %v", err)
 	}
@@ -469,7 +471,8 @@ func TestEnv_DeriveMerged_CommentedOutKeysInTemplate_UserValAppended(t *testing.
 	}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := DeriveMerged(fakeTmpl, overrides, nil, nil, out)
+	err := DeriveMerged(fakeTmpl, overrides, nil, nil, noScrub, out)
+
 	if err != nil {
 		t.Fatalf("DeriveMerged: %v", err)
 	}
@@ -501,7 +504,7 @@ func TestEnv_DeriveMerged_UserKeyDoesNotShadowHole(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := DeriveMerged(fakeTmpl, overrides, holes, values, out)
+	err := DeriveMerged(fakeTmpl, overrides, holes, values, noScrub, out)
 	if err != nil {
 		t.Fatalf("DeriveMerged: %v", err)
 	}
@@ -535,7 +538,7 @@ func TestEnv_DeriveMerged_HoleAbsentFromTemplateUserHasKey_NoDuplicate(t *testin
 	}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := DeriveMerged(fakeTmpl, overrides, holes, values, out)
+	err := DeriveMerged(fakeTmpl, overrides, holes, values, noScrub, out)
 	if err != nil {
 		t.Fatalf("DeriveMerged: %v", err)
 	}
@@ -570,7 +573,8 @@ func TestEnv_DeriveMerged_DeterministicOrder(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := DeriveMerged(fakeTmpl, overrides, nil, nil, out)
+	err := DeriveMerged(fakeTmpl, overrides, nil, nil, noScrub, out)
+
 	if err != nil {
 		t.Fatalf("DeriveMerged: %v", err)
 	}
@@ -605,7 +609,7 @@ func TestEnv_DeriveMerged_EmptyOverrides(t *testing.T) {
 	}
 
 	out := filepath.Join(t.TempDir(), ".env")
-	err := DeriveMerged(fakeTmpl, map[string]string{}, nil, nil, out)
+	err := DeriveMerged(fakeTmpl, map[string]string{}, nil, nil, noScrub, out)
 	if err != nil {
 		t.Fatalf("DeriveMerged: %v", err)
 	}
@@ -618,5 +622,173 @@ func TestEnv_DeriveMerged_EmptyOverrides(t *testing.T) {
 	}
 	if strings.Count(content, "\n") != 1 {
 		t.Errorf("expected 1 newline (trailing newline only), got %d newlines", strings.Count(content, "\n"))
+	}
+}
+
+func TestEnv_DeriveMerged_ScrubbedKeyUsesTemplateValue(t *testing.T) {
+	overrides := map[string]string{
+		"SENDGRID_API_KEY": "real-secret",
+	}
+	scrub := map[string]bool{"SENDGRID_API_KEY": true}
+
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("SENDGRID_API_KEY=placeholder\nPORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := DeriveMerged(fakeTmpl, overrides, nil, nil, scrub, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	if !strings.Contains(content, "SENDGRID_API_KEY=placeholder") {
+		t.Error("scrubbed key should use template placeholder, got: " + content)
+	}
+	if strings.Contains(content, "SENDGRID_API_KEY=real-secret") {
+		t.Error("scrubbed key should NOT use user's real value")
+	}
+}
+
+func TestEnv_DeriveMerged_ScrubbedKeyNotInTemplate_Omitted(t *testing.T) {
+	overrides := map[string]string{
+		"SENDGRID_API_KEY": "real-secret",
+	}
+	scrub := map[string]bool{"SENDGRID_API_KEY": true}
+
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("PORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := DeriveMerged(fakeTmpl, overrides, nil, nil, scrub, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	if strings.Contains(content, "SENDGRID_API_KEY") {
+		t.Error("scrubbed key absent from template should be omitted, got: " + content)
+	}
+}
+
+func TestEnv_DeriveMerged_ScrubbedKeyHoleWins(t *testing.T) {
+	overrides := map[string]string{
+		"PORT": "9999",
+	}
+	holes := map[string]string{
+		"PORT": "{{PORT}}",
+	}
+	values := map[string]string{"PORT": "3001"}
+	scrub := map[string]bool{"PORT": true}
+
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("PORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := DeriveMerged(fakeTmpl, overrides, holes, values, scrub, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	if !strings.Contains(content, "PORT=3001") {
+		t.Error("hole should take precedence over scrub, got: " + content)
+	}
+}
+
+func TestEnv_DeriveMerged_ScrubbedKeyWithEmptyTemplateValue(t *testing.T) {
+	overrides := map[string]string{
+		"SENDGRID_API_KEY": "real-secret",
+	}
+	scrub := map[string]bool{"SENDGRID_API_KEY": true}
+
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("SENDGRID_API_KEY=\nPORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := DeriveMerged(fakeTmpl, overrides, nil, nil, scrub, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	if !strings.Contains(content, "SENDGRID_API_KEY=") {
+		t.Error("scrubbed key should retain empty template value, got: " + content)
+	}
+	if strings.Contains(content, "real-secret") {
+		t.Error("scrubbed key should NOT contain real value")
+	}
+}
+
+func TestEnv_DeriveMerged_ScrubDoesNotAffectNonScrubbedKeys(t *testing.T) {
+	overrides := map[string]string{
+		"NEXTAUTH_SECRET":  "real-secret",
+		"SENDGRID_API_KEY": "should-be-blocked",
+	}
+	scrub := map[string]bool{"SENDGRID_API_KEY": true}
+
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("NEXTAUTH_SECRET=placeholder\nSENDGRID_API_KEY=placeholder\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := DeriveMerged(fakeTmpl, overrides, nil, nil, scrub, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	if !strings.Contains(content, "NEXTAUTH_SECRET=real-secret") {
+		t.Error("non-scrubbed key should still use user value")
+	}
+	if !strings.Contains(content, "SENDGRID_API_KEY=placeholder") {
+		t.Error("scrubbed key should use template placeholder")
+	}
+}
+
+func TestEnv_DeriveMerged_ScrubbedKeyStillAllowsOtherUserKeys(t *testing.T) {
+	overrides := map[string]string{
+		"SENDGRID_API_KEY": "real",
+		"OPENAI_KEY":       "sk-real",
+	}
+	scrub := map[string]bool{"SENDGRID_API_KEY": true}
+
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("BASE=1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := DeriveMerged(fakeTmpl, overrides, nil, nil, scrub, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	if strings.Contains(content, "SENDGRID_API_KEY") {
+		t.Error("scrubbed key absent from template should be omitted, got: " + content)
+	}
+	if !strings.Contains(content, "OPENAI_KEY=sk-real") {
+		t.Error("non-scrubbed user-only key should still be appended")
 	}
 }
