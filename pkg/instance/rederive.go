@@ -79,7 +79,8 @@ func Rederive(deps *Deps) error {
 		oldEnv, _ := env.ParseFileRaw(instEnvPath)
 
 		tmpPath := filepath.Join(rec.WorktreePath, ".env.plax-tmp")
-		if err := env.DeriveMerged(templatePath, merged, deps.Blueprint.Env.Holes, values, tmpPath); err != nil {
+		scrub := buildScrubSet(deps.Blueprint)
+		if err := env.DeriveMerged(templatePath, merged, deps.Blueprint.Env.Holes, values, scrub, tmpPath); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: %s: %v\n", name, err)
 			failed++
 			_ = os.Remove(tmpPath)
