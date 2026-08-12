@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -377,23 +378,54 @@ func TestDoctor_UserEnvKeysMissingFromTemplate_Warns(t *testing.T) {
 	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
 	report := Run(context.Background(), deps)
 
-	foundSecret := false
-	foundKey := false
+	var warn string
 	for _, c := range report.Checks {
-		if c.Area == "user-env-vs-template" {
-			if strings.Contains(c.Message, "NEXTAUTH_SECRET") {
-				foundSecret = true
-			}
-			if strings.Contains(c.Message, "ANTHROPIC_KEY") {
-				foundKey = true
-			}
+		if c.Area == "user-env-vs-template" && c.Level == Warn {
+			warn = c.Message
 		}
 	}
-	if !foundSecret {
+	if warn == "" {
+		t.Fatal("expected a warn-level check for user-env-vs-template")
+	}
+	if !strings.Contains(warn, "NEXTAUTH_SECRET") {
 		t.Error("should warn about NEXTAUTH_SECRET missing from template")
 	}
-	if !foundKey {
+	if !strings.Contains(warn, "ANTHROPIC_KEY") {
 		t.Error("should warn about ANTHROPIC_KEY missing from template")
+	}
+}
+
+func TestDoctor_UserEnvKeysMissingFromTemplate_Truncation(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	var lines []byte
+	for i := range 15 {
+		lines = append(lines, []byte(fmt.Sprintf("KEY_%02d=value%d\n", i, i))...)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), lines, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	var warn string
+	for _, c := range report.Checks {
+		if c.Area == "user-env-vs-template" && c.Level == Warn {
+			warn = c.Message
+		}
+	}
+	if warn == "" {
+		t.Fatal("expected a warn-level check for user-env-vs-template")
+	}
+	if !strings.Contains(warn, "(+5 more)") {
+		t.Errorf("expected truncation suffix (+5 more), got: %s", warn)
+	}
+	if !strings.Contains(warn, "\"KEY_09\"") {
+		t.Errorf("expected KEY_09 in displayed keys, got: %s", warn)
+	}
+	if strings.Contains(warn, "\"KEY_10\"") {
+		t.Errorf("KEY_10 should be truncated, got: %s", warn)
 	}
 }
 
@@ -471,10 +503,11 @@ func TestDoctor_ScrubbedKeyHasRealValue_Warns(t *testing.T) {
 	dir, bp, reg := initDoctorRepo(t)
 
 	bp.Env.Scrub = []string{"SENDGRID_API_KEY"}
+	secret := "SG.real-secret-value"
 	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("SENDGRID_API_KEY=placeholder\nPORT=3000\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SENDGRID_API_KEY=real\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("SENDGRID_API_KEY="+secret+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -485,6 +518,9 @@ func TestDoctor_ScrubbedKeyHasRealValue_Warns(t *testing.T) {
 	for _, c := range report.Checks {
 		if c.Area == "scrubbed-env-keys" && c.Level == Warn && strings.Contains(c.Message, "SENDGRID_API_KEY") {
 			found = true
+			if strings.Contains(c.Message, secret) {
+				t.Errorf("warn message must not contain the secret value; got: %s", c.Message)
+			}
 		}
 	}
 	if !found {
