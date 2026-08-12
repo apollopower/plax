@@ -282,23 +282,23 @@ Commands with no change: `ls`, `attach`, `exec`, `suspend`, `resume`, `status`,
 
 ## Acceptance criteria
 
-- [ ] A template with `SENDGRID_API_KEY=placeholder` and a user `.env` with
+- [x] A template with `SENDGRID_API_KEY=placeholder` and a user `.env` with
       `SENDGRID_API_KEY=real-secret` produces a derived `.env` with
       `SENDGRID_API_KEY=placeholder` when `SENDGRID_API_KEY` is in the scrub list
-- [ ] A scrubbed key not present in the template is omitted from the derived `.env`
-- [ ] Hole keys in the scrub list are ignored (holes take precedence regardless)
-- [ ] Non-scrubbed keys continue to propagate from the user's `.env` as before
-- [ ] `plax doctor` warns (warn level, not fail) when a scrubbed key has a
+- [x] A scrubbed key not present in the template is omitted from the derived `.env`
+- [x] Hole keys in the scrub list are ignored (holes take precedence regardless)
+- [x] Non-scrubbed keys continue to propagate from the user's `.env` as before
+- [x] `plax doctor` warns (warn level, not fail) when a scrubbed key has a
       real value in the user's `.env` that differs from the template
-- [ ] `plax doctor` passes when scrubbed key values match the template
-- [ ] `plax doctor` handles missing `.env` gracefully (pass, not error)
-- [ ] Blueprint validation warns when a scrubbed key is not found in the template
-- [ ] `plax rederive` applies scrubbing correctly (regression: rederive with
+- [x] `plax doctor` passes when scrubbed key values match the template
+- [x] `plax doctor` handles missing `.env` gracefully (pass, not error)
+- [x] Blueprint validation warns when a scrubbed key is not found in the template
+- [x] `plax rederive` applies scrubbing correctly (regression: rederive with
       scrub produces the same output as fresh `plax up`)
-- [ ] `go vet ./...` passes
-- [ ] `go test -race -count=1 ./...` passes (both with and without
+- [x] `go vet ./...` passes
+- [x] `go test -race -count=1 ./...` passes (both with and without
       `PLAX_TEST_POSTGRES_URL`)
-- [ ] `golangci-lint run` passes
+- [x] `golangci-lint run` passes
 
 ---
 
