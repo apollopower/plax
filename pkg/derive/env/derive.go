@@ -16,7 +16,7 @@ import (
 
 var holeRe = regexp.MustCompile(`\{\{(\w+)\}\}`)
 
-func DeriveMerged(templatePath string, overrides map[string]string, holes map[string]string, values map[string]string, outputPath string) error {
+func DeriveMerged(templatePath string, overrides map[string]string, holes map[string]string, values map[string]string, scrub map[string]bool, outputPath string) error {
 	merged := make(map[string]string, len(overrides))
 	for k, v := range overrides {
 		merged[k] = v
@@ -48,7 +48,7 @@ func DeriveMerged(templatePath string, overrides map[string]string, holes map[st
 			}
 			lines = append(lines, key+"="+rendered)
 			found[key] = true
-		} else if userVal, ok := merged[key]; ok {
+		} else if userVal, ok := merged[key]; ok && !scrub[key] {
 			lines = append(lines, key+"="+userVal)
 			found[key] = true
 		} else {
@@ -73,7 +73,7 @@ func DeriveMerged(templatePath string, overrides map[string]string, holes map[st
 
 	unwritten := make([]string, 0, len(merged))
 	for key := range merged {
-		if !found[key] {
+		if !found[key] && !scrub[key] {
 			unwritten = append(unwritten, key)
 		}
 	}
@@ -119,15 +119,17 @@ func ParseFileRaw(path string) (map[string]string, error) {
 //
 // holes: KEY → template string with {{VAR}} placeholders (from blueprint).
 // values: VAR → resolved value (e.g. "DB_NAME" → "plax_i1", "REDIS_PORT" → "6380").
+// scrub: set of keys whose real values must not reach instances (nil/empty = no scrubbing).
 // outputPath: absolute path where the derived .env is written.
 //
 // Precedence for each key:
 //  1. Hole keys → rendered template (per-instance values)
-//  2. Keys in overrides file → user's value (secrets, machine-specific config)
+//  2. Keys in overrides file → user's value (secrets, machine-specific config),
+//     unless the key is in scrub — then the template value is used instead.
 //  3. Template lines → copied verbatim (defaults, comments)
 //
 // Hole keys absent from the template are appended.
-func Derive(templatePath string, overridesPath string, holes map[string]string, values map[string]string, outputPath string) error {
+func Derive(templatePath string, overridesPath string, holes map[string]string, values map[string]string, scrub map[string]bool, outputPath string) error {
 	overrides := map[string]string{}
 	if overridesPath != "" {
 		var err error
@@ -136,7 +138,7 @@ func Derive(templatePath string, overridesPath string, holes map[string]string, 
 			return fmt.Errorf("env: load overrides: %w", err)
 		}
 	}
-	return DeriveMerged(templatePath, overrides, holes, values, outputPath)
+	return DeriveMerged(templatePath, overrides, holes, values, scrub, outputPath)
 }
 
 // ParseFile reads a .env file and returns key-value pairs.

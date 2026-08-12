@@ -74,6 +74,7 @@ func Run(ctx context.Context, deps *Deps) *Report {
 	runRepoVsMachine(r, deps)
 	runBase(ctx, r, deps)
 	runUserEnvMissingFromTemplate(r, deps)
+	runScrubbedKeysWithRealValues(r, deps)
 	return r
 }
 
@@ -369,6 +370,63 @@ func runOrphanDatabases(ctx context.Context, r *Report, deps *Deps) {
 			Area: area, Level: Warn,
 			Message: fmt.Sprintf("%s is an unreferenced database — run `psql -c \"DROP DATABASE %s\"` to remove it", db, db),
 		})
+	}
+}
+
+func runScrubbedKeysWithRealValues(r *Report, deps *Deps) {
+	area := "scrubbed-env-keys"
+
+	if len(deps.Blueprint.Env.Scrub) == 0 {
+		r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: "no scrubbed keys declared"})
+		return
+	}
+
+	userEnvPath := filepath.Join(deps.RepoRoot, ".env")
+	userKeys, err := env.ParseFile(userEnvPath)
+	if err != nil {
+		r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: "user .env not found or unreadable — skipped"})
+		return
+	}
+
+	templatePath := filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)
+	tmplKeys, err := env.ParseFile(templatePath)
+	if err != nil {
+		r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: fmt.Sprintf("template %s not found or unreadable — skipped", deps.Blueprint.Env.Template)})
+		return
+	}
+
+	holes := deps.Blueprint.Env.Holes
+	hasWarn := false
+
+	for _, key := range deps.Blueprint.Env.Scrub {
+		if _, isHole := holes[key]; isHole {
+			continue
+		}
+		userVal, inUser := userKeys[key]
+		tmplVal, inTmpl := tmplKeys[key]
+		if !inUser {
+			continue
+		}
+		if !inTmpl || userVal != tmplVal {
+			if userVal == "" {
+				continue
+			}
+			var msg string
+			if !inTmpl {
+				msg = fmt.Sprintf("scrubbed key %q has a real value in your .env (%q) but is not in the template — it will NOT reach instances", key, userVal)
+			} else {
+				msg = fmt.Sprintf("scrubbed key %q has a real value in your .env (%q) that differs from the template placeholder — it will NOT reach instances", key, userVal)
+			}
+			r.Checks = append(r.Checks, Check{
+				Area: area, Level: Warn,
+				Message: msg,
+			})
+			hasWarn = true
+		}
+	}
+
+	if !hasWarn {
+		r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: "all scrubbed keys match their template values or are absent from user .env"})
 	}
 }
 
