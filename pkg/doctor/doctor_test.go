@@ -367,4 +367,97 @@ func TestDoctor_OldRecord_Fallback(t *testing.T) {
 	}
 }
 
+func TestDoctor_UserEnvKeysMissingFromTemplate_Warns(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("NEXTAUTH_SECRET=real-secret\nANTHROPIC_KEY=sk-ant\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	foundSecret := false
+	foundKey := false
+	for _, c := range report.Checks {
+		if c.Area == "user-env-vs-template" {
+			if strings.Contains(c.Message, "NEXTAUTH_SECRET") {
+				foundSecret = true
+			}
+			if strings.Contains(c.Message, "ANTHROPIC_KEY") {
+				foundKey = true
+			}
+		}
+	}
+	if !foundSecret {
+		t.Error("should warn about NEXTAUTH_SECRET missing from template")
+	}
+	if !foundKey {
+		t.Error("should warn about ANTHROPIC_KEY missing from template")
+	}
+}
+
+func TestDoctor_UserEnvKeysAllInTemplate_Passes(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("PORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	hasPass := false
+	for _, c := range report.Checks {
+		if c.Area == "user-env-vs-template" {
+			if c.Level == Pass {
+				hasPass = true
+			} else {
+				t.Errorf("unexpected check: [%s] %s", c.Level, c.Message)
+			}
+		}
+	}
+	if !hasPass {
+		t.Error("expected pass when user env keys match template")
+	}
+}
+
+func TestDoctor_UserEnvNoFile_Skips(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	hasPass := false
+	for _, c := range report.Checks {
+		if c.Area == "user-env-vs-template" {
+			if c.Level == Pass {
+				hasPass = true
+			}
+		}
+	}
+	if !hasPass {
+		t.Error("expected pass when user .env does not exist")
+	}
+}
+
+func TestDoctor_UserEnvHoleKeysExcluded(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+
+	bp.Env.Holes = map[string]string{"REDIS_PORT": "{{REDIS_PORT}}"}
+
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("REDIS_PORT=9999\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	for _, c := range report.Checks {
+		if c.Area == "user-env-vs-template" && c.Level == Warn {
+			t.Errorf("should not warn about hole key REDIS_PORT: %s", c.Message)
+		}
+	}
+}
+
 var _ = strings.TrimSpace // keep import alive

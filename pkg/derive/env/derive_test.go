@@ -175,6 +175,10 @@ func TestEnv_DeriveOverridesFromUserEnv(t *testing.T) {
 	if !strings.Contains(content, "REDIS_PORT=6379") {
 		t.Error("template-only keys should be preserved")
 	}
+	// User-only keys (absent from template) are appended.
+	if !strings.Contains(content, "OPENAI_KEY=sk-real") {
+		t.Error("user-only key OPENAI_KEY should be appended")
+	}
 }
 
 func TestEnv_DeriveOverridesIgnoredForHoles(t *testing.T) {
@@ -416,5 +420,166 @@ func TestEnv_RenderNoPlaceholders(t *testing.T) {
 	}
 	if got != "no holes here" {
 		t.Errorf("got %q", got)
+	}
+}
+
+func TestEnv_DeriveMerged_UserKeysAbsentFromTemplate_Appended(t *testing.T) {
+	overrides := map[string]string{
+		"NEXTAUTH_SECRET": "real-secret",
+		"OPENAI_KEY":      "sk-real",
+	}
+	holes := map[string]string{
+		"PORT": "{{PORT}}",
+	}
+	values := map[string]string{"PORT": "3001"}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("PORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := DeriveMerged(fakeTmpl, overrides, holes, values, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	if !strings.Contains(content, "PORT=3001") {
+		t.Error("PORT hole not rendered")
+	}
+	if !strings.Contains(content, "NEXTAUTH_SECRET=real-secret") {
+		t.Error("user-only key NEXTAUTH_SECRET not appended")
+	}
+	if !strings.Contains(content, "OPENAI_KEY=sk-real") {
+		t.Error("user-only key OPENAI_KEY not appended")
+	}
+}
+
+func TestEnv_DeriveMerged_CommentedOutKeysInTemplate_UserValAppended(t *testing.T) {
+	overrides := map[string]string{
+		"NEXTAUTH_SECRET": "real-secret",
+	}
+
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("#NEXTAUTH_SECRET=placeholder\nPORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := DeriveMerged(fakeTmpl, overrides, nil, nil, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	if !strings.Contains(content, "#NEXTAUTH_SECRET=placeholder") {
+		t.Error("commented-out template line should be preserved")
+	}
+	if !strings.Contains(content, "NEXTAUTH_SECRET=real-secret") {
+		t.Error("user value for commented-out key should be appended")
+	}
+}
+
+func TestEnv_DeriveMerged_UserKeyDoesNotShadowHole(t *testing.T) {
+	overrides := map[string]string{
+		"PORT":            "9999",
+		"NEXTAUTH_SECRET": "real-secret",
+	}
+	holes := map[string]string{
+		"PORT": "{{PORT}}",
+	}
+	values := map[string]string{"PORT": "3001"}
+
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("PORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := DeriveMerged(fakeTmpl, overrides, holes, values, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	if !strings.Contains(content, "PORT=3001") {
+		t.Error("hole value should take precedence, got PORT not substituted")
+	}
+	if strings.Contains(content, "PORT=9999") {
+		t.Error("user override should NOT replace the hole value")
+	}
+	if !strings.Contains(content, "NEXTAUTH_SECRET=real-secret") {
+		t.Error("user-only key should still be appended")
+	}
+}
+
+func TestEnv_DeriveMerged_DeterministicOrder(t *testing.T) {
+	overrides := map[string]string{
+		"Z_KEY": "z",
+		"A_KEY": "a",
+		"M_KEY": "m",
+	}
+
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("BASE=1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := DeriveMerged(fakeTmpl, overrides, nil, nil, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	lines := strings.Split(strings.TrimSpace(content), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("expected at least 4 lines, got %d", len(lines))
+	}
+
+	// BASE=1 should be first (from template), then user keys in alpha order.
+	if lines[0] != "BASE=1" {
+		t.Errorf("first line should be BASE=1, got %q", lines[0])
+	}
+	if lines[1] != "A_KEY=a" {
+		t.Errorf("second line should be A_KEY=a, got %q", lines[1])
+	}
+	if lines[2] != "M_KEY=m" {
+		t.Errorf("third line should be M_KEY=m, got %q", lines[2])
+	}
+	if lines[3] != "Z_KEY=z" {
+		t.Errorf("fourth line should be Z_KEY=z, got %q", lines[3])
+	}
+}
+
+func TestEnv_DeriveMerged_EmptyOverrides(t *testing.T) {
+	fakeTmpl := filepath.Join(t.TempDir(), ".env.example")
+	if err := os.WriteFile(fakeTmpl, []byte("PORT=3000\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := filepath.Join(t.TempDir(), ".env")
+	err := DeriveMerged(fakeTmpl, map[string]string{}, nil, nil, out)
+	if err != nil {
+		t.Fatalf("DeriveMerged: %v", err)
+	}
+
+	data, _ := os.ReadFile(out)
+	content := string(data)
+
+	if !strings.Contains(content, "PORT=3000") {
+		t.Error("template line should be preserved")
+	}
+	if strings.Count(content, "\n") != 1 {
+		t.Errorf("expected 1 newline (trailing newline only), got %d newlines", strings.Count(content, "\n"))
 	}
 }
