@@ -159,6 +159,11 @@ func (bm *BaseManager) SeedBase(ctx context.Context) error {
 		return errors.Join(err, bm.relock(ctx))
 	}
 
+	if err := bm.assertSeedNonEmpty(ctx, basePool); err != nil {
+		basePool.Close()
+		return errors.Join(err, bm.relock(ctx))
+	}
+
 	prov, err := ReadProvenance(ctx, basePool)
 	if err != nil {
 		basePool.Close()
@@ -336,6 +341,11 @@ func (bm *BaseManager) RefreshBase(ctx context.Context) error {
 	}
 
 	if err := bm.runSeed(ctx, bm.nextName); err != nil {
+		nextPool.Close()
+		return errors.Join(err, bm.cleanupDB(ctx, bm.nextName))
+	}
+
+	if err := bm.assertSeedNonEmpty(ctx, nextPool); err != nil {
 		nextPool.Close()
 		return errors.Join(err, bm.cleanupDB(ctx, bm.nextName))
 	}
@@ -550,6 +560,28 @@ func (bm *BaseManager) runMigrate(ctx context.Context, dbName string) error {
 		return fmt.Errorf("migrate: command failed: %w", err)
 	}
 	return nil
+}
+
+func (bm *BaseManager) assertSeedNonEmpty(ctx context.Context, pool *pgxpool.Pool) error {
+	var sum int
+	err := pool.QueryRow(ctx, "SELECT COALESCE(SUM(n_live_tup), 0) FROM pg_stat_user_tables").Scan(&sum)
+	if err != nil {
+		return fmt.Errorf("seed row count: %w", err)
+	}
+	if sum > 0 {
+		return nil
+	}
+	for i := 0; i < 3; i++ {
+		time.Sleep(500 * time.Millisecond)
+		err = pool.QueryRow(ctx, "SELECT COALESCE(SUM(n_live_tup), 0) FROM pg_stat_user_tables").Scan(&sum)
+		if err != nil {
+			return fmt.Errorf("seed row count: %w", err)
+		}
+		if sum > 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("seeded base has zero rows across all user tables — the seed command may have failed silently")
 }
 
 func (bm *BaseManager) runSeed(ctx context.Context, dbName string) error {

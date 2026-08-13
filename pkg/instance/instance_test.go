@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,6 +85,14 @@ func (f *fakeBM) clonedDBs() []string {
 	return append([]string(nil), f.cloned...)
 }
 
+func (f *fakeBM) InstanceProvenance(_ context.Context, dbName string) (*postgres.ProvenanceRow, error) {
+	return &postgres.ProvenanceRow{Version: 1, Source: dbName, SchemaHash: "abc"}, nil
+}
+
+func (f *fakeBM) InstanceDBExists(_ context.Context, _ string) (bool, error) {
+	return true, nil
+}
+
 func (f *fakeBM) droppedDBs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -91,12 +100,13 @@ func (f *fakeBM) droppedDBs() []string {
 }
 
 type fakeDocker struct {
-	runErr       error
-	stopErr      error
-	running      bool
-	runningErr   error
-	createNetErr error
-	runErrFor    map[string]error
+	runErr            error
+	stopErr           error
+	running           bool
+	runningErr        error
+	createNetErr      error
+	runErrFor         map[string]error
+	skipBindListeners bool // when true, RunService does not bind TCP listeners
 
 	mu               sync.Mutex
 	createdNets      []string
@@ -106,6 +116,23 @@ type fakeDocker struct {
 	removed          []string
 	removeNetCtxErrs []error // ctx.Err() observed at each RemoveNetwork call
 	runCfgs          []docker.ServiceConfig
+	listeners        []net.Listener // real TCP listeners for verify checks
+}
+
+func (f *fakeDocker) listenOnPorts(portMap map[string]int) {
+	for _, hostPort := range portMap {
+		l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", hostPort))
+		if err == nil {
+			f.listeners = append(f.listeners, l)
+		}
+	}
+}
+
+func (f *fakeDocker) closeListeners() {
+	for _, l := range f.listeners {
+		_ = l.Close()
+	}
+	f.listeners = nil
 }
 
 func (f *fakeDocker) CreateNetwork(_ context.Context, name string) error {
@@ -140,6 +167,9 @@ func (f *fakeDocker) RunService(_ context.Context, cfg docker.ServiceConfig) (st
 	id := "cid-" + cfg.ServiceName
 	f.started = append(f.started, cfg.ServiceName)
 	f.runCfgs = append(f.runCfgs, cfg)
+	if !f.skipBindListeners {
+		f.listenOnPorts(cfg.PortMap)
+	}
 	return id, nil
 }
 
@@ -147,6 +177,7 @@ func (f *fakeDocker) StopService(_ context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, id)
+	f.closeListeners()
 	if f.stopErr != nil {
 		return f.stopErr
 	}
@@ -168,6 +199,13 @@ func (f *fakeDocker) StartService(_ context.Context, id string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.started = append(f.started, id)
+	// Re-bind listeners for verify checks after resume.
+	for _, cfg := range f.runCfgs {
+		if "cid-"+cfg.ServiceName == id {
+			f.listenOnPorts(cfg.PortMap)
+			break
+		}
+	}
 	return false, nil
 }
 
@@ -258,6 +296,7 @@ func testDeps(t *testing.T, bp *blueprint.Blueprint) (*Deps, *fakeBM, *fakeDocke
 		t.Fatalf("portpool.New: %v", err)
 	}
 	t.Cleanup(func() {
+		drv.closeListeners()
 		pool.Close()
 		reg.Close()
 	})
@@ -453,6 +492,69 @@ func TestInstance_UpRollbackOnImmediateExit(t *testing.T) {
 	}
 	if len(drv.removedNets) != 1 {
 		t.Errorf("rollback should remove the network: %v", drv.removedNets)
+	}
+}
+
+func TestInstance_UpEnvCheckFailure_RollsBack(t *testing.T) {
+	bp := testBlueprint()
+	deps, bm, drv := testDeps(t, bp)
+
+	// Make the template contain an unresolved hole reference that Derive
+	// will render successfully but CheckEnv will detect as unresolved.
+	// Add a hole whose template value is passed through Render and appears
+	// verbatim in the derived file. Then make CheckEnv detect it as an
+	// unresolved hole by embedding {{}} in the template line directly.
+	//
+	// Actually, the simplest approach: write the user .env with a key whose
+	// value contains {{}}. Derive will write it to the derived file.
+	// CheckEnv's checkEnvNoUnresolved will then catch it.
+	repo := deps.RepoRoot
+	userEnvPath := filepath.Join(repo, ".env")
+	if err := os.WriteFile(userEnvPath, []byte("UNRESOLVED_VAR={{MISSING}}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := Up(context.Background(), deps, "i1")
+	if err == nil {
+		t.Fatal("Up should fail with env check error")
+	}
+	if !strings.Contains(err.Error(), "env-unresolved-holes") {
+		t.Fatalf("expected env-unresolved-holes error, got: %v", err)
+	}
+
+	assertNoResidue(t, deps, "i1")
+	if len(bm.clonedDBs()) > 0 {
+		t.Errorf("databases should not have been cloned: %v", bm.clonedDBs())
+	}
+	if len(drv.removedNets) != 1 {
+		t.Errorf("network should have been rolled back, removedNets=%v", drv.removedNets)
+	}
+}
+
+func TestInstance_UpRuntimeCheckFailure_StaysUpUnhealthy(t *testing.T) {
+	deps, _, drv := testDeps(t, testBlueprint())
+	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
+
+	// Don't bind TCP listeners so the verify TCP check fails.
+	drv.skipBindListeners = true
+
+	err := Up(context.Background(), deps, "i1")
+	if err == nil {
+		t.Fatal("Up should fail with verification error")
+	}
+	if !strings.Contains(err.Error(), "tcp-reachability") {
+		t.Fatalf("expected tcp-reachability error, got: %v", err)
+	}
+
+	rec, found := deps.Registry.GetInstance("i1")
+	if !found {
+		t.Fatal("instance should still be registered despite verification failure")
+	}
+	if rec.Health != registry.HealthUnhealthy {
+		t.Errorf("Health = %q, want unhealthy", rec.Health)
+	}
+	if !worktree.BranchExists(deps.RepoRoot, "i1") {
+		t.Error("worktree should not have been rolled back")
 	}
 }
 

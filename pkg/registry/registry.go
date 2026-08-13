@@ -22,6 +22,13 @@ const (
 	StateSuspended State = "suspended"
 )
 
+type Health string
+
+const (
+	HealthHealthy   Health = "healthy"
+	HealthUnhealthy Health = "unhealthy"
+)
+
 type Registry struct {
 	Version         int                       `json:"version"`
 	BlueprintStamp  BlueprintStamp            `json:"blueprint_stamp"`
@@ -57,6 +64,8 @@ type InstanceRecord struct {
 	BaseRef    string           `json:"base_ref,omitempty"`
 	BaseCommit string           `json:"base_commit,omitempty"`
 	SourceRef  string           `json:"source_ref,omitempty"`
+	Health     Health           `json:"health,omitempty"`
+	VerifiedAt *time.Time       `json:"verified_at,omitempty"`
 }
 
 type PortAllocation struct {

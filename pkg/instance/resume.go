@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/apollopower/plax/pkg/portpool"
 	"github.com/apollopower/plax/pkg/process"
 	"github.com/apollopower/plax/pkg/registry"
+	"github.com/apollopower/plax/pkg/verify"
 
 	"github.com/docker/docker/errdefs"
 )
@@ -130,6 +132,22 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 			return fmt.Errorf("env: parse .env: %w", err)
 		}
 
+		// Env checks after .env parse — failure leaves instance suspended.
+		if deps.Blueprint.Env.Template != "" {
+			templatePath := filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)
+			userEnvPath := filepath.Join(deps.RepoRoot, ".env")
+			scrub := buildScrubSet(deps.Blueprint)
+			if results := verify.CheckEnv(templatePath, userEnvPath, envPath, deps.Blueprint.Env.Holes, scrub); anyFailed(results) {
+				rec.Health = registry.HealthUnhealthy
+				now := time.Now()
+				rec.VerifiedAt = &now
+				_ = deps.Registry.UpdateInstance(name, rec)
+				_ = deps.Registry.Save()
+				printVerificationErrors(results)
+				return &verify.VerificationError{Results: results, Layer: 1}
+			}
+		}
+
 		logDir := filepath.Join(deps.RepoRoot, ".plax", "logs", name)
 		cleanups = append(cleanups, func() {
 			for procName, pgid := range pids {
@@ -208,6 +226,27 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 	if err := deps.Registry.Save(); err != nil {
 		return fmt.Errorf("registry: write: %w", err)
 	}
+
+	// Runtime verification after settle — failure keeps workloads running.
+	results, verr := verify.RunVerify(ctx, &verify.Deps{
+		Blueprint: deps.Blueprint,
+		Registry:  deps.Registry,
+		BM:        deps.BM,
+		RepoRoot:  deps.RepoRoot,
+	}, name)
+	var vErr *verify.VerificationError
+	if errors.As(verr, &vErr) {
+		printVerificationErrors(vErr.Results)
+		fmt.Fprintf(os.Stderr, "instance %s is up but unhealthy — investigate, "+
+			"then 'plax verify %s' to re-check or 'plax down %s' to tear down\n",
+			name, name, name)
+		success = true
+		return vErr
+	}
+	if verr != nil {
+		return verr
+	}
+	_ = results
 
 	success = true
 	return nil

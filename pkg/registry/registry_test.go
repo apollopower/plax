@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -256,5 +257,90 @@ func TestRegistry_DBNamesFromRecordEmpty(t *testing.T) {
 	names := DBNamesFromRecord(InstanceRecord{})
 	if names != nil {
 		t.Errorf("got %v, want nil", names)
+	}
+}
+
+func TestRegistry_HealthRoundTrip(t *testing.T) {
+	path := tempPath(t)
+	r1, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	now := time.Now()
+	rec := InstanceRecord{
+		ID:         "i1",
+		State:      StateRunning,
+		CreatedAt:  time.Now(),
+		Health:     HealthUnhealthy,
+		VerifiedAt: &now,
+	}
+	if err := r1.AddInstance("i1", rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := r1.Save(); err != nil {
+		t.Fatal(err)
+	}
+	r1.Close()
+
+	r2, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer r2.Close()
+
+	got, ok := r2.GetInstance("i1")
+	if !ok {
+		t.Fatal("instance not found after reload")
+	}
+	if got.Health != HealthUnhealthy {
+		t.Errorf("Health = %q, want unhealthy", got.Health)
+	}
+	if got.VerifiedAt == nil {
+		t.Fatal("VerifiedAt is nil after reload")
+	}
+	if !got.VerifiedAt.Equal(now) {
+		t.Errorf("VerifiedAt = %v, want %v", got.VerifiedAt, now)
+	}
+}
+
+func TestRegistry_OldRecordNoHealth_DefaultEmpty(t *testing.T) {
+	path := tempPath(t)
+	data := `{"version":1,"instances":{"i1":{"id":"i1","state":"running","created_at":"2024-01-01T00:00:00Z"}}}`
+	if err := os.WriteFile(path, []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer r.Close()
+
+	rec, ok := r.GetInstance("i1")
+	if !ok {
+		t.Fatal("instance not found")
+	}
+	if rec.Health != "" {
+		t.Errorf("Health = %q, want empty string", rec.Health)
+	}
+	if rec.VerifiedAt != nil {
+		t.Errorf("VerifiedAt = %v, want nil", rec.VerifiedAt)
+	}
+}
+
+func TestRegistry_NeverVerified_OmitsVerifiedAt(t *testing.T) {
+	rec := InstanceRecord{
+		ID:    "i1",
+		State: StateRunning,
+	}
+	data, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "verified_at") {
+		t.Error("JSON should not contain verified_at for never-verified instance")
+	}
+	if strings.Contains(string(data), "health") {
+		t.Error("JSON should not contain health for never-verified instance")
 	}
 }
