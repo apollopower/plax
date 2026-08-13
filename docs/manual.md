@@ -63,7 +63,7 @@ A complete `plax.json` for a Next.js + Postgres + Redis repo:
   "name": "myapp",
   "port_pool": { "start": 3000, "end": 4000 },
   "toolchain": ".tool-versions",
-    "seed": {
+  "seed": {
     "migrate": "bun run db migrate",
     "command": "bun run db fixtures",
     "workdir": ".",
@@ -175,10 +175,12 @@ was created and to detect drift later.
   `DB_NAME_test`), plus one per allocated port var (e.g., `PORT`,
   `REDIS_PORT`, `GOTENBERG_PORT`).
 - `scrub` — list of env var keys to strip from derived `.env` files.
-  These must be present in the template or declared as holes. Use this
-  to block dangerous secrets (API keys, credentials) from propagating
-  into instances. `plax verify` checks that scrubbed keys do not leak
-  through.
+  Keys that exist only in your `.env` (neither template nor holes) are
+  dropped entirely — a legitimate way to keep local secrets local.
+  `plax doctor` warns about these so the difference is visible. Use
+  scrub to block dangerous secrets (API keys, credentials) from
+  propagating into instances. `plax verify` checks that scrubbed keys
+  do not leak through, including under a different key name.
 
 ### 3.4 Isolation strategies
 
@@ -298,6 +300,7 @@ Start from a specific branch, PR, tag, or commit with `--ref`:
 ```sh
 plax up --ref feature/fixes myfeature
 plax up --ref pr/42 myfeature
+plax up --ref 42 myfeature       # bare integer also treated as PR number
 plax up --ref abc1234 myfeature
 ```
 
@@ -385,11 +388,15 @@ registry:
 - **env-completeness** — every key in the template and user `.env` is
   present in the derived `.env`
 - **env-unresolved-holes** — no `{{VAR}}` placeholders remain unsubstituted
-- **env-scrubbed-leaks** — no value from the user's `.env` leaks into the
-  derived `.env` for keys listed in `env.scrub`
-- **tcp** — every allocated port has a listener
-- **process** — every declared native process is alive
-- **db** — the instance database is reachable
+- **env-scrubbed-leaks** — compares parsed values: no scrubbed key's real
+  value appears in the derived `.env`, even under a different key name
+- **tcp-reachability** — every allocated port has a listener
+- **process-liveness** — every declared native process is alive
+- **db-existence** — every declared database exists
+- **db-provenance** — every database has its provenance table (catches
+  externally dropped-and-recreated databases)
+
+The `check` field in `--json` output is the stable identifier for scripting.
 
 On `plax up`, verification runs automatically before the command reports
 success. On failure, the instance stays up for debugging and is marked

@@ -197,10 +197,21 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 			toolVersions = toolchain.ResolveVersions(pins)
 		}
 	}
-	baseRef, baseCommit, err := worktree.HeadRef(deps.RepoRoot)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: recording head ref: %v\n", err)
-		baseRef, baseCommit = "", ""
+	var baseRef, baseCommit string
+	if deps.ResolvedRef != "" {
+		var headErr error
+		_, baseCommit, headErr = worktree.WorktreeHead(worktreePath)
+		if headErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: recording worktree head commit: %v\n", headErr)
+		}
+		baseRef = deps.ResolvedRef
+	} else {
+		var headErr error
+		baseRef, baseCommit, headErr = worktree.HeadRef(deps.RepoRoot)
+		if headErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: recording head ref: %v\n", headErr)
+			baseRef, baseCommit = "", ""
+		}
 	}
 
 	// Start dedicated containers concurrently.
