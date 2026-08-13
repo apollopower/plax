@@ -136,13 +136,17 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 		if deps.Blueprint.Env.Template != "" {
 			templatePath := filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)
 			userEnvPath := filepath.Join(deps.RepoRoot, ".env")
-			scrub := buildScrubSet(deps.Blueprint)
+			scrub := verify.BuildScrubSet(deps.Blueprint)
 			if results := verify.CheckEnv(templatePath, userEnvPath, envPath, deps.Blueprint.Env.Holes, scrub); anyFailed(results) {
 				rec.Health = registry.HealthUnhealthy
 				now := time.Now()
 				rec.VerifiedAt = &now
-				_ = deps.Registry.UpdateInstance(name, rec)
-				_ = deps.Registry.Save()
+				if err := deps.Registry.UpdateInstance(name, rec); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: updating health: %v\n", err)
+				}
+				if err := deps.Registry.Save(); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: saving health: %v\n", err)
+				}
 				printVerificationErrors(results)
 				return &verify.VerificationError{Results: results, Layer: 1}
 			}
@@ -226,6 +230,14 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 	if err := deps.Registry.Save(); err != nil {
 		return fmt.Errorf("registry: write: %w", err)
 	}
+
+	// Cleanup: if anything after this fails (non-VerificationError), revert
+	// the registry state back to suspended so we don't leave a zombie.
+	cleanups = append(cleanups, func() {
+		rec.State = registry.StateSuspended
+		_ = deps.Registry.UpdateInstance(name, rec)
+		_ = deps.Registry.Save()
+	})
 
 	// Runtime verification after settle — failure keeps workloads running.
 	results, verr := verify.RunVerify(ctx, &verify.Deps{

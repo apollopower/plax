@@ -69,7 +69,7 @@ func RunVerify(ctx context.Context, deps *Deps, name string) ([]CheckResult, err
 	templatePath := filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)
 	userEnvPath := filepath.Join(deps.RepoRoot, ".env")
 	derivedPath := filepath.Join(rec.WorktreePath, ".env")
-	scrub := buildScrubSet(deps.Blueprint)
+	scrub := BuildScrubSet(deps.Blueprint)
 	results = append(results, CheckEnv(templatePath, userEnvPath, derivedPath, deps.Blueprint.Env.Holes, scrub)...)
 
 	if rec.State == registry.StateRunning {
@@ -348,7 +348,7 @@ func CheckDatabases(ctx context.Context, dbNames []string, bm BMInterface) []Che
 	return results
 }
 
-func buildScrubSet(bp *blueprint.Blueprint) map[string]bool {
+func BuildScrubSet(bp *blueprint.Blueprint) map[string]bool {
 	s := make(map[string]bool, len(bp.Env.Scrub))
 	for _, k := range bp.Env.Scrub {
 		s[k] = true
