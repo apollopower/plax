@@ -795,52 +795,52 @@ Require `PLAX_TEST_POSTGRES_URL`; self-skip without it.
 
 ## Acceptance criteria
 
-- [ ] `plax up` runs env checks after `.env` derivation, before any DB
+- [x] `plax up` runs env checks after `.env` derivation, before any DB
       clones or container starts
-- [ ] `plax up` with an env-check failure exits 1, prints the failing
+- [x] `plax up` with an env-check failure exits 1, prints the failing
       checks (naming the offending keys), and rolls back — no registry
       record, worktree, database, container, or port allocation remains
-- [ ] `plax up` runs runtime checks (TCP, process, DB) after settle,
+- [x] `plax up` runs runtime checks (TCP, process, DB) after settle,
       before reporting success
-- [ ] `plax up` with a runtime-check failure exits 1, prints the failing
+- [x] `plax up` with a runtime-check failure exits 1, prints the failing
       checks, records `unhealthy`, and does NOT roll back — the instance
       stays up for debugging
-- [ ] A derived `.env` missing a key from the
+- [x] A derived `.env` missing a key from the
       (template ∪ user-env ∪ holes) − scrub union produces an
       `env-completeness` failure
-- [ ] An unresolved `{{VAR}}` in the derived `.env` (outside comments)
+- [x] An unresolved `{{VAR}}` in the derived `.env` (outside comments)
       produces an `env-unresolved-holes` failure
-- [ ] A scrubbed key's real value present in the derived `.env` produces
+- [x] A scrubbed key's real value present in the derived `.env` produces
       an `env-scrubbed-leaks` failure
-- [ ] An instance that fails verification is marked `unhealthy` in the
+- [x] An instance that fails verification is marked `unhealthy` in the
       registry and `plax ls` shows it
-- [ ] A failure after `up`'s preliminary registry write (e.g. verify's
+- [x] A failure after `up`'s preliminary registry write (e.g. verify's
       save fails) rolls back AND removes the registry record
-- [ ] `plax resume` re-verifies after restarting workloads; a
+- [x] `plax resume` re-verifies after restarting workloads; a
       verification failure exits 1 with workloads left running
-- [ ] `plax resume` with Postgres unreachable skips DB checks with a
+- [x] `plax resume` with Postgres unreachable skips DB checks with a
       stderr note and otherwise succeeds
-- [ ] `plax rederive` records the env-check outcome for each rederived
+- [x] `plax rederive` records the env-check outcome for each rederived
       instance (both directions) and persists it to the registry on disk
-- [ ] `plax verify <name>` runs all checks and updates registry health
+- [x] `plax verify <name>` runs all checks and updates registry health
       (exit 1 on failure); `--pg-url` overrides the DSN
-- [ ] `plax verify` on a suspended instance skips runtime checks with a
+- [x] `plax verify` on a suspended instance skips runtime checks with a
       note and does not mark the instance unhealthy for being suspended
-- [ ] `plax verify` with Postgres unreachable skips DB checks with a note
-- [ ] `plax ls` shows `HEALTH` column: `healthy`, `unhealthy`, or `—`
+- [x] `plax verify` with Postgres unreachable skips DB checks with a note
+- [x] `plax ls` shows `HEALTH` column: `healthy`, `unhealthy`, or `—`
       (old instances)
-- [ ] `plax status <name>` includes a sixth `health` dimension: `ok` /
+- [x] `plax status <name>` includes a sixth `health` dimension: `ok` /
       `drift` / `unknown`; the `StatusCmd` help text and `AGENTS.md`
       reflect six dimensions
-- [ ] `plax base seed` fails with a clear error when the seed produces
+- [x] `plax base seed` fails with a clear error when the seed produces
       zero user-table rows (after retries), and the base is left locked
-- [ ] `plax base refresh` fails the same way and cleans up `base_next`
-- [ ] Pre-existing instances without health data work correctly (empty
+- [x] `plax base refresh` fails the same way and cleans up `base_next`
+- [x] Pre-existing instances without health data work correctly (empty
       health = pre-verification, no `verified_at` key written)
-- [ ] `go vet ./...` passes
-- [ ] `go test -race -count=1 ./...` passes (with and without
+- [x] `go vet ./...` passes
+- [x] `go test -race -count=1 ./...` passes (with and without
       `PLAX_TEST_POSTGRES_URL`)
-- [ ] `golangci-lint run` passes
+- [x] `golangci-lint run` passes
 
 ---
 

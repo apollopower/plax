@@ -269,7 +269,7 @@ itself*: source name, version, when it was refreshed. Because it lives inside th
 database, every copy inherits it for free, whether or not the registry knows anything
 about it.
 
-That makes drift five cheap comparisons, printed by `status` and on every resume:
+That makes drift six cheap comparisons, printed by `status` and on every resume:
 
 - **Code** — instance branch against main: commits ahead and behind.
 - **Schema** — the applied-migrations table in the instance database against the
@@ -288,6 +288,8 @@ That makes drift five cheap comparisons, printed by `status` and on every resume
   compose is now 9c2d."* This is what notices that a recheck is due (§2.1). Its stamp
   lives in the registry, not inside a database, because what drifted is the repo rather
   than a resource.
+- **Health** — the result of the last `plax verify` run: `ok` if all checks passed,
+  `drift` if any check failed, `unknown` if the instance has never been verified.
 
 Deliberately not included: telling you which rows changed. That is expensive, and a
 staleness report should not pretend to be a data diff.
@@ -344,16 +346,22 @@ commands. The operations are the design:
 ```
 plax init               scaffold a blueprint by parsing the repo, offline
 plax up <name>          build an instance from the blueprint
+plax up --ref <ref> <name>  build from a branch, PR, tag, or commit
 plax down <name>        destroy it: drop the database, release the ports, remove the worktree
 plax ls                 what exists, and its state
-plax status <name>      drift report: code, schema, data, host, config
+plax status <name>      drift report: code, schema, data, host, config, health
+plax verify <name>      run verification checks, update health
 plax suspend <name>     stop processes and containers, keep the state
 plax resume <name>      start it again, print the drift report
 plax exec <name> -- cmd run a command inside the instance's environment
 plax attach <name>      open a shell wired to the instance
 plax doctor             check blueprint against repo, registry, machine, and base
+plax base create        create empty base (migrated, no seed)
+plax base seed          seed the base database
+plax base reset         drop and recreate base (schema only)
 plax base refresh       re-seed the base through the staging swap
-plax rederive [--all]   regenerate .env files after the template changes
+plax base status        base health and provenance
+plax rederive           regenerate .env files after the template changes
 plax send <name>        write a message into an instance's mailbox
 plax recv <name>        read and remove messages from its own mailbox
 ```
@@ -403,7 +411,8 @@ stable fields, so ordinary shell tools work on them:
 plax ls | awk '$2 == "suspended" { print $1 }' | xargs -n1 plax down
 ```
 
-Both also take `--json` for anything with real structure, like the drift report.
+`ls`, `status`, `verify`, `doctor`, `send`, `recv`, and `base status` also
+take `--json`.
 Human-readable chatter goes to stderr and records go to stdout, so a pipe never has to
 strip out a banner.
 
