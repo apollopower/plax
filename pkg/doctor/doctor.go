@@ -479,8 +479,12 @@ func runUserEnvMissingFromTemplate(r *Report, deps *Deps) {
 		quoted[i] = fmt.Sprintf("%q", k)
 	}
 	keyList := strings.Join(quoted, ", ")
-	msg := fmt.Sprintf("%d keys in your .env are not in .env.example — they will appear in derived .env files: %s",
-		len(missing), keyList)
+	noun := "keys"
+	if len(missing) == 1 {
+		noun = "key"
+	}
+	msg := fmt.Sprintf("%d %s in your .env are not in %s — they will appear in derived .env files: %s",
+		len(missing), noun, deps.Blueprint.Env.Template, keyList)
 	if extra > 0 {
 		msg += fmt.Sprintf(" (+%d more)", extra)
 	}

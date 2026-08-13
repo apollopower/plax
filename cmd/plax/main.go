@@ -1110,16 +1110,26 @@ func runVerify(cmd VerifyCmd) error {
 		}
 	} else {
 		fmt.Printf("%s:\n", cmd.Name)
+		passCount := 0
+		failCount := 0
 		for _, r := range results {
 			status := "pass"
 			if !r.Passed {
 				status = "fail"
+				failCount++
+			} else {
+				passCount++
 			}
 			detail := fmt.Sprintf("  [%s] %s", status, r.Check)
-			if !r.Passed && r.Detail != "" {
+			if r.Detail != "" {
 				detail += ": " + r.Detail
 			}
 			fmt.Println(detail)
+		}
+		if failCount > 0 {
+			fmt.Fprintf(os.Stderr, "%d check(s) failed\n", failCount)
+		} else if passCount > 0 {
+			fmt.Fprintf(os.Stderr, "  all %d check(s) passed\n", passCount)
 		}
 	}
 
