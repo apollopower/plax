@@ -24,9 +24,11 @@ the declaration.
 
     plax init                  scaffold plax.json from the repo
     plax up <name>             build and start an instance
+    plax up --ref <ref> <name> build from a branch, PR, tag, or commit
     plax down <name>           destroy it
     plax ls                    list instances
-    plax status <name>         drift report: code, schema, data, host, config
+    plax status <name>         drift report: code, schema, data, host, config, health
+    plax verify <name>         run verification checks, update health
     plax suspend <name>        stop workloads, keep state
     plax resume <name>         start again, print drift report
     plax exec <name> -- <cmd>  run a command inside an instance
@@ -39,11 +41,11 @@ the declaration.
     plax base status           base health and provenance
     plax rederive              regenerate .env files after blueprint changes
     plax send <name>           write a message to an instance's mailbox
-    plax recv <name>           read and remove messages
+    plax recv <name>           read and remove messages (--all, --count)
 
 Records go to stdout. Human chatter goes to stderr.
-`--json` is available on `ls`, `status`, `doctor`, `send`, `recv`,
-and `base status`.
+`--json` is available on `ls`, `status`, `verify`, `doctor`, `send`,
+`recv`, and `base status`.
 
 ## Build
 

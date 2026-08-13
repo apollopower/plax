@@ -12,8 +12,8 @@ own database, its own containers, and its own processes. They do not collide.
 
 The unit of work is the instance. You create one with `plax up`, work
 inside it, and destroy it with `plax down`. In between you can suspend it,
-resume it, check its health, send it a message, or run a command inside it.
-That is the whole lifecycle.
+resume it, check its health, verify its integrity, send it a message, or
+run a command inside it. That is the whole lifecycle.
 
 Plax manages environments. It does not manage agents, windows, panes, or
 sessions. Where you put the terminal is your business.
@@ -63,28 +63,30 @@ A complete `plax.json` for a Next.js + Postgres + Redis repo:
   "name": "myapp",
   "port_pool": { "start": 3000, "end": 4000 },
   "toolchain": ".tool-versions",
-  "seed": {
+    "seed": {
     "migrate": "bun run db migrate",
     "command": "bun run db fixtures",
-    "workdir": "."
+    "workdir": ".",
+    "migrations_dir": "src/db/migrations"
   },
   "services": {
     "db": {
       "isolation": "logical",
       "type": "postgres",
       "image": "ankane/pgvector:v0.5.0",
-      "env": { "POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": "postgres" }
+      "env": { "POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": "postgres" },
+      "databases": [{ "name": "test", "from": "base" }]
     },
     "redis": {
       "isolation": "dedicated",
       "image": "redis:7.2",
-      "ports": { "6379": { "var": "REDIS_PORT" } }
+      "ports": { "6379": { "var": "REDIS_PORT", "default": "6379" } }
     },
     "gotenberg": {
       "isolation": "dedicated",
       "image": "gotenberg/gotenberg:8",
       "command": ["gotenberg", "--api-port=3000", "--api-timeout=90s"],
-      "ports": { "3000": { "var": "GOTENBERG_PORT" } }
+      "ports": { "3000": { "var": "GOTENBERG_PORT", "default": "3030" } }
     }
   },
   "processes": [
@@ -110,7 +112,8 @@ A complete `plax.json` for a Next.js + Postgres + Redis repo:
       "DATABASE_URL": "postgres://postgres:postgres@localhost:5432/{{DB_NAME}}",
       "WORKER_REDIS_URL": "redis://localhost:{{REDIS_PORT}}/0",
       "NEXTAUTH_URL": "http://localhost:{{PORT}}"
-    }
+    },
+    "scrub": ["OPENAI_API_KEY", "STRIPE_SECRET_KEY"]
   }
 }
 ```
@@ -134,7 +137,8 @@ was created and to detect drift later.
 - `migrate` — command that applies schema migrations
 - `command` — command that loads fixture data
 - `workdir` — directory to run both commands in
-- `migrations_dir` — where migration files live (default `src/db/migrations`)
+- `migrations_dir` — where migration files live (default `src/db/migrations`); used
+  by drift detection to compare applied migrations against the files on disk
 
 **services** — Map of service name to definition. Each service declares:
 
@@ -148,8 +152,9 @@ was created and to detect drift later.
 - `command` — override the image's default command
 - `databases` — additional databases to clone on `up`, for logical
   Postgres services only. Each entry has a `name` (the key used in
-  template variables, e.g. `test` gives `{{DB_NAME_test}}`) and `from`
-  (the clone origin — currently only `"base"` is supported).
+  template variables, e.g. `"test"` gives `{{DB_NAME_test}}`) and `from`
+  (the clone origin — currently only `"base"` is supported). Each named
+  database is cloned, migrated, and dropped with the instance.
 
 **processes** — Array of native processes to spawn. Each declares:
 
@@ -169,6 +174,11 @@ was created and to detect drift later.
   database), `DB_NAME_<key>` (for each declared database, e.g.
   `DB_NAME_test`), plus one per allocated port var (e.g., `PORT`,
   `REDIS_PORT`, `GOTENBERG_PORT`).
+- `scrub` — list of env var keys to strip from derived `.env` files.
+  These must be present in the template or declared as holes. Use this
+  to block dangerous secrets (API keys, credentials) from propagating
+  into instances. `plax verify` checks that scrubbed keys do not leak
+  through.
 
 ### 3.4 Isolation strategies
 
@@ -283,6 +293,14 @@ version, and whether a `plax_base_next` is staging.
 plax up myfeature --pg-url "postgres://..."
 ```
 
+Start from a specific branch, PR, tag, or commit with `--ref`:
+
+```sh
+plax up --ref feature/fixes myfeature
+plax up --ref pr/42 myfeature
+plax up --ref abc1234 myfeature
+```
+
 This does everything:
 
 1. Creates branch `plax/myfeature` and worktree `.plax/worktrees/myfeature`
@@ -303,9 +321,9 @@ plax ls
 ```
 
 ```
-NAME       STATE      BRANCH               MAIL  PORTS                    CREATED
-myfeature  running    plax/myfeature       0     3000 3001                2m ago
-otherwork  suspended  plax/otherwork       3     3002 3003                1h ago
+NAME       STATE      BRANCH               MAIL  PORTS                    HEALTH     CREATED
+myfeature  running    plax/myfeature       0     3000 3001                healthy    2m ago
+otherwork  suspended  plax/otherwork       3     3002 3003                unhealthy  1h ago
 ```
 
 Use `--json` for structured output.
@@ -316,7 +334,7 @@ Use `--json` for structured output.
 plax status myfeature --pg-url "postgres://..."
 ```
 
-Five dimensions:
+Six dimensions:
 
 - **code** — commits ahead/behind the base branch
 - **schema** — whether migration files match the database
@@ -324,6 +342,7 @@ Five dimensions:
 - **host** — whether tool versions have changed since creation
 - **config** — whether blueprint inputs (compose, env template, toolchain)
   have changed since last `plax up`
+- **health** — whether the last `plax verify` run passed all checks
 
 Each dimension is `ok`, `drift`, or `unknown`.
 
@@ -354,7 +373,31 @@ the worktree as the working directory. `attach` opens an interactive shell
 in the same context. Both print drift warnings to stderr if the instance
 has moved.
 
-### 5.6 Destroy
+### 5.6 Verify an instance
+
+```sh
+plax verify myfeature --pg-url "postgres://..."
+```
+
+Runs a battery of checks and updates the instance's health state in the
+registry:
+
+- **env-completeness** — every key in the template and user `.env` is
+  present in the derived `.env`
+- **env-unresolved-holes** — no `{{VAR}}` placeholders remain unsubstituted
+- **env-scrubbed-leaks** — no value from the user's `.env` leaks into the
+  derived `.env` for keys listed in `env.scrub`
+- **tcp** — every allocated port has a listener
+- **process** — every declared native process is alive
+- **db** — the instance database is reachable
+
+On `plax up`, verification runs automatically before the command reports
+success. On failure, the instance stays up for debugging and is marked
+`unhealthy`. A suspended instance skips runtime checks.
+
+`--json` is supported. Use `--pg-url` to override the DSN.
+
+### 5.7 Destroy
 
 ```sh
 plax down myfeature --pg-url "postgres://..."
@@ -366,7 +409,7 @@ entry, removes the mailbox. Every step tolerates missing resources — a
 stopped Docker daemon or dead Postgres will not prevent teardown of
 everything else.
 
-### 5.7 Regenerate .env files
+### 5.8 Regenerate .env files
 
 ```sh
 plax rederive
@@ -388,12 +431,14 @@ No daemon, no locking, no broker.
 plax send otherwork --from myfeature "schema changed, rebase before resume"
 plax recv otherwork
 plax recv otherwork --all
+plax recv otherwork --count 3
 ```
 
 Messages survive suspend. Delivery is buffered, not a rendezvous — a
 message to a suspended instance waits on disk until the receiver wakes.
 
-`ls` shows unread count. `attach` prints a notice if messages are waiting.
+`ls` shows unread count and health. `attach` prints a notice if messages
+are waiting.
 
 ## 7. Doctor
 
@@ -426,8 +471,8 @@ strip out a banner.
 plax ls | awk '$2 == "suspended" { print $1 }' | xargs -n1 plax down
 ```
 
-Commands that support `--json`: `ls`, `status`, `doctor`, `send`, `recv`,
-`base status`.
+Commands that support `--json`: `ls`, `status`, `verify`, `doctor`, `send`,
+`recv`, `base status`.
 
 ## 9. Files and directories
 
