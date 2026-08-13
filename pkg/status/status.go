@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/derive/postgres"
@@ -37,6 +38,7 @@ type Report struct {
 	Data     Dimension `json:"data"`
 	Host     Dimension `json:"host"`
 	Config   Dimension `json:"config"`
+	Health   Dimension `json:"health"`
 }
 
 type BaseManager interface {
@@ -68,6 +70,7 @@ func Build(ctx context.Context, deps *Deps, name string) (*Report, error) {
 	report.Code = codeDrift(deps.RepoRoot, base, &rec)
 	report.Host = hostDrift(deps.RepoRoot, deps.Blueprint, &rec)
 	report.Config = configDrift(deps.Registry, deps.CurrentStamp)
+	report.Health = healthDrift(&rec)
 
 	migrationsDir := deps.Blueprint.Seed.MigrationsDir
 	if migrationsDir == "" {
@@ -210,6 +213,39 @@ func hostDrift(repoRoot string, bp *blueprint.Blueprint, rec *registry.InstanceR
 		d.Detail = strings.Join(parts, ", ")
 	}
 	return d
+}
+
+func healthDrift(rec *registry.InstanceRecord) Dimension {
+	var d Dimension
+	switch rec.Health {
+	case registry.HealthHealthy:
+		d.Level = OK
+		d.Detail = "healthy"
+	case registry.HealthUnhealthy:
+		d.Level = Drift
+		d.Detail = "unhealthy"
+		if rec.VerifiedAt != nil {
+			d.Detail += fmt.Sprintf(" (last verified %s)", formatTimeAgo(*rec.VerifiedAt))
+		}
+	default:
+		d.Level = Unknown
+		d.Detail = "never verified"
+	}
+	return d
+}
+
+func formatTimeAgo(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds ago", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 func configDrift(reg *registry.Registry, current registry.BlueprintStamp) Dimension {

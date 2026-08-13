@@ -18,6 +18,7 @@ import (
 	"github.com/apollopower/plax/pkg/process"
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/toolchain"
+	"github.com/apollopower/plax/pkg/verify"
 	"github.com/apollopower/plax/pkg/worktree"
 )
 
@@ -151,15 +152,23 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	// Skipped for blueprints without an env template — there is nothing
 	// to derive.
 	envPath := filepath.Join(worktreePath, ".env")
+	templatePath := filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)
+	overridesPath := filepath.Join(deps.RepoRoot, ".env")
+	scrub := buildScrubSet(deps.Blueprint)
 	if deps.Blueprint.Env.Template != "" {
 		fmt.Fprintf(os.Stderr, "deriving .env...\n")
-		templatePath := filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)
-		overridesPath := filepath.Join(deps.RepoRoot, ".env")
-		scrub := buildScrubSet(deps.Blueprint)
 		if err := env.Derive(templatePath, overridesPath, deps.Blueprint.Env.Holes, values, scrub, envPath); err != nil {
 			return err
 		}
 		// No separate cleanup — removing the worktree removes .env.
+	}
+
+	// Step 4.5: Static env checks — fail fast, WITH rollback.
+	if deps.Blueprint.Env.Template != "" {
+		if results := verify.CheckEnv(templatePath, overridesPath, envPath, deps.Blueprint.Env.Holes, scrub); anyFailed(results) {
+			printVerificationErrors(results)
+			return &verify.VerificationError{Results: results, Layer: 1}
+		}
 	}
 
 	// Step 5: Clone all databases (primary + any declared databases).
@@ -375,6 +384,12 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	if err := deps.Registry.Save(); err != nil {
 		return fmt.Errorf("registry: %w", err)
 	}
+	cleanups = append(cleanups, func() {
+		_ = deps.Registry.RemoveInstance(name)
+		if err := deps.Registry.Save(); err != nil {
+			fmt.Fprintf(os.Stderr, "rollback: remove registry record: %v\n", err)
+		}
+	})
 
 	// Print summary.
 	fmt.Fprintf(os.Stderr, "\ninstance %s up\n", name)
@@ -404,6 +419,27 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	if len(pids) > 0 {
 		fmt.Fprintf(os.Stderr, "  logs:      .plax/logs/%s/\n", name)
 	}
+
+	// Step 8.5: Runtime verification — failure keeps the instance up.
+	results, verr := verify.RunVerify(ctx, &verify.Deps{
+		Blueprint: deps.Blueprint,
+		Registry:  deps.Registry,
+		BM:        deps.BM,
+		RepoRoot:  deps.RepoRoot,
+	}, name)
+	var vErr *verify.VerificationError
+	if errors.As(verr, &vErr) {
+		printVerificationErrors(vErr.Results)
+		fmt.Fprintf(os.Stderr, "instance %s is up but unhealthy — investigate, "+
+			"then 'plax verify %s' to re-check or 'plax down %s' to tear down\n",
+			name, name, name)
+		success = true
+		return vErr
+	}
+	if verr != nil {
+		return verr
+	}
+	_ = results
 
 	success = true
 	return nil
@@ -492,6 +528,24 @@ func buildScrubSet(bp *blueprint.Blueprint) map[string]bool {
 		s[k] = true
 	}
 	return s
+}
+
+func anyFailed(results []verify.CheckResult) bool {
+	for _, r := range results {
+		if !r.Passed {
+			return true
+		}
+	}
+	return false
+}
+
+func printVerificationErrors(results []verify.CheckResult) {
+	fmt.Fprintf(os.Stderr, "\nverification failed (layer 1):\n")
+	for _, r := range results {
+		if !r.Passed {
+			fmt.Fprintf(os.Stderr, "  %s: %s\n", r.Check, r.Detail)
+		}
+	}
 }
 
 // buildDBNames constructs the physical database name map from a blueprint.

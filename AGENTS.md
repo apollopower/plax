@@ -90,7 +90,7 @@ are real — but when in doubt, follow them.
   | `process` | Native process lifecycle: spawn, terminate, liveness |
   | `registry` | Persists instance records and port allocations to `.plax/registry.json` |
   | `stamp` | SHA-256 hashes of blueprint inputs for config drift detection |
-  | `status` | Five-dimension per-instance drift reporting |
+  | `status` | Six-dimension per-instance drift reporting |
   | `testutil` | Cross-package test helpers (Postgres advisory lock serialization) |
   | `toolchain` | `.tool-versions` pin parsing and version comparison |
   | `worktree` | Git branch and worktree management under `.plax/worktrees/` |

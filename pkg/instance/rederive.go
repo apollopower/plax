@@ -7,8 +7,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/apollopower/plax/pkg/derive/env"
+	"github.com/apollopower/plax/pkg/registry"
+	"github.com/apollopower/plax/pkg/verify"
 )
 
 func Rederive(deps *Deps) error {
@@ -41,6 +44,7 @@ func Rederive(deps *Deps) error {
 
 	changed := 0
 	failed := 0
+	healthDirty := false
 
 	for _, name := range names {
 		rec := deps.Registry.Instances[name]
@@ -138,6 +142,25 @@ func Rederive(deps *Deps) error {
 			continue
 		}
 		changed++
+
+		results := verify.CheckEnv(templatePath, userEnvPath, instEnvPath, deps.Blueprint.Env.Holes, scrub)
+		rec = deps.Registry.Instances[name]
+		if anyFailed(results) {
+			rec.Health = registry.HealthUnhealthy
+			fmt.Fprintf(os.Stderr, "warning: %s: .env verification failed — instance marked unhealthy\n", name)
+		} else {
+			rec.Health = registry.HealthHealthy
+		}
+		now := time.Now()
+		rec.VerifiedAt = &now
+		deps.Registry.Instances[name] = rec
+		healthDirty = true
+	}
+
+	if healthDirty {
+		if err := deps.Registry.Save(); err != nil {
+			return fmt.Errorf("saving health after rederive: %w", err)
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "rederived %d of %d instance(s)\n", changed, len(names))

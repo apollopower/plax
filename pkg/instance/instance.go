@@ -23,6 +23,8 @@ type BaseManager interface {
 	BaseStatus(ctx context.Context) (postgres.BaseInfo, error)
 	CloneBase(ctx context.Context, targetDB string) error
 	DropInstanceDB(ctx context.Context, dbName string) error
+	InstanceProvenance(ctx context.Context, dbName string) (*postgres.ProvenanceRow, error)
+	InstanceDBExists(ctx context.Context, dbName string) (bool, error)
 }
 
 // DockerDriver is the subset of docker.Driver that lifecycle orchestration
@@ -46,6 +48,7 @@ type DockerDriver interface {
 //	Up:    all fields (nil causes a panic — do not call Up with partial Deps)
 //	Down:  Blueprint and Pool unused; BM and Docker may be nil, in which case
 //	       Down skips those resources with a warning and continues teardown
+//	Resume: BM optional — nil skips DB checks
 //	ls:    Registry, RepoRoot
 //	attach/exec: Registry, RepoRoot
 type Deps struct {

@@ -26,6 +26,7 @@ import (
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/stamp"
 	"github.com/apollopower/plax/pkg/status"
+	"github.com/apollopower/plax/pkg/verify"
 	"github.com/apollopower/plax/pkg/worktree"
 )
 
@@ -39,9 +40,10 @@ type CLI struct {
 	Exec     ExecCmd     `cmd:"" help:"Run a command in an instance's environment"`
 	Suspend  SuspendCmd  `cmd:"" help:"Suspend an instance (stop workloads, keep state)"`
 	Resume   ResumeCmd   `cmd:"" help:"Resume a suspended instance"`
-	Status   StatusCmd   `cmd:"" help:"Print a five-dimension drift report for an instance"`
+	Status   StatusCmd   `cmd:"" help:"Print a six-dimension drift report for an instance"`
 	Doctor   DoctorCmd   `cmd:"" help:"Validate repo, registry, machine, and base health"`
 	Rederive RederiveCmd `cmd:"" help:"Regenerate .env files for all instances"`
+	Verify   VerifyCmd   `cmd:"" help:"Run verification checks against an existing instance and update its health state"`
 	Send     SendCmd     `cmd:"" help:"Send a message to an instance's mailbox"`
 	Recv     RecvCmd     `cmd:"" help:"Read and remove messages from an instance's mailbox"`
 }
@@ -141,6 +143,13 @@ type RederiveCmd struct {
 	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
 }
 
+type VerifyCmd struct {
+	Name  string `arg:"" help:"Instance name"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
+	JSON  bool   `name:"json" help:"Output results as JSON array"`
+}
+
 type SendCmd struct {
 	Name    string   `arg:"" help:"Instance name"`
 	Root    string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
@@ -199,6 +208,8 @@ func main() {
 		ctx.FatalIfErrorf(runDoctor(cli.Doctor))
 	case "rederive":
 		ctx.FatalIfErrorf(runRederive(cli.Rederive))
+	case "verify <name>":
+		ctx.FatalIfErrorf(runVerify(cli.Verify))
 	case "send <name>", "send <name> <body>":
 		ctx.FatalIfErrorf(runSend(cli.Send))
 	case "recv <name>":
@@ -475,11 +486,11 @@ func runLs(cmd LsCmd) error {
 	}
 
 	if len(reg.Instances) == 0 {
-		fmt.Printf("%-8s %-10s %-20s %-5s %-24s %s\n", "NAME", "STATE", "BRANCH", "MAIL", "PORTS", "CREATED")
+		fmt.Printf("%-8s %-10s %-20s %-5s %-24s %-10s %s\n", "NAME", "STATE", "BRANCH", "MAIL", "PORTS", "HEALTH", "CREATED")
 		return nil
 	}
 
-	fmt.Printf("%-8s %-10s %-20s %-5s %-24s %s\n", "NAME", "STATE", "BRANCH", "MAIL", "PORTS", "CREATED")
+	fmt.Printf("%-8s %-10s %-20s %-5s %-24s %-10s %s\n", "NAME", "STATE", "BRANCH", "MAIL", "PORTS", "HEALTH", "CREATED")
 
 	names := make([]string, 0, len(reg.Instances))
 	for name := range reg.Instances {
@@ -496,7 +507,8 @@ func runLs(cmd LsCmd) error {
 		if mailErr != nil {
 			mailStr = "?"
 		}
-		fmt.Printf("%-8s %-10s %-20s %-5s %-24s %s\n", name, rec.State, rec.Branch, mailStr, ports, age)
+		healthStr := formatHealth(rec.Health)
+		fmt.Printf("%-8s %-10s %-20s %-5s %-24s %-10s %s\n", name, rec.State, rec.Branch, mailStr, ports, healthStr, age)
 	}
 
 	return nil
@@ -735,6 +747,17 @@ func formatPorts(ports map[string]int) string {
 	return strings.Join(ss, " ")
 }
 
+func formatHealth(h registry.Health) string {
+	switch h {
+	case registry.HealthHealthy:
+		return "healthy"
+	case registry.HealthUnhealthy:
+		return "unhealthy"
+	default:
+		return "—"
+	}
+}
+
 func formatAge(t time.Time) string {
 	d := time.Since(t)
 	switch {
@@ -847,6 +870,16 @@ func runResume(cmd ResumeCmd) error {
 
 	deps := &instance.Deps{Blueprint: bp, Registry: reg, RepoRoot: absRoot}
 
+	// Open BM before Resume — tolerantly; nil skips DB checks.
+	if connStr != "" {
+		if bm, err := postgres.NewBaseManager(ctx, connStr, absRoot, bp); err == nil {
+			defer bm.Close()
+			deps.BM = bm
+		} else {
+			fmt.Fprintf(os.Stderr, "note: postgres unreachable — DB checks skipped: %v\n", err)
+		}
+	}
+
 	if drv, err := docker.NewDriver(); err != nil {
 		if rec, found := reg.GetInstance(cmd.Name); found && len(rec.ContainerIDs) > 0 {
 			return fmt.Errorf("docker unavailable — cannot start %d container(s); fix Docker and retry", len(rec.ContainerIDs))
@@ -860,19 +893,11 @@ func runResume(cmd ResumeCmd) error {
 		return err
 	}
 
-	bm, err := postgres.NewBaseManager(ctx, connStr, absRoot, bp)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "note: postgres unavailable — drift report skipped\n")
-		fmt.Fprintf(os.Stderr, "instance %s resumed\n", cmd.Name)
-		return nil
-	}
-	defer bm.Close()
-
 	currentStamp := stamp.Compute(cmd.Root, bp)
 	sdeps := &status.Deps{
 		Blueprint:    bp,
 		Registry:     reg,
-		BM:           bm,
+		BM:           deps.BM,
 		RepoRoot:     absRoot,
 		CurrentStamp: currentStamp,
 	}
@@ -1031,6 +1056,83 @@ func runRederive(cmd RederiveCmd) error {
 	return instance.Rederive(deps)
 }
 
+func runVerify(cmd VerifyCmd) error {
+	absRoot, err := filepath.Abs(cmd.Root)
+	if err != nil {
+		return fmt.Errorf("resolving repo root: %w", err)
+	}
+
+	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	if err != nil {
+		return err
+	}
+
+	reg, err := openRegistry(cmd.Root)
+	if err != nil {
+		return err
+	}
+	defer reg.Close()
+
+	rec, found := reg.GetInstance(cmd.Name)
+	if !found {
+		return fmt.Errorf("instance %q not found", cmd.Name)
+	}
+
+	ctx := context.Background()
+
+	vDeps := &verify.Deps{
+		Blueprint: bp,
+		Registry:  reg,
+		RepoRoot:  absRoot,
+	}
+
+	if connStr != "" {
+		bm, err := postgres.NewBaseManager(ctx, connStr, absRoot, bp)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "note: postgres unreachable — DB checks skipped: %v\n", err)
+		} else {
+			defer bm.Close()
+			vDeps.BM = bm
+		}
+	}
+
+	if rec.State == registry.StateSuspended {
+		fmt.Fprintf(os.Stderr, "note: %s is suspended — runtime checks (tcp-reachability, process-liveness) skipped\n", cmd.Name)
+	}
+
+	results, err := verify.RunVerify(ctx, vDeps, cmd.Name)
+
+	if cmd.JSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if encErr := enc.Encode(results); encErr != nil {
+			return encErr
+		}
+	} else {
+		fmt.Printf("%s:\n", cmd.Name)
+		for _, r := range results {
+			status := "pass"
+			if !r.Passed {
+				status = "fail"
+			}
+			detail := fmt.Sprintf("  [%s] %s", status, r.Check)
+			if !r.Passed && r.Detail != "" {
+				detail += ": " + r.Detail
+			}
+			fmt.Println(detail)
+		}
+	}
+
+	if err != nil {
+		var vErr *verify.VerificationError
+		if errors.As(err, &vErr) {
+			return vErr
+		}
+		return err
+	}
+	return nil
+}
+
 func runSend(cmd SendCmd) error {
 	reg, err := openRegistry(cmd.Root)
 	if err != nil {
@@ -1155,7 +1257,7 @@ func printReportStderr(r *status.Report) {
 		dim status.Dimension
 	}{
 		{"code", r.Code}, {"schema", r.Schema}, {"data", r.Data},
-		{"host", r.Host}, {"config", r.Config},
+		{"host", r.Host}, {"config", r.Config}, {"health", r.Health},
 	} {
 		if d.dim.Level != status.OK && d.dim.Level != status.Unknown {
 			fmt.Fprintf(os.Stderr, "  %s: [%s] %s\n", d.n, d.dim.Level, d.dim.Detail)
@@ -1170,7 +1272,7 @@ func printReportTable(w *os.File, r *status.Report) {
 		dim status.Dimension
 	}{
 		{"code", r.Code}, {"schema", r.Schema}, {"data", r.Data},
-		{"host", r.Host}, {"config", r.Config},
+		{"host", r.Host}, {"config", r.Config}, {"health", r.Health},
 	} {
 		_, _ = fmt.Fprintf(w, "%-8s %-12s %-10s %s\n", r.Instance, d.n, d.dim.Level, d.dim.Detail)
 	}
