@@ -1129,7 +1129,7 @@ func runVerify(cmd VerifyCmd) error {
 		if failCount > 0 {
 			fmt.Fprintf(os.Stderr, "%d check(s) failed\n", failCount)
 		} else if passCount > 0 {
-			fmt.Printf("  all %d check(s) passed\n", passCount)
+			fmt.Fprintf(os.Stderr, "  all %d check(s) passed\n", passCount)
 		}
 	}
 
