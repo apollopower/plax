@@ -124,7 +124,7 @@ JSON, checked into the repo root as `plax.json`. No comments.
 | 12 | [`12-up-ref-flag.md`](12-up-ref-flag.md) | `plax up --ref` flag: build instances from branches, PRs, tags, or commits |
 | 13 | [`13-user-env-keys-not-dropped.md`](13-user-env-keys-not-dropped.md) | User `.env` keys absent from template are no longer dropped; `doctor` warns about them |
 | 14 | [`14-env-scrub.md`](14-env-scrub.md) | Blueprint `env.scrub` blocks dangerous secrets from propagating from user `.env` into instances |
-| 15 | [`15-verify.md`](15-verify.md) | Instance verification on `up`/`resume`/`rederive` + `plax verify` subcommand — env, TCP, process, DB checks, and base seed row count
+| 15 | [`15-verify.md`](15-verify.md) | Instance verification on `up`/`resume`/`rederive` + `plax verify` subcommand — env, TCP, process, DB checks, and base seed row count |
 
 ---
 
