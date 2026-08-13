@@ -256,7 +256,10 @@ func requireSeedConfig(bp *blueprint.Blueprint) error {
 }
 
 func runBaseCreate(cmd BaseCreateCmd) error {
-	root, _ := discoverRoot(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		return err
@@ -279,7 +282,10 @@ func runBaseCreate(cmd BaseCreateCmd) error {
 }
 
 func runBaseSeed(cmd BaseSeedCmd) error {
-	root, _ := discoverRoot(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		return err
@@ -302,7 +308,10 @@ func runBaseSeed(cmd BaseSeedCmd) error {
 }
 
 func runBaseReset(cmd BaseResetCmd) error {
-	root, _ := discoverRoot(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		return err
@@ -324,7 +333,10 @@ func runBaseReset(cmd BaseResetCmd) error {
 }
 
 func runBaseRefresh(cmd BaseRefreshCmd) error {
-	root, _ := discoverRoot(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		return err
@@ -353,7 +365,10 @@ func runBaseRefresh(cmd BaseRefreshCmd) error {
 }
 
 func runBaseStatus(cmd BaseStatusCmd) error {
-	root, _ := discoverRoot(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		return err
@@ -409,7 +424,10 @@ func runUp(cmd UpCmd) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	root, _ := discoverRoot(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 
 	resolvedRef, err := worktree.ResolveRef(root, cmd.Ref)
 	if err != nil {
@@ -439,7 +457,10 @@ func runDown(cmd DownCmd) error {
 	//
 	// Deliberately not signal-cancellable: an interrupted down is safely
 	// re-runnable because every step tolerates missing resources.
-	root, _ := discoverRoot(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	reg, err := openRegistry(root)
 	if err != nil {
 		return err
@@ -469,7 +490,10 @@ func runDown(cmd DownCmd) error {
 }
 
 func runLs(cmd LsCmd) error {
-	root, found := discoverRoot(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	if !found {
 		return fmt.Errorf("ls: %w", ErrNoRoot)
 	}
@@ -519,7 +543,10 @@ func runLs(cmd LsCmd) error {
 }
 
 func runAttach(cmd AttachCmd) error {
-	root, found := discoverRoot(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	if !found {
 		return fmt.Errorf("attach: %w", ErrNoRoot)
 	}
@@ -602,7 +629,10 @@ func runExec(cmd ExecCmd) error {
 		return fmt.Errorf("exec: no command given — usage: plax exec <name> -- <cmd> [args...]")
 	}
 
-	root, found := discoverRoot(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	if !found {
 		return fmt.Errorf("exec: %w", ErrNoRoot)
 	}
@@ -724,21 +754,22 @@ func buildDeps(ctx context.Context, root, pgURL string) (*cliDeps, error) {
 var ErrNoRoot = errors.New("no plax repo root found: run from a directory containing plax.json, or pass --root")
 
 // discoverRoot walks up from start looking for plax.json.
-// If found, returns the directory containing it and true.
-// If not found, returns start and false.
-func discoverRoot(start string) (string, bool) {
+// If found, returns the (absolute) directory containing it, true, nil.
+// If plax.json is not found up to the filesystem root, returns (start, false, nil).
+// If Abs fails, returns (start, false, err).
+func discoverRoot(start string) (string, bool, error) {
 	start, err := filepath.Abs(start)
 	if err != nil {
-		return start, false
+		return start, false, err
 	}
 	dir := start
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "plax.json")); err == nil {
-			return dir, true
+			return dir, true, nil
 		}
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			return start, false
+			return start, false, nil
 		}
 		dir = parent
 	}
@@ -853,7 +884,10 @@ func printStampNotice(root string, bp *blueprint.Blueprint, reg *registry.Regist
 }
 
 func runSuspend(cmd SuspendCmd) error {
-	root, _ := discoverRoot(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 
 	reg, err := openRegistry(root)
 	if err != nil {
@@ -880,7 +914,10 @@ func runResume(cmd ResumeCmd) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	root, _ := discoverRoot(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 
 	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
@@ -940,7 +977,10 @@ func runResume(cmd ResumeCmd) error {
 }
 
 func runStatus(cmd StatusCmd) error {
-	root, found := discoverRoot(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	if !found {
 		return fmt.Errorf("status: %w", ErrNoRoot)
 	}
@@ -994,7 +1034,10 @@ func runStatus(cmd StatusCmd) error {
 }
 
 func runDoctor(cmd DoctorCmd) error {
-	root, found := discoverRoot(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	if !found {
 		return fmt.Errorf("doctor: %w", ErrNoRoot)
 	}
@@ -1063,7 +1106,10 @@ func runDoctor(cmd DoctorCmd) error {
 }
 
 func runRederive(cmd RederiveCmd) error {
-	root, _ := discoverRoot(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 
 	bp, err := loadBlueprint(root)
 	if err != nil {
@@ -1081,7 +1127,10 @@ func runRederive(cmd RederiveCmd) error {
 }
 
 func runVerify(cmd VerifyCmd) error {
-	root, _ := discoverRoot(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 
 	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
@@ -1165,7 +1214,10 @@ func runVerify(cmd VerifyCmd) error {
 }
 
 func runSend(cmd SendCmd) error {
-	root, found := discoverRoot(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	if !found {
 		return fmt.Errorf("send: %w", ErrNoRoot)
 	}
@@ -1219,7 +1271,10 @@ func runSend(cmd SendCmd) error {
 }
 
 func runRecv(cmd RecvCmd) error {
-	root, found := discoverRoot(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
 	if !found {
 		return fmt.Errorf("recv: %w", ErrNoRoot)
 	}
