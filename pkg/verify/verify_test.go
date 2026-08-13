@@ -129,8 +129,10 @@ func TestVerify_EnvNoUnresolved_Clean(t *testing.T) {
 	writeFile(t, derived, "PORT=3000\nDB_NAME=plax_i1\n")
 
 	results := checkEnvNoUnresolved(derived)
-	if len(results) > 0 {
-		t.Errorf("expected no unresolved holes, got %v", results)
+	for _, r := range results {
+		if !r.Passed {
+			t.Errorf("unexpected failure: %s: %s", r.Check, r.Detail)
+		}
 	}
 }
 

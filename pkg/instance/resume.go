@@ -258,7 +258,7 @@ func Resume(ctx context.Context, deps *Deps, name string) error {
 	if verr != nil {
 		return verr
 	}
-	_ = results
+	printVerificationSuccess(results)
 
 	success = true
 	return nil

@@ -64,7 +64,7 @@ func RunVerify(ctx context.Context, deps *Deps, name string) ([]CheckResult, err
 		return nil, fmt.Errorf("instance %q not found", name)
 	}
 
-	var results []CheckResult
+	results := make([]CheckResult, 0)
 
 	templatePath := filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)
 	userEnvPath := filepath.Join(deps.RepoRoot, ".env")
@@ -161,16 +161,26 @@ func checkEnvCompleteness(templatePath, userEnvPath, derivedEnvPath string, hole
 		}}
 	}
 
-	var results []CheckResult
+	var missing []string
 	for k := range expected {
 		if _, ok := derived[k]; !ok {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		var results []CheckResult
+		for _, k := range missing {
 			results = append(results, CheckResult{
 				Check: "env-completeness", Layer: 1, Passed: false,
 				Detail: "key " + k + " is missing from derived .env", Artifact: k,
 			})
 		}
+		return results
 	}
-	return results
+	return []CheckResult{{
+		Check: "env-completeness", Layer: 1, Passed: true,
+		Detail: fmt.Sprintf("all %d expected keys present", len(expected)),
+	}}
 }
 
 func checkEnvNoUnresolved(derivedEnvPath string) []CheckResult {
@@ -195,7 +205,13 @@ func checkEnvNoUnresolved(derivedEnvPath string) []CheckResult {
 			})
 		}
 	}
-	return results
+	if len(results) > 0 {
+		return results
+	}
+	return []CheckResult{{
+		Check: "env-unresolved-holes", Layer: 1, Passed: true,
+		Detail: "no unresolved holes in derived .env",
+	}}
 }
 
 func extractHole(line string) string {
@@ -211,18 +227,17 @@ func extractHole(line string) string {
 }
 
 func checkEnvNoScrubbedLeaks(userEnvPath, derivedEnvPath string, scrub map[string]bool, templatePath string) []CheckResult {
-	derived, err := os.ReadFile(derivedEnvPath)
-	if err != nil {
-		return nil
-	}
-	derivedStr := string(derived)
-
 	tmplValues := map[string]string{}
 	if _, err := os.Stat(templatePath); err == nil {
 		tmplValues, _ = env.ParseFile(templatePath)
 	}
 
 	userValues, err := env.ParseFile(userEnvPath)
+	if err != nil {
+		return nil
+	}
+
+	derivedValues, err := env.ParseFile(derivedEnvPath)
 	if err != nil {
 		return nil
 	}
@@ -236,19 +251,28 @@ func checkEnvNoScrubbedLeaks(userEnvPath, derivedEnvPath string, scrub map[strin
 		if userVal == tmplValues[k] {
 			continue
 		}
-		if strings.Contains(derivedStr, userVal) {
-			results = append(results, CheckResult{
-				Check: "env-scrubbed-leaks", Layer: 1, Passed: false,
-				Detail:   "scrubbed key " + k + "'s real value appears in derived .env",
-				Artifact: "derived .env",
-			})
+		for derivedKey, derivedVal := range derivedValues {
+			if derivedVal == userVal {
+				results = append(results, CheckResult{
+					Check: "env-scrubbed-leaks", Layer: 1, Passed: false,
+					Detail:   "scrubbed key " + k + "'s real value appears in derived .env under key " + derivedKey,
+					Artifact: derivedKey,
+				})
+			}
 		}
 	}
-	return results
+	if len(results) > 0 {
+		return results
+	}
+	return []CheckResult{{
+		Check: "env-scrubbed-leaks", Layer: 1, Passed: true,
+		Detail: "no scrubbed values leaked into derived .env",
+	}}
 }
 
 func CheckServices(ctx context.Context, services map[string]blueprint.ServiceDef, allocated map[string]int) []CheckResult {
 	var results []CheckResult
+	checked := 0
 	for svcName, svc := range services {
 		if svc.Isolation != blueprint.IsolationDedicated {
 			continue
@@ -258,6 +282,7 @@ func CheckServices(ctx context.Context, services map[string]blueprint.ServiceDef
 			if !ok {
 				continue
 			}
+			checked++
 			addr := fmt.Sprintf("127.0.0.1:%d", port)
 			conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 			if err == nil {
@@ -282,7 +307,16 @@ func CheckServices(ctx context.Context, services map[string]blueprint.ServiceDef
 			})
 		}
 	}
-	return results
+	if len(results) > 0 {
+		return results
+	}
+	if checked == 0 {
+		return nil
+	}
+	return []CheckResult{{
+		Check: "tcp-reachability", Layer: 1, Passed: true,
+		Detail: fmt.Sprintf("all %d service endpoints reachable", checked),
+	}}
 }
 
 func isRefused(err error) bool {
@@ -304,11 +338,22 @@ func CheckProcesses(pids map[string]int, isAlive func(int) bool) []CheckResult {
 			})
 		}
 	}
-	return results
+	if len(results) > 0 {
+		return results
+	}
+	if len(pids) == 0 {
+		return nil
+	}
+	return []CheckResult{{
+		Check: "process-liveness", Layer: 1, Passed: true,
+		Detail: fmt.Sprintf("all %d processes alive", len(pids)),
+	}}
 }
 
 func CheckDatabases(ctx context.Context, dbNames []string, bm BMInterface) []CheckResult {
 	var results []CheckResult
+	allExist := true
+	allProv := true
 	for _, dbName := range dbNames {
 		exists, err := bm.InstanceDBExists(ctx, dbName)
 		if err != nil {
@@ -317,6 +362,7 @@ func CheckDatabases(ctx context.Context, dbNames []string, bm BMInterface) []Che
 				Detail:   fmt.Sprintf("checking database %s: %v", dbName, err),
 				Artifact: dbName,
 			})
+			allExist = false
 			continue
 		}
 		if !exists {
@@ -325,6 +371,7 @@ func CheckDatabases(ctx context.Context, dbNames []string, bm BMInterface) []Che
 				Detail:   fmt.Sprintf("database %s does not exist", dbName),
 				Artifact: dbName,
 			})
+			allExist = false
 			continue
 		}
 
@@ -335,6 +382,7 @@ func CheckDatabases(ctx context.Context, dbNames []string, bm BMInterface) []Che
 				Detail:   fmt.Sprintf("checking provenance for %s: %v", dbName, err),
 				Artifact: dbName,
 			})
+			allProv = false
 			continue
 		}
 		if prov == nil {
@@ -343,9 +391,29 @@ func CheckDatabases(ctx context.Context, dbNames []string, bm BMInterface) []Che
 				Detail:   fmt.Sprintf("database %s has no provenance table — it may have been dropped and recreated externally", dbName),
 				Artifact: dbName,
 			})
+			allProv = false
 		}
 	}
-	return results
+	if len(results) > 0 {
+		return results
+	}
+	if len(dbNames) == 0 {
+		return nil
+	}
+	var pass []CheckResult
+	if allExist {
+		pass = append(pass, CheckResult{
+			Check: "db-existence", Layer: 1, Passed: true,
+			Detail: fmt.Sprintf("all %d databases exist", len(dbNames)),
+		})
+	}
+	if allProv {
+		pass = append(pass, CheckResult{
+			Check: "db-provenance", Layer: 1, Passed: true,
+			Detail: fmt.Sprintf("all %d databases have valid provenance", len(dbNames)),
+		})
+	}
+	return pass
 }
 
 func BuildScrubSet(bp *blueprint.Blueprint) map[string]bool {

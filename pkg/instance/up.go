@@ -439,7 +439,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	if verr != nil {
 		return verr
 	}
-	_ = results
+	printVerificationSuccess(results)
 
 	success = true
 	return nil
@@ -537,6 +537,16 @@ func printVerificationErrors(results []verify.CheckResult) {
 			fmt.Fprintf(os.Stderr, "  %s: %s\n", r.Check, r.Detail)
 		}
 	}
+}
+
+func printVerificationSuccess(results []verify.CheckResult) {
+	count := 0
+	for _, r := range results {
+		if r.Passed {
+			count++
+		}
+	}
+	fmt.Fprintf(os.Stderr, "\nverification: %d check(s) passed\n", count)
 }
 
 // buildDBNames constructs the physical database name map from a blueprint.
