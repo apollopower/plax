@@ -154,7 +154,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	envPath := filepath.Join(worktreePath, ".env")
 	templatePath := filepath.Join(deps.RepoRoot, deps.Blueprint.Env.Template)
 	overridesPath := filepath.Join(deps.RepoRoot, ".env")
-	scrub := buildScrubSet(deps.Blueprint)
+	scrub := verify.BuildScrubSet(deps.Blueprint)
 	if deps.Blueprint.Env.Template != "" {
 		fmt.Fprintf(os.Stderr, "deriving .env...\n")
 		if err := env.Derive(templatePath, overridesPath, deps.Blueprint.Env.Holes, values, scrub, envPath); err != nil {
@@ -519,15 +519,6 @@ func sortedDBNames(m map[string]string) []string {
 		result[i] = m[k]
 	}
 	return result
-}
-
-// buildScrubSet converts the blueprint's scrub list to a set for O(1) lookup.
-func buildScrubSet(bp *blueprint.Blueprint) map[string]bool {
-	s := make(map[string]bool, len(bp.Env.Scrub))
-	for _, k := range bp.Env.Scrub {
-		s[k] = true
-	}
-	return s
 }
 
 func anyFailed(results []verify.CheckResult) bool {
