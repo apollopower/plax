@@ -177,9 +177,13 @@ func checkEnvCompleteness(templatePath, userEnvPath, derivedEnvPath string, hole
 		}
 		return results
 	}
+	keyNoun := "keys"
+	if len(expected) == 1 {
+		keyNoun = "key"
+	}
 	return []CheckResult{{
 		Check: "env-completeness", Layer: 1, Passed: true,
-		Detail: fmt.Sprintf("all %d expected keys present", len(expected)),
+		Detail: fmt.Sprintf("all %d expected %s present", len(expected), keyNoun),
 	}}
 }
 
@@ -313,9 +317,13 @@ func CheckServices(ctx context.Context, services map[string]blueprint.ServiceDef
 	if checked == 0 {
 		return nil
 	}
+	noun := "service endpoints"
+	if checked == 1 {
+		noun = "service endpoint"
+	}
 	return []CheckResult{{
 		Check: "tcp-reachability", Layer: 1, Passed: true,
-		Detail: fmt.Sprintf("all %d service endpoints reachable", checked),
+		Detail: fmt.Sprintf("all %d %s reachable", checked, noun),
 	}}
 }
 
@@ -344,9 +352,13 @@ func CheckProcesses(pids map[string]int, isAlive func(int) bool) []CheckResult {
 	if len(pids) == 0 {
 		return nil
 	}
+	noun := "processes"
+	if len(pids) == 1 {
+		noun = "process"
+	}
 	return []CheckResult{{
 		Check: "process-liveness", Layer: 1, Passed: true,
-		Detail: fmt.Sprintf("all %d processes alive", len(pids)),
+		Detail: fmt.Sprintf("all %d %s alive", len(pids), noun),
 	}}
 }
 
@@ -401,16 +413,20 @@ func CheckDatabases(ctx context.Context, dbNames []string, bm BMInterface) []Che
 		return nil
 	}
 	var pass []CheckResult
+	dbNoun := "databases"
+	if len(dbNames) == 1 {
+		dbNoun = "database"
+	}
 	if allExist {
 		pass = append(pass, CheckResult{
 			Check: "db-existence", Layer: 1, Passed: true,
-			Detail: fmt.Sprintf("all %d databases exist", len(dbNames)),
+			Detail: fmt.Sprintf("all %d %s exist", len(dbNames), dbNoun),
 		})
 	}
 	if allProv {
 		pass = append(pass, CheckResult{
 			Check: "db-provenance", Layer: 1, Passed: true,
-			Detail: fmt.Sprintf("all %d databases have valid provenance", len(dbNames)),
+			Detail: fmt.Sprintf("all %d %s have valid provenance", len(dbNames), dbNoun),
 		})
 	}
 	return pass

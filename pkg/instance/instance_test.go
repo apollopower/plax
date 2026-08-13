@@ -922,6 +922,13 @@ func TestInstance_UpWithRef(t *testing.T) {
 	if rec.SourceRef != "other" {
 		t.Errorf("SourceRef = %q, want %q", rec.SourceRef, "other")
 	}
+	otherCommit := gitRevParse(t, deps.RepoRoot, "other")
+	if rec.BaseRef != "other" {
+		t.Errorf("BaseRef = %q, want %q", rec.BaseRef, "other")
+	}
+	if rec.BaseCommit != otherCommit {
+		t.Errorf("BaseCommit = %q, want %q", rec.BaseCommit, otherCommit)
+	}
 	if rec.State != registry.StateRunning {
 		t.Errorf("state = %q, want running", rec.State)
 	}
@@ -930,7 +937,6 @@ func TestInstance_UpWithRef(t *testing.T) {
 	}
 
 	// Verify worktree is at the "other" branch's HEAD.
-	otherCommit := gitRevParse(t, deps.RepoRoot, "other")
 	_, wtCommit, err := worktree.WorktreeHead(rec.WorktreePath)
 	if err != nil {
 		t.Fatalf("WorktreeHead: %v", err)
