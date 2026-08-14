@@ -49,7 +49,7 @@ type CLI struct {
 }
 
 type InitCmd struct {
-	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 }
 
 type BaseCmd struct {
@@ -61,98 +61,98 @@ type BaseCmd struct {
 }
 
 type BaseCreateCmd struct {
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
 }
 
 type BaseSeedCmd struct {
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
 }
 
 type BaseResetCmd struct {
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
 }
 
 type BaseRefreshCmd struct {
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
 }
 
 type BaseStatusCmd struct {
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
 	JSON  bool   `name:"json" help:"Output as JSON"`
 }
 
 type UpCmd struct {
 	Name  string `arg:"" help:"Instance name (e.g. i1)"`
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
 	Ref   string `name:"ref" short:"R" optional:"" help:"Branch, PR number, tag, or commit SHA to branch from (default: current HEAD)"`
 }
 
 type DownCmd struct {
 	Name  string `arg:"" help:"Instance name"`
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
 }
 
 type LsCmd struct {
-	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	JSON bool   `name:"json" help:"Output as JSON"`
 }
 
 type AttachCmd struct {
 	Name string `arg:"" help:"Instance name"`
-	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 }
 
 type ExecCmd struct {
 	Name string   `arg:"" help:"Instance name"`
 	Cmd  []string `arg:"" help:"Command to run" passthrough:""`
-	Root string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 }
 
 type SuspendCmd struct {
 	Name string `arg:"" help:"Instance name"`
-	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 }
 
 type ResumeCmd struct {
 	Name  string `arg:"" help:"Instance name"`
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (for drift report)"`
 }
 
 type StatusCmd struct {
 	Name  string `arg:"" help:"Instance name"`
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (for Data/Schema dimensions)"`
 	JSON  bool   `name:"json" help:"Output as JSON"`
 }
 
 type DoctorCmd struct {
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (for base health checks)"`
 	JSON  bool   `name:"json" help:"Output as JSON"`
 }
 
 type RederiveCmd struct {
-	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 }
 
 type VerifyCmd struct {
 	Name  string `arg:"" help:"Instance name"`
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
 	JSON  bool   `name:"json" help:"Output results as JSON array"`
 }
 
 type SendCmd struct {
 	Name    string   `arg:"" help:"Instance name"`
-	Root    string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root    string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	From    string   `name:"from" help:"Sender (defaults to PLAX_INSTANCE env)"`
 	Subject string   `name:"subject" short:"s" help:"Message subject"`
 	Body    []string `arg:"" optional:"" passthrough:"" help:"Message body (use -- to separate from flags)"`
@@ -161,7 +161,7 @@ type SendCmd struct {
 
 type RecvCmd struct {
 	Name  string `arg:"" help:"Instance name"`
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory"`
+	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 	All   bool   `name:"all" short:"a" xor:"mode" help:"Read and remove all messages"`
 	Count int    `name:"count" short:"n" xor:"mode" help:"Number of messages to read (default 1)"`
 	JSON  bool   `name:"json" help:"Output as JSON"`
@@ -256,7 +256,11 @@ func requireSeedConfig(bp *blueprint.Blueprint) error {
 }
 
 func runBaseCreate(cmd BaseCreateCmd) error {
-	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		return err
 	}
@@ -265,7 +269,7 @@ func runBaseCreate(cmd BaseCreateCmd) error {
 	}
 
 	ctx := context.Background()
-	bm, err := postgres.NewBaseManager(ctx, connStr, cmd.Root, bp)
+	bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 	if err != nil {
 		return err
 	}
@@ -278,7 +282,11 @@ func runBaseCreate(cmd BaseCreateCmd) error {
 }
 
 func runBaseSeed(cmd BaseSeedCmd) error {
-	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		return err
 	}
@@ -289,7 +297,7 @@ func runBaseSeed(cmd BaseSeedCmd) error {
 	fmt.Fprintln(os.Stderr, "SeedBase is not safe while instances exist; use 'plax base refresh' for ongoing updates")
 
 	ctx := context.Background()
-	bm, err := postgres.NewBaseManager(ctx, connStr, cmd.Root, bp)
+	bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 	if err != nil {
 		return err
 	}
@@ -300,7 +308,11 @@ func runBaseSeed(cmd BaseSeedCmd) error {
 }
 
 func runBaseReset(cmd BaseResetCmd) error {
-	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		return err
 	}
@@ -309,7 +321,7 @@ func runBaseReset(cmd BaseResetCmd) error {
 	}
 
 	ctx := context.Background()
-	bm, err := postgres.NewBaseManager(ctx, connStr, cmd.Root, bp)
+	bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 	if err != nil {
 		return err
 	}
@@ -321,7 +333,11 @@ func runBaseReset(cmd BaseResetCmd) error {
 }
 
 func runBaseRefresh(cmd BaseRefreshCmd) error {
-	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		return err
 	}
@@ -330,7 +346,7 @@ func runBaseRefresh(cmd BaseRefreshCmd) error {
 	}
 
 	ctx := context.Background()
-	bm, err := postgres.NewBaseManager(ctx, connStr, cmd.Root, bp)
+	bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 	if err != nil {
 		return err
 	}
@@ -349,13 +365,17 @@ func runBaseRefresh(cmd BaseRefreshCmd) error {
 }
 
 func runBaseStatus(cmd BaseStatusCmd) error {
-	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	root, _, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		return err
 	}
 
 	ctx := context.Background()
-	bm, err := postgres.NewBaseManager(ctx, connStr, cmd.Root, bp)
+	bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 	if err != nil {
 		return err
 	}
@@ -404,25 +424,25 @@ func runUp(cmd UpCmd) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	absRoot, err := filepath.Abs(cmd.Root)
-	if err != nil {
-		return fmt.Errorf("resolving repo root: %w", err)
-	}
-
-	resolvedRef, err := worktree.ResolveRef(absRoot, cmd.Ref)
+	root, _, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
 	}
 
-	deps, err := buildDeps(ctx, cmd.Root, cmd.PgURL)
+	resolvedRef, err := worktree.ResolveRef(root, cmd.Ref)
+	if err != nil {
+		return err
+	}
+
+	deps, err := buildDeps(ctx, root, cmd.PgURL)
 	if err != nil {
 		return err
 	}
 	defer deps.Close()
 
-	printStampNotice(cmd.Root, deps.Blueprint, deps.Registry)
+	printStampNotice(root, deps.Blueprint, deps.Registry)
 
-	deps.Registry.BlueprintStamp = stamp.Compute(cmd.Root, deps.Blueprint)
+	deps.Registry.BlueprintStamp = stamp.Compute(root, deps.Blueprint)
 
 	deps.SourceRef = cmd.Ref
 	deps.ResolvedRef = resolvedRef
@@ -437,22 +457,25 @@ func runDown(cmd DownCmd) error {
 	//
 	// Deliberately not signal-cancellable: an interrupted down is safely
 	// re-runnable because every step tolerates missing resources.
-	reg, err := openRegistry(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("down: %w", ErrNoRoot)
+	}
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
 	defer reg.Close()
-	absRoot, err := filepath.Abs(cmd.Root)
-	if err != nil {
-		return fmt.Errorf("resolving repo root: %w", err)
-	}
 
-	deps := &instance.Deps{Registry: reg, RepoRoot: absRoot}
+	deps := &instance.Deps{Registry: reg, RepoRoot: root}
 
-	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v — skipping database teardown\n", err)
-	} else if bm, err := postgres.NewBaseManager(context.Background(), connStr, absRoot, bp); err != nil {
+	} else if bm, err := postgres.NewBaseManager(context.Background(), connStr, root, bp); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v — skipping database teardown\n", err)
 	} else {
 		defer bm.Close()
@@ -470,14 +493,22 @@ func runDown(cmd DownCmd) error {
 }
 
 func runLs(cmd LsCmd) error {
-	reg, err := openRegistry(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("ls: %w", ErrNoRoot)
+	}
+
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
 	defer reg.Close()
 
-	bp, _ := loadBlueprint(cmd.Root)
-	printStampNotice(cmd.Root, bp, reg)
+	bp, _ := loadBlueprint(root)
+	printStampNotice(root, bp, reg)
 
 	if cmd.JSON {
 		enc := json.NewEncoder(os.Stdout)
@@ -502,7 +533,7 @@ func runLs(cmd LsCmd) error {
 		rec := reg.Instances[name]
 		ports := formatPorts(rec.Ports)
 		age := formatAge(rec.CreatedAt)
-		mailCount, mailErr := mailbox.Count(cmd.Root, name)
+		mailCount, mailErr := mailbox.Count(root, name)
 		mailStr := fmt.Sprintf("%d", mailCount)
 		if mailErr != nil {
 			mailStr = "?"
@@ -515,7 +546,15 @@ func runLs(cmd LsCmd) error {
 }
 
 func runAttach(cmd AttachCmd) error {
-	reg, err := openRegistry(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("attach: %w", ErrNoRoot)
+	}
+
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
@@ -526,27 +565,23 @@ func runAttach(cmd AttachCmd) error {
 		return fmt.Errorf("instance %q not found", cmd.Name)
 	}
 
-	bp, _ := loadBlueprint(cmd.Root)
-	printStampNotice(cmd.Root, bp, reg)
+	bp, _ := loadBlueprint(root)
+	printStampNotice(root, bp, reg)
 
 	if rec.State == registry.StateSuspended {
 		fmt.Fprintf(os.Stderr, "note: instance %s is suspended — services and processes are stopped\n", cmd.Name)
 	}
 
-	if n, err := mailbox.Count(cmd.Root, cmd.Name); err == nil && n > 0 {
+	if n, err := mailbox.Count(root, cmd.Name); err == nil && n > 0 {
 		fmt.Fprintf(os.Stderr, "note: %d unread message(s) — run 'plax recv %s' to read\n", n, cmd.Name)
 	}
 
-	absRoot, err := filepath.Abs(cmd.Root)
-	if err != nil {
-		return fmt.Errorf("resolving repo root: %w", err)
-	}
 	if bp != nil {
-		currentStamp := stamp.Compute(cmd.Root, bp)
+		currentStamp := stamp.Compute(root, bp)
 		sdeps := &status.Deps{
 			Blueprint:    bp,
 			Registry:     reg,
-			RepoRoot:     absRoot,
+			RepoRoot:     root,
 			CurrentStamp: currentStamp,
 		}
 		if report, err := status.Build(context.Background(), sdeps, cmd.Name); err == nil {
@@ -597,7 +632,15 @@ func runExec(cmd ExecCmd) error {
 		return fmt.Errorf("exec: no command given — usage: plax exec <name> -- <cmd> [args...]")
 	}
 
-	reg, err := openRegistry(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("exec: %w", ErrNoRoot)
+	}
+
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
@@ -608,8 +651,8 @@ func runExec(cmd ExecCmd) error {
 		return fmt.Errorf("instance %q not found", cmd.Name)
 	}
 
-	bp, _ := loadBlueprint(cmd.Root)
-	printStampNotice(cmd.Root, bp, reg)
+	bp, _ := loadBlueprint(root)
+	printStampNotice(root, bp, reg)
 
 	if rec.State == registry.StateSuspended {
 		fmt.Fprintf(os.Stderr, "note: instance %s is suspended — services and processes are stopped\n", cmd.Name)
@@ -709,6 +752,30 @@ func buildDeps(ctx context.Context, root, pgURL string) (*cliDeps, error) {
 		bm:     bm,
 		docker: drv,
 	}, nil
+}
+
+var ErrNoRoot = errors.New("no plax repo root found: run from a directory containing plax.json, or pass --root")
+
+// discoverRoot walks up from start looking for plax.json.
+// If found, returns the (absolute) directory containing it, true, nil.
+// If plax.json is not found up to the filesystem root, returns (start, false, nil).
+// If Abs fails, returns (start, false, err).
+func discoverRoot(start string) (string, bool, error) {
+	start, err := filepath.Abs(start)
+	if err != nil {
+		return start, false, err
+	}
+	dir := start
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "plax.json")); err == nil {
+			return dir, true, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return start, false, nil
+		}
+		dir = parent
+	}
 }
 
 func openRegistry(root string) (*registry.Registry, error) {
@@ -820,21 +887,24 @@ func printStampNotice(root string, bp *blueprint.Blueprint, reg *registry.Regist
 }
 
 func runSuspend(cmd SuspendCmd) error {
-	absRoot, err := filepath.Abs(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
 	if err != nil {
-		return fmt.Errorf("resolving repo root: %w", err)
+		return err
+	}
+	if !found {
+		return fmt.Errorf("suspend: %w", ErrNoRoot)
 	}
 
-	reg, err := openRegistry(cmd.Root)
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
 	defer reg.Close()
 
-	bp, _ := loadBlueprint(cmd.Root)
-	printStampNotice(cmd.Root, bp, reg)
+	bp, _ := loadBlueprint(root)
+	printStampNotice(root, bp, reg)
 
-	deps := &instance.Deps{Registry: reg, RepoRoot: absRoot}
+	deps := &instance.Deps{Registry: reg, RepoRoot: root}
 
 	if drv, err := docker.NewDriver(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
@@ -850,29 +920,29 @@ func runResume(cmd ResumeCmd) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	absRoot, err := filepath.Abs(cmd.Root)
-	if err != nil {
-		return fmt.Errorf("resolving repo root: %w", err)
-	}
-
-	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	root, _, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
 	}
 
-	reg, err := openRegistry(cmd.Root)
+	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
+	if err != nil {
+		return err
+	}
+
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
 	defer reg.Close()
 
-	printStampNotice(cmd.Root, bp, reg)
+	printStampNotice(root, bp, reg)
 
-	deps := &instance.Deps{Blueprint: bp, Registry: reg, RepoRoot: absRoot}
+	deps := &instance.Deps{Blueprint: bp, Registry: reg, RepoRoot: root}
 
 	// Open BM before Resume — tolerantly; nil skips DB checks.
 	if connStr != "" {
-		if bm, err := postgres.NewBaseManager(ctx, connStr, absRoot, bp); err == nil {
+		if bm, err := postgres.NewBaseManager(ctx, connStr, root, bp); err == nil {
 			defer bm.Close()
 			deps.BM = bm
 		} else {
@@ -893,12 +963,12 @@ func runResume(cmd ResumeCmd) error {
 		return err
 	}
 
-	currentStamp := stamp.Compute(cmd.Root, bp)
+	currentStamp := stamp.Compute(root, bp)
 	sdeps := &status.Deps{
 		Blueprint:    bp,
 		Registry:     reg,
 		BM:           deps.BM,
-		RepoRoot:     absRoot,
+		RepoRoot:     root,
 		CurrentStamp: currentStamp,
 	}
 	report, err := status.Build(ctx, sdeps, cmd.Name)
@@ -913,12 +983,15 @@ func runResume(cmd ResumeCmd) error {
 }
 
 func runStatus(cmd StatusCmd) error {
-	absRoot, err := filepath.Abs(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
 	if err != nil {
-		return fmt.Errorf("resolving repo root: %w", err)
+		return err
+	}
+	if !found {
+		return fmt.Errorf("status: %w", ErrNoRoot)
 	}
 
-	reg, err := openRegistry(cmd.Root)
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
@@ -928,23 +1001,23 @@ func runStatus(cmd StatusCmd) error {
 		return fmt.Errorf("instance %q not found", cmd.Name)
 	}
 
-	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v — showing degraded status\n", err)
 		bp = &blueprint.Blueprint{}
 		connStr = ""
 	}
 
-	currentStamp := stamp.Compute(cmd.Root, bp)
+	currentStamp := stamp.Compute(root, bp)
 	sdeps := &status.Deps{
 		Blueprint:    bp,
 		Registry:     reg,
-		RepoRoot:     absRoot,
+		RepoRoot:     root,
 		CurrentStamp: currentStamp,
 	}
 
 	if connStr != "" {
-		bm, err := postgres.NewBaseManager(context.Background(), connStr, absRoot, bp)
+		bm, err := postgres.NewBaseManager(context.Background(), connStr, root, bp)
 		if err == nil {
 			defer bm.Close()
 			sdeps.BM = bm
@@ -967,17 +1040,20 @@ func runStatus(cmd StatusCmd) error {
 }
 
 func runDoctor(cmd DoctorCmd) error {
-	absRoot, err := filepath.Abs(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
 	if err != nil {
-		return fmt.Errorf("resolving repo root: %w", err)
+		return err
+	}
+	if !found {
+		return fmt.Errorf("doctor: %w", ErrNoRoot)
 	}
 
-	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		return err
 	}
 
-	reg, err := openRegistry(cmd.Root)
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
@@ -986,12 +1062,12 @@ func runDoctor(cmd DoctorCmd) error {
 	ddeps := &doctor.Deps{
 		Blueprint: bp,
 		Registry:  reg,
-		RepoRoot:  absRoot,
+		RepoRoot:  root,
 	}
 
 	pgURL := connStr
 	if pgURL != "" {
-		bm, err := postgres.NewBaseManager(context.Background(), pgURL, absRoot, bp)
+		bm, err := postgres.NewBaseManager(context.Background(), pgURL, root, bp)
 		if err == nil {
 			defer bm.Close()
 			ddeps.BM = bm
@@ -1036,38 +1112,38 @@ func runDoctor(cmd DoctorCmd) error {
 }
 
 func runRederive(cmd RederiveCmd) error {
-	absRoot, err := filepath.Abs(cmd.Root)
+	root, _, err := discoverRoot(cmd.Root)
 	if err != nil {
-		return fmt.Errorf("resolving repo root: %w", err)
+		return err
 	}
 
-	bp, err := loadBlueprint(cmd.Root)
+	bp, err := loadBlueprint(root)
 	if err != nil {
-		return fmt.Errorf("plax.json not found at %s — run 'plax init' first", filepath.Join(cmd.Root, "plax.json"))
+		return fmt.Errorf("plax.json not found at %s — run 'plax init' first", filepath.Join(root, "plax.json"))
 	}
 
-	reg, err := openRegistry(cmd.Root)
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
 	defer reg.Close()
 
-	deps := &instance.Deps{Blueprint: bp, Registry: reg, RepoRoot: absRoot}
+	deps := &instance.Deps{Blueprint: bp, Registry: reg, RepoRoot: root}
 	return instance.Rederive(deps)
 }
 
 func runVerify(cmd VerifyCmd) error {
-	absRoot, err := filepath.Abs(cmd.Root)
-	if err != nil {
-		return fmt.Errorf("resolving repo root: %w", err)
-	}
-
-	bp, connStr, err := loadBlueprintAndConnString(cmd.Root, cmd.PgURL)
+	root, _, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
 	}
 
-	reg, err := openRegistry(cmd.Root)
+	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
+	if err != nil {
+		return err
+	}
+
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
@@ -1083,11 +1159,11 @@ func runVerify(cmd VerifyCmd) error {
 	vDeps := &verify.Deps{
 		Blueprint: bp,
 		Registry:  reg,
-		RepoRoot:  absRoot,
+		RepoRoot:  root,
 	}
 
 	if connStr != "" {
-		bm, err := postgres.NewBaseManager(ctx, connStr, absRoot, bp)
+		bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "note: postgres unreachable — DB checks skipped: %v\n", err)
 		} else {
@@ -1144,7 +1220,15 @@ func runVerify(cmd VerifyCmd) error {
 }
 
 func runSend(cmd SendCmd) error {
-	reg, err := openRegistry(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("send: %w", ErrNoRoot)
+	}
+
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
@@ -1177,7 +1261,7 @@ func runSend(cmd SendCmd) error {
 		Body:    body,
 	}
 
-	filename, err := mailbox.Send(cmd.Root, cmd.Name, msg)
+	filename, err := mailbox.Send(root, cmd.Name, msg)
 	if err != nil {
 		return err
 	}
@@ -1193,7 +1277,15 @@ func runSend(cmd SendCmd) error {
 }
 
 func runRecv(cmd RecvCmd) error {
-	reg, err := openRegistry(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("recv: %w", ErrNoRoot)
+	}
+
+	reg, err := openRegistry(root)
 	if err != nil {
 		return err
 	}
@@ -1213,9 +1305,9 @@ func runRecv(cmd RecvCmd) error {
 
 	var result *mailbox.RecvResult
 	if cmd.All {
-		result, err = mailbox.RecvAll(cmd.Root, cmd.Name)
+		result, err = mailbox.RecvAll(root, cmd.Name)
 	} else {
-		result, err = mailbox.Recv(cmd.Root, cmd.Name, n)
+		result, err = mailbox.Recv(root, cmd.Name, n)
 	}
 	if err != nil {
 		return err
@@ -1253,7 +1345,7 @@ func runRecv(cmd RecvCmd) error {
 		fmt.Printf("---\n%s\n---\n", msg.Body)
 	}
 
-	remaining, _ := mailbox.Count(cmd.Root, cmd.Name)
+	remaining, _ := mailbox.Count(root, cmd.Name)
 	if remaining > 0 {
 		fmt.Fprintf(os.Stderr, "%d message(s) remaining\n", remaining)
 	}
