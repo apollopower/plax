@@ -887,9 +887,12 @@ func printStampNotice(root string, bp *blueprint.Blueprint, reg *registry.Regist
 }
 
 func runSuspend(cmd SuspendCmd) error {
-	root, _, err := discoverRoot(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
+	}
+	if !found {
+		return fmt.Errorf("suspend: %w", ErrNoRoot)
 	}
 
 	reg, err := openRegistry(root)
