@@ -128,6 +128,14 @@ JSON, checked into the repo root as `plax.json`. No comments.
 
 ---
 
+## Triage
+
+Periodic issue-triage snapshots live in [`triage/`](triage/), named by date
+(`2026-08-14.md`). These are not implementation plans — they catalogue the
+active issue landscape at a point in time and propose a remediation roadmap.
+
+---
+
 ## Plan file conventions
 
 Every phase plan must contain these sections in order:
