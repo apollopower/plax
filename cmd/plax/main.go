@@ -457,9 +457,12 @@ func runDown(cmd DownCmd) error {
 	//
 	// Deliberately not signal-cancellable: an interrupted down is safely
 	// re-runnable because every step tolerates missing resources.
-	root, _, err := discoverRoot(cmd.Root)
+	root, found, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
+	}
+	if !found {
+		return fmt.Errorf("down: %w", ErrNoRoot)
 	}
 	reg, err := openRegistry(root)
 	if err != nil {
