@@ -813,6 +813,14 @@ func gitCommonRoot(start string) string {
 	if err != nil {
 		return ""
 	}
+	// Only trust the common dir's parent as the repo root when it is a .git
+	// subdirectory (the standard layout and the linked-worktree case). Bare
+	// repos and --separate-git-dir return a git dir that is not a .git child
+	// of the root, so filepath.Dir would point at the wrong path; fall back to
+	// the filesystem walk-up instead.
+	if filepath.Base(common) != ".git" {
+		return ""
+	}
 	return filepath.Dir(common)
 }
 
