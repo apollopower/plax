@@ -115,6 +115,30 @@ func TestBlueprint_EnsureIgnore_PreservesExisting(t *testing.T) {
 	}
 }
 
+func TestBlueprint_EnsureIgnore_NoTrailingNewline(t *testing.T) {
+	root := t.TempDir()
+	initRepo(t, root)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("node_modules/"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := EnsureIgnore(root)
+	if err != nil {
+		t.Fatalf("EnsureIgnore: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected .gitignore to be appended")
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	want := "node_modules/\n.plax/\n"
+	if string(data) != want {
+		t.Errorf("expected .gitignore to be %q, got %q", want, data)
+	}
+}
+
 func TestBlueprint_EnsureIgnore_AlreadyIgnored(t *testing.T) {
 	root := t.TempDir()
 	initRepo(t, root)

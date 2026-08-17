@@ -99,11 +99,23 @@ func EnsureIgnore(root string) (bool, error) {
 		return false, nil
 	}
 
-	f, err := os.OpenFile(filepath.Join(root, ".gitignore"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	path := filepath.Join(root, ".gitignore")
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+
+	// Avoid merging ".plax/" onto a final line that lacks a trailing newline.
+	entry := ".plax/\n"
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		entry = "\n" + entry
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return false, err
 	}
-	if _, err := f.WriteString(".plax/\n"); err != nil {
+	if _, err := f.WriteString(entry); err != nil {
 		_ = f.Close()
 		return false, err
 	}
