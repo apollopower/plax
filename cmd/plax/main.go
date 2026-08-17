@@ -760,11 +760,25 @@ var ErrNoRoot = errors.New("no plax repo root found: run from a directory contai
 // If found, returns the (absolute) directory containing it, true, nil.
 // If plax.json is not found up to the filesystem root, returns (start, false, nil).
 // If Abs fails, returns (start, false, err).
+//
+// When start is inside a git worktree, the git common dir resolves to the real
+// repo root. This matters because a committed plax.json is present in every
+// worktree checkout, so walking up would otherwise stop at the worktree's copy
+// and miss the root that owns .plax/registry.json.
 func discoverRoot(start string) (string, bool, error) {
 	start, err := filepath.Abs(start)
 	if err != nil {
 		return start, false, err
 	}
+
+	// Inside a linked worktree, --git-common-dir points at the main repo's
+	// .git, whose parent is the real root. Bypass worktree-local plax.json.
+	if root := gitCommonRoot(start); root != "" {
+		if _, err := os.Stat(filepath.Join(root, "plax.json")); err == nil {
+			return root, true, nil
+		}
+	}
+
 	dir := start
 	for {
 		if _, err := os.Stat(filepath.Join(dir, "plax.json")); err == nil {
@@ -776,6 +790,30 @@ func discoverRoot(start string) (string, bool, error) {
 		}
 		dir = parent
 	}
+}
+
+// gitCommonRoot returns the top-level repository root containing start, or ""
+// if start is not inside a git worktree/repository. For linked worktrees this
+// is the main repo root, not the worktree.
+func gitCommonRoot(start string) string {
+	cmd := exec.Command("git", "rev-parse", "--git-common-dir")
+	cmd.Dir = start
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	common := strings.TrimSpace(string(out))
+	if common == "" {
+		return ""
+	}
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(start, common)
+	}
+	common, err = filepath.Abs(common)
+	if err != nil {
+		return ""
+	}
+	return filepath.Dir(common)
 }
 
 func openRegistry(root string) (*registry.Registry, error) {
