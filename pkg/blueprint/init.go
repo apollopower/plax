@@ -71,6 +71,8 @@ func InitFromRepo(root string) (*Blueprint, []string, error) {
 
 	bp.Name = filepath.Base(root)
 
+	warnings = append(warnings, toolingWarnings(root)...)
+
 	return bp, warnings, nil
 }
 
