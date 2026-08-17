@@ -233,6 +233,12 @@ func runInit(cmd InitCmd) error {
 		fmt.Fprintln(os.Stderr, w)
 	}
 
+	if changed, err := blueprint.EnsureIgnore(absRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "init: warning: could not update .gitignore: %v\n", err)
+	} else if changed {
+		fmt.Fprintln(os.Stderr, "init: added .plax/ to .gitignore so instances are not traversed by root-globbing tooling")
+	}
+
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	if err := enc.Encode(bp); err != nil {

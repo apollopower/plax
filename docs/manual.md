@@ -498,7 +498,27 @@ allocated ports, database name, container IDs, process group IDs,
 creation time, provenance (base version, toolchain hash, tool versions),
 and state (`running` or `suspended`).
 
-Add `.plax/` to your `.gitignore`.
+### 9.1 Ignore entries
+
+Instance worktrees live inside the repo at `.plax/worktrees/<name>`. Any
+tool that globs from the repo root therefore traverses every instance —
+discovering N copies of the codebase. `plax init` adds `.plax/` to your
+`.gitignore` automatically, but you must ignore the worktree directory in
+each root-globbing tool yourself, otherwise a test run, typecheck, or
+format-write from the primary checkout silently operates on every instance.
+
+The complete ignore list:
+
+- **Version control** — `.gitignore`: `.plax/`
+- **Type checker** — `tsconfig.json`: add `.plax` to the `"exclude"` array
+- **Test runner** — jest, vitest, or Playwright config: add
+  `.plax/worktrees/**` to the ignore list (`testPathIgnorePatterns`,
+  `exclude`, or `testIgnore` respectively)
+- **Linter/formatter** — ESLint or Prettier config: add `.plax/**` to the
+  ignore list
+
+`plax init` prints a warning naming any detected config file that does not
+already reference `.plax`.
 
 ## 10. Environment variables
 
