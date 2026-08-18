@@ -12,6 +12,10 @@ import (
 // unsafe.
 var nameCharset = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]*$`)
 
+// identCharset constrains SQL identifiers interpolated into queries, so the
+// values cannot break out of double-quoted identifiers.
+var identCharset = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // ValidateStructural reports errors that make a blueprint unsafe to execute:
 // bad names, collisions, missing required config. It does not check whether
 // hole keys appear in the env template — derivation appends missing holes, so
@@ -134,6 +138,19 @@ func ValidateStructural(bp *Blueprint) []error {
 		}
 	}
 
+	if bp.Seed.AppliedMigrations != nil {
+		am := bp.Seed.AppliedMigrations
+		switch {
+		case am.Table == "" || am.Column == "":
+			errs = append(errs, fmt.Errorf("blueprint: seed.applied_migrations requires both table and column"))
+		default:
+			for _, ident := range []struct{ name, v string }{{"table", am.Table}, {"column", am.Column}} {
+				if !identCharset.MatchString(ident.v) {
+					errs = append(errs, fmt.Errorf("blueprint: seed.applied_migrations.%s %q must match ^[A-Za-z_][A-Za-z0-9_]*$", ident.name, ident.v))
+				}
+			}
+		}
+	}
 	if bp.Seed.Migrate == "" {
 		errs = append(errs, fmt.Errorf("blueprint: seed.migrate is required"))
 	}

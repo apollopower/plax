@@ -23,10 +23,21 @@ type PortPool struct {
 
 // SeedConfig describes how to initialise the shared base database.
 type SeedConfig struct {
-	Migrate       string `json:"migrate"`
-	Command       string `json:"command"`
-	Workdir       string `json:"workdir"`
-	MigrationsDir string `json:"migrations_dir,omitempty"`
+	Migrate           string             `json:"migrate"`
+	Command           string             `json:"command"`
+	Workdir           string             `json:"workdir"`
+	MigrationsDir     string             `json:"migrations_dir,omitempty"`
+	AppliedMigrations *AppliedMigrations `json:"applied_migrations,omitempty"`
+}
+
+// AppliedMigrations names the table and column the repo's migration framework
+// uses to record applied migrations. Plax reads the live applied-identifier
+// set from here to compute schema drift, rather than comparing a frozen
+// clone-time hash. Table and column are validated to a safe identifier charset
+// because they are interpolated into a SELECT query.
+type AppliedMigrations struct {
+	Table  string `json:"table"`
+	Column string `json:"column"`
 }
 
 // DatabaseDef declares a named database to clone from the base for a logical
