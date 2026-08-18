@@ -329,15 +329,69 @@ func schemaDrift(repoRoot, base, migrationsDir string, bm BaseManager, rec *regi
 		} else {
 			d.Detail = fmt.Sprintf("migrations match %s", base)
 		}
-	} else {
-		d.Level = Drift
-		if usingWorktreeHead {
-			d.Detail = "database was built from a different migration set than worktree HEAD declares — re-migrate the instance, or 'plax down' + 'plax up' to rebuild from a refreshed base"
-		} else {
-			d.Detail = fmt.Sprintf("database was built from a different migration set than %s declares — re-migrate the instance, or 'plax down' + 'plax up' to rebuild from a refreshed base", base)
-		}
+		return d
+	}
+
+	// Drift. The detection is a hash comparison, which carries no direction,
+	// so the advice must come from comparing the git migration sets at the
+	// branch and the base as sets. Which side holds migrations the other
+	// lacks decides the only remediation that can actually work.
+	d.Level = Drift
+
+	baseNames, baseErr := worktree.SchemaFilesAtRef(repoRoot, base, migrationsDir)
+	branchOnly := setDiff(names, baseNames) // declared by branch, missing from base
+	baseOnly := setDiff(baseNames, names)   // in base, missing from branch
+
+	switch {
+	case baseErr != nil:
+		d.Detail = fmt.Sprintf("database was built from a different migration set than %s declares — 'plax down' + 'plax up' to rebuild from a refreshed base", base)
+	case len(branchOnly) == 0 && len(baseOnly) > 0:
+		// Base ahead: the database holds migrations the branch never declares.
+		d.Detail = fmt.Sprintf("database has %s the worktree does not declare — it was built from a newer migration set than this branch. Rebase this branch onto %s, or rebuild the base from an older commit; re-migrating cannot help", describeMigrations(baseOnly), base)
+	case len(branchOnly) > 0 && len(baseOnly) == 0:
+		// Branch ahead: the branch declares migrations the database lacks.
+		d.Detail = fmt.Sprintf("worktree declares %s the database does not have — re-migrate the instance to apply them", describeMigrations(branchOnly))
+	case len(branchOnly) > 0 && len(baseOnly) > 0:
+		// Genuinely divergent histories; a rebuild from a matching base is the
+		// only sane path.
+		d.Detail = fmt.Sprintf("migration histories have diverged — the database has %s this branch lacks, and the branch declares %s the database lacks. Rebuild the instance from a base matching this branch ('plax down' + 'plax up')", describeMigrations(baseOnly), describeMigrations(branchOnly))
+	default:
+		// Git sets are equal, yet the database differs: the base itself was
+		// built from a different migration set than the current base ref.
+		d.Detail = fmt.Sprintf("database was built from a different migration set than %s currently declares — 'plax down' + 'plax up' to rebuild from a refreshed base", base)
 	}
 	return d
+}
+
+// setDiff returns the elements of a absent from b, in sorted order. Migration
+// filenames are prefix-ordered (timestamp or sequence), so sorted order is
+// roughly chronological and names[0] is the oldest.
+func setDiff(a, b []string) []string {
+	inB := make(map[string]bool, len(b))
+	for _, v := range b {
+		inB[v] = true
+	}
+	var extra []string
+	for _, v := range a {
+		if !inB[v] {
+			extra = append(extra, v)
+		}
+	}
+	sort.Strings(extra)
+	return extra
+}
+
+// describeMigrations summarises a migration set for a drift message, naming
+// the oldest migration plus a count. Pluralises the trailing noun.
+func describeMigrations(names []string) string {
+	if len(names) == 0 {
+		return "0 migrations"
+	}
+	noun := "migration"
+	if len(names) != 1 {
+		noun += "s"
+	}
+	return fmt.Sprintf("%d %s (oldest: %s)", len(names), noun, names[0])
 }
 
 func dataDrift(ctx context.Context, bm BaseManager, prov *postgres.ProvenanceRow) Dimension {
