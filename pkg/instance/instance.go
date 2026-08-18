@@ -25,6 +25,7 @@ type BaseManager interface {
 	DropInstanceDB(ctx context.Context, dbName string) error
 	InstanceProvenance(ctx context.Context, dbName string) (*postgres.ProvenanceRow, error)
 	InstanceDBExists(ctx context.Context, dbName string) (bool, error)
+	AppliedMigrations(ctx context.Context, dbName string) ([]string, error)
 }
 
 // DockerDriver is the subset of docker.Driver that lifecycle orchestration

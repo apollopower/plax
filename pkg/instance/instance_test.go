@@ -93,6 +93,10 @@ func (f *fakeBM) InstanceDBExists(_ context.Context, _ string) (bool, error) {
 	return true, nil
 }
 
+func (f *fakeBM) AppliedMigrations(context.Context, string) ([]string, error) {
+	return nil, nil
+}
+
 func (f *fakeBM) droppedDBs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

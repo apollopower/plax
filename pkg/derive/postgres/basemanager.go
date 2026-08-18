@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -397,6 +398,66 @@ func (bm *BaseManager) InstanceProvenance(ctx context.Context, dbName string) (*
 	defer pool.Close()
 
 	return ReadProvenance(ctx, pool)
+}
+
+// AppliedMigrations returns the set of migration identifiers recorded as
+// applied in the instance's tracking table, or nil if the table does not exist
+// yet (migrations not yet run). Callers must check that the blueprint declares
+// seed.applied_migrations before calling.
+func (bm *BaseManager) AppliedMigrations(ctx context.Context, dbName string) ([]string, error) {
+	am := bm.bp.Seed.AppliedMigrations
+	if am == nil {
+		return nil, fmt.Errorf("applied migrations: no seed.applied_migrations configured")
+	}
+
+	exists, err := bm.InstanceDBExists(ctx, dbName)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	pool, err := pgxpool.New(ctx, bm.dsnForDB(dbName))
+	if err != nil {
+		return nil, fmt.Errorf("applied migrations: connect to %s: %w", dbName, err)
+	}
+	defer pool.Close()
+
+	var tableExists bool
+	err = pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = 'public' AND table_name = $1
+		)
+	`, am.Table).Scan(&tableExists)
+	if err != nil {
+		return nil, fmt.Errorf("applied migrations: check table: %w", err)
+	}
+	if !tableExists {
+		return nil, nil
+	}
+
+	var names []string
+	q := fmt.Sprintf(`SELECT DISTINCT "%s" FROM "%s"`, am.Column, am.Table)
+	rows, err := pool.Query(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("applied migrations: query %s.%s: %w", am.Table, am.Column, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			return nil, fmt.Errorf("applied migrations: scan: %w", err)
+		}
+		names = append(names, n)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("applied migrations: rows: %w", err)
+	}
+
+	sort.Strings(names)
+	return names, nil
 }
 
 func (bm *BaseManager) InstanceDBExists(ctx context.Context, dbName string) (bool, error) {

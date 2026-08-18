@@ -45,6 +45,7 @@ type Report struct {
 type BaseManager interface {
 	BaseStatus(ctx context.Context) (postgres.BaseInfo, error)
 	InstanceProvenance(ctx context.Context, dbName string) (*postgres.ProvenanceRow, error)
+	AppliedMigrations(ctx context.Context, dbName string) ([]string, error)
 }
 
 type Deps struct {
@@ -84,11 +85,14 @@ func Build(ctx context.Context, deps *Deps, name string) (*Report, error) {
 		prov, provErr = deps.BM.InstanceProvenance(ctx, rec.DBName)
 	}
 
+	// schemaDrift reads the live applied-migration set from the framework's
+	// tracking table when configured, so it must run even if the provenance
+	// fetch failed. dataDrift still reads provenance version numbers and stays
+	// gated on provErr.
+	report.Schema = schemaDrift(ctx, deps.RepoRoot, base, migrationsDir, deps.Blueprint.Seed.AppliedMigrations, deps.BM, &rec, prov)
 	if provErr != nil {
-		report.Schema = Dimension{Level: Unknown, Detail: fmt.Sprintf("instance provenance: %v", provErr)}
 		report.Data = Dimension{Level: Unknown, Detail: fmt.Sprintf("instance provenance: %v", provErr)}
 	} else {
-		report.Schema = schemaDrift(deps.RepoRoot, base, migrationsDir, deps.BM, &rec, prov)
 		report.Data = dataDrift(ctx, deps.BM, prov)
 	}
 
@@ -281,20 +285,8 @@ func configDrift(reg *registry.Registry, current registry.BlueprintStamp) Dimens
 	return d
 }
 
-func schemaDrift(repoRoot, base, migrationsDir string, bm BaseManager, rec *registry.InstanceRecord, prov *postgres.ProvenanceRow) Dimension {
+func schemaDrift(ctx context.Context, repoRoot, base, migrationsDir string, am *blueprint.AppliedMigrations, bm BaseManager, rec *registry.InstanceRecord, prov *postgres.ProvenanceRow) Dimension {
 	var d Dimension
-	if bm == nil || prov == nil || prov.SchemaHash == "" {
-		d.Level = Unknown
-		switch {
-		case bm == nil:
-			d.Detail = "postgres unreachable"
-		case prov == nil:
-			d.Detail = "no provenance row"
-		default:
-			d.Detail = "no schema hash recorded"
-		}
-		return d
-	}
 
 	if base == "" {
 		d.Level = Unknown
@@ -323,6 +315,32 @@ func schemaDrift(repoRoot, base, migrationsDir string, bm BaseManager, rec *regi
 		}
 		return d
 	}
+
+	if am == nil {
+		return legacySchemaDrift(repoRoot, base, migrationsDir, usingWorktreeHead, bm, prov, names)
+	}
+	return liveSchemaDrift(ctx, am, bm, rec.DBName, names, usingWorktreeHead)
+}
+
+// legacySchemaDrift compares the clone-time SchemaHash stamp against the
+// migration files at the worktree HEAD. It is the pre-live-tracking behaviour,
+// kept as the fallback for blueprints that do not declare
+// seed.applied_migrations.
+func legacySchemaDrift(repoRoot, base, migrationsDir string, usingWorktreeHead bool, bm BaseManager, prov *postgres.ProvenanceRow, names []string) Dimension {
+	var d Dimension
+	if bm == nil || prov == nil || prov.SchemaHash == "" {
+		d.Level = Unknown
+		switch {
+		case bm == nil:
+			d.Detail = "postgres unreachable"
+		case prov == nil:
+			d.Detail = "no provenance row"
+		default:
+			d.Detail = "no schema hash recorded"
+		}
+		return d
+	}
+
 	repoHash := postgres.HashMigrationNames(names)
 
 	if prov.SchemaHash == repoHash {
@@ -362,6 +380,59 @@ func schemaDrift(repoRoot, base, migrationsDir string, bm BaseManager, rec *regi
 		// Git sets are equal, yet the database differs: the base itself was
 		// built from a different migration set than the current base ref.
 		d.Detail = fmt.Sprintf("database was built from a different migration set than %s currently declares — 'plax down' + 'plax up' to rebuild from a refreshed base", base)
+	}
+	return d
+}
+
+// liveSchemaDrift compares the migrations actually applied to the instance DB
+// (from the framework's tracking table) against the migration files at the
+// worktree HEAD. The DB is ground truth, so this is correct by construction
+// and clears once an in-worktree migration is applied.
+func liveSchemaDrift(ctx context.Context, am *blueprint.AppliedMigrations, bm BaseManager, dbName string, names []string, usingWorktreeHead bool) Dimension {
+	var d Dimension
+	if bm == nil {
+		d.Level = Unknown
+		d.Detail = "postgres unreachable"
+		return d
+	}
+
+	applied, err := bm.AppliedMigrations(ctx, dbName)
+	if err != nil {
+		d.Level = Unknown
+		d.Detail = fmt.Sprintf("applied migrations: %v", err)
+		return d
+	}
+	if applied == nil {
+		d.Level = Unknown
+		d.Detail = "no applied migrations recorded — run migrations in the instance"
+		return d
+	}
+
+	fileIDs := make([]string, 0, len(names))
+	for _, n := range names {
+		fileIDs = append(fileIDs, strings.TrimSuffix(n, filepath.Ext(n)))
+	}
+
+	branchOnly := setDiff(fileIDs, applied) // declared by worktree, not applied
+	dbOnly := setDiff(applied, fileIDs)     // applied, not declared by worktree
+
+	switch {
+	case len(branchOnly) == 0 && len(dbOnly) == 0:
+		d.Level = OK
+		if usingWorktreeHead {
+			d.Detail = "migrations match worktree HEAD"
+		} else {
+			d.Detail = "migrations match the base migration set"
+		}
+	case len(branchOnly) == 0 && len(dbOnly) > 0:
+		d.Level = Drift
+		d.Detail = fmt.Sprintf("database has %s the worktree does not declare — rebase this branch or rebuild the instance", describeMigrations(dbOnly))
+	case len(branchOnly) > 0 && len(dbOnly) == 0:
+		d.Level = Drift
+		d.Detail = fmt.Sprintf("worktree declares %s the database does not have — re-migrate the instance to apply them", describeMigrations(branchOnly))
+	default:
+		d.Level = Drift
+		d.Detail = fmt.Sprintf("migration histories have diverged — the database has %s this branch lacks, and the branch declares %s the database lacks. Rebuild the instance ('plax down' + 'plax up')", describeMigrations(dbOnly), describeMigrations(branchOnly))
 	}
 	return d
 }

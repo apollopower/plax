@@ -3,6 +3,7 @@ package status
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -20,9 +21,11 @@ import (
 )
 
 type fakeBM struct {
-	info    postgres.BaseInfo
-	prov    *postgres.ProvenanceRow
-	provErr error
+	info       postgres.BaseInfo
+	prov       *postgres.ProvenanceRow
+	provErr    error
+	applied    []string
+	appliedErr error
 }
 
 func (f *fakeBM) BaseStatus(context.Context) (postgres.BaseInfo, error) {
@@ -34,6 +37,13 @@ func (f *fakeBM) InstanceProvenance(context.Context, string) (*postgres.Provenan
 		return nil, f.provErr
 	}
 	return f.prov, nil
+}
+
+func (f *fakeBM) AppliedMigrations(context.Context, string) ([]string, error) {
+	if f.appliedErr != nil {
+		return nil, f.appliedErr
+	}
+	return f.applied, nil
 }
 
 func initStatusRepo(t *testing.T) (repoRoot string, bp *blueprint.Blueprint, reg *registry.Registry, wtPath string) {
@@ -300,7 +310,11 @@ func schemaRepoWorktree(t *testing.T, repoRoot string, wantMigrations []string) 
 	}
 	wtRun("git", "checkout", "-b", "feat/schema")
 	wtRun("git", "add", ".")
-	wtRun("git", "commit", "-m", "schema branch")
+	// Commit only when the branch differs from main (wantMigrations may equal
+	// the base set, leaving nothing staged).
+	if err := exec.Command("git", "-C", wtPath, "diff", "--cached", "--quiet").Run(); err != nil {
+		wtRun("git", "commit", "-m", "schema branch")
+	}
 	return wtPath
 }
 
@@ -313,14 +327,15 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-func schemaDriftResult(t *testing.T, repoRoot, baseRef string, prov *postgres.ProvenanceRow, wtPath string) Dimension {
+func schemaDriftResult(t *testing.T, repoRoot, baseRef string, bm BaseManager, am *blueprint.AppliedMigrations, prov *postgres.ProvenanceRow, wtPath string) Dimension {
 	t.Helper()
 	rec := &registry.InstanceRecord{
 		ID:           "schema",
 		Branch:       "feat/schema",
 		WorktreePath: wtPath,
+		DBName:       "plax_schema",
 	}
-	return schemaDrift(repoRoot, baseRef, "src/db/migrations", &fakeBM{}, rec, prov)
+	return schemaDrift(context.Background(), repoRoot, baseRef, "src/db/migrations", am, bm, rec, prov)
 }
 
 func TestStatus_SchemaDriftBaseAhead(t *testing.T) {
@@ -331,7 +346,7 @@ func TestStatus_SchemaDriftBaseAhead(t *testing.T) {
 	// migrations; the branch predates the second one.
 	prov := &postgres.ProvenanceRow{Version: 1, SchemaHash: postgres.HashMigrationNames([]string{"0001_init.sql", "0002_add_users.sql"})}
 
-	d := schemaDriftResult(t, repoRoot, base, prov, wtPath)
+	d := schemaDriftResult(t, repoRoot, base, &fakeBM{}, nil, prov, wtPath)
 	if d.Level != Drift {
 		t.Fatalf("level = %s, want drift", d.Level)
 	}
@@ -352,7 +367,7 @@ func TestStatus_SchemaDriftBranchAhead(t *testing.T) {
 	// The database, cloned from the base, predates the branch's new migration.
 	prov := &postgres.ProvenanceRow{Version: 1, SchemaHash: postgres.HashMigrationNames([]string{"0001_init.sql"})}
 
-	d := schemaDriftResult(t, repoRoot, base, prov, wtPath)
+	d := schemaDriftResult(t, repoRoot, base, &fakeBM{}, nil, prov, wtPath)
 	if d.Level != Drift {
 		t.Fatalf("level = %s, want drift", d.Level)
 	}
@@ -371,7 +386,7 @@ func TestStatus_SchemaDriftDiverged(t *testing.T) {
 	// branch carries 0003.
 	prov := &postgres.ProvenanceRow{Version: 1, SchemaHash: postgres.HashMigrationNames([]string{"0001_init.sql", "0002_shared.sql"})}
 
-	d := schemaDriftResult(t, repoRoot, base, prov, wtPath)
+	d := schemaDriftResult(t, repoRoot, base, &fakeBM{}, nil, prov, wtPath)
 	if d.Level != Drift {
 		t.Fatalf("level = %s, want drift", d.Level)
 	}
@@ -379,6 +394,141 @@ func TestStatus_SchemaDriftDiverged(t *testing.T) {
 		if !strings.Contains(d.Detail, want) {
 			t.Errorf("detail %q missing %q", d.Detail, want)
 		}
+	}
+}
+
+func liveSchemaAM() *blueprint.AppliedMigrations {
+	return &blueprint.AppliedMigrations{Table: "pgmigrations", Column: "name"}
+}
+
+func TestStatus_SchemaLive_MatchesWorktreeHead(t *testing.T) {
+	repoRoot, base := makeSchemaRepo(t, []string{"0001_init.sql", "0002_add_users.sql"})
+	wtPath := schemaRepoWorktree(t, repoRoot, []string{"0001_init.sql", "0002_add_users.sql"})
+
+	bm := &fakeBM{applied: []string{"0001_init", "0002_add_users"}}
+	d := schemaDriftResult(t, repoRoot, base, bm, liveSchemaAM(), nil, wtPath)
+	if d.Level != OK {
+		t.Fatalf("level = %s, want ok: %s", d.Level, d.Detail)
+	}
+	if want := "migrations match worktree HEAD"; d.Detail != want {
+		t.Errorf("detail = %q, want %q", d.Detail, want)
+	}
+}
+
+func TestStatus_SchemaLive_BranchAhead(t *testing.T) {
+	repoRoot, base := makeSchemaRepo(t, []string{"0001_init.sql"})
+	wtPath := schemaRepoWorktree(t, repoRoot, []string{"0001_init.sql", "0002_add_users.sql"})
+
+	bm := &fakeBM{applied: []string{"0001_init"}}
+	d := schemaDriftResult(t, repoRoot, base, bm, liveSchemaAM(), nil, wtPath)
+	if d.Level != Drift {
+		t.Fatalf("level = %s, want drift", d.Level)
+	}
+	for _, want := range []string{"worktree declares 1 migration", "0002_add_users", "re-migrate"} {
+		if !strings.Contains(d.Detail, want) {
+			t.Errorf("detail %q missing %q", d.Detail, want)
+		}
+	}
+}
+
+func TestStatus_SchemaLive_DbAhead(t *testing.T) {
+	repoRoot, base := makeSchemaRepo(t, []string{"0001_init.sql", "0002_add_users.sql"})
+	wtPath := schemaRepoWorktree(t, repoRoot, []string{"0001_init.sql"})
+
+	bm := &fakeBM{applied: []string{"0001_init", "0002_add_users"}}
+	d := schemaDriftResult(t, repoRoot, base, bm, liveSchemaAM(), nil, wtPath)
+	if d.Level != Drift {
+		t.Fatalf("level = %s, want drift", d.Level)
+	}
+	for _, want := range []string{"database has 1 migration", "0002_add_users", "rebase this branch or rebuild"} {
+		if !strings.Contains(d.Detail, want) {
+			t.Errorf("detail %q missing %q", d.Detail, want)
+		}
+	}
+}
+
+func TestStatus_SchemaLive_Diverged(t *testing.T) {
+	repoRoot, base := makeSchemaRepo(t, []string{"0001_init.sql", "0002_shared.sql"})
+	wtPath := schemaRepoWorktree(t, repoRoot, []string{"0001_init.sql", "0003_branch.sql"})
+
+	bm := &fakeBM{applied: []string{"0001_init", "0002_shared"}}
+	d := schemaDriftResult(t, repoRoot, base, bm, liveSchemaAM(), nil, wtPath)
+	if d.Level != Drift {
+		t.Fatalf("level = %s, want drift", d.Level)
+	}
+	for _, want := range []string{"diverged", "0002_shared", "0003_branch"} {
+		if !strings.Contains(d.Detail, want) {
+			t.Errorf("detail %q missing %q", d.Detail, want)
+		}
+	}
+}
+
+func TestStatus_SchemaLive_NoAppliedRows(t *testing.T) {
+	repoRoot, base := makeSchemaRepo(t, []string{"0001_init.sql"})
+	wtPath := schemaRepoWorktree(t, repoRoot, []string{"0001_init.sql"})
+
+	bm := &fakeBM{}
+	d := schemaDriftResult(t, repoRoot, base, bm, liveSchemaAM(), nil, wtPath)
+	if d.Level != Unknown {
+		t.Fatalf("level = %s, want unknown", d.Level)
+	}
+	if want := "no applied migrations recorded — run migrations in the instance"; d.Detail != want {
+		t.Errorf("detail = %q, want %q", d.Detail, want)
+	}
+}
+
+func TestStatus_Build_SchemaLiveDespiteProvFailure(t *testing.T) {
+	repoRoot, base := makeSchemaRepo(t, []string{"0001_init.sql"})
+	wtPath := schemaRepoWorktree(t, repoRoot, []string{"0001_init.sql", "0002_add_users.sql"})
+
+	bp := &blueprint.Blueprint{
+		Version:   1,
+		Name:      "test",
+		PortPool:  blueprint.PortPool{Start: 25000, End: 25100},
+		Toolchain: ".tool-versions",
+		Services:  map[string]blueprint.ServiceDef{},
+		Processes: []blueprint.ProcessDef{},
+		Env:       blueprint.EnvConfig{Template: ".env.example", Holes: map[string]string{}},
+		Seed:      blueprint.SeedConfig{MigrationsDir: "src/db/migrations", AppliedMigrations: liveSchemaAM()},
+	}
+
+	reg, err := registry.Open(filepath.Join(repoRoot, ".plax", "registry.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := registry.InstanceRecord{
+		ID:           "i1",
+		Branch:       worktree.BranchName("i1"),
+		WorktreePath: wtPath,
+		State:        registry.StateRunning,
+		DBName:       "plax_i1",
+		BaseRef:      base,
+	}
+	if err := reg.AddInstance("i1", rec); err != nil {
+		t.Fatal(err)
+	}
+
+	bm := &fakeBM{provErr: errors.New("connection refused"), applied: []string{"0001_init", "0002_add_users"}}
+	deps := &Deps{
+		Blueprint:    bp,
+		Registry:     reg,
+		BM:           bm,
+		RepoRoot:     repoRoot,
+		CurrentStamp: reg.BlueprintStamp,
+	}
+
+	report, err := Build(context.Background(), deps, "i1")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if report.Schema.Level != OK {
+		t.Errorf("schema = %s, want ok from live tracking: %s", report.Schema.Level, report.Schema.Detail)
+	}
+	if strings.Contains(report.Schema.Detail, "connection refused") {
+		t.Errorf("schema detail %q leaked the provenance error", report.Schema.Detail)
+	}
+	if report.Data.Level != Unknown {
+		t.Errorf("data = %s, want unknown on provenance failure", report.Data.Level)
 	}
 }
 

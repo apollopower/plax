@@ -156,6 +156,50 @@ func TestBlueprint_ValidateDependsOnMissing(t *testing.T) {
 	}
 }
 
+func TestBlueprint_ValidateAppliedMigrationsPartial(t *testing.T) {
+	cases := []struct {
+		name string
+		am   *AppliedMigrations
+	}{
+		{"table only", &AppliedMigrations{Table: "pgmigrations"}},
+		{"column only", &AppliedMigrations{Column: "name"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bp := newValidBP()
+			bp.Seed.AppliedMigrations = tc.am
+			if errs := ValidateStructural(bp); len(errs) == 0 {
+				t.Fatal("expected partial applied_migrations to be rejected")
+			}
+		})
+	}
+}
+
+func TestBlueprint_ValidateAppliedMigrationsBadIdent(t *testing.T) {
+	for _, bad := range []string{"pg-migrations", "pg migrations", `pg"mig`} {
+		bp := newValidBP()
+		bp.Seed.AppliedMigrations = &AppliedMigrations{Table: bad, Column: "name"}
+		if errs := ValidateStructural(bp); len(errs) == 0 {
+			t.Errorf("applied_migrations.table %q should be rejected", bad)
+		}
+	}
+	for _, bad := range []string{"migration name", "migration-name", `na"me`} {
+		bp := newValidBP()
+		bp.Seed.AppliedMigrations = &AppliedMigrations{Table: "pgmigrations", Column: bad}
+		if errs := ValidateStructural(bp); len(errs) == 0 {
+			t.Errorf("applied_migrations.column %q should be rejected", bad)
+		}
+	}
+}
+
+func TestBlueprint_ValidateAppliedMigrationsValid(t *testing.T) {
+	bp := newValidBP()
+	bp.Seed.AppliedMigrations = &AppliedMigrations{Table: "pgmigrations", Column: "name"}
+	if errs := ValidateStructural(bp); len(errs) != 0 {
+		t.Errorf("valid applied_migrations rejected: %v", errs)
+	}
+}
+
 func TestBlueprint_ValidateSeedMigrateMissing(t *testing.T) {
 	bp := newValidBP()
 	bp.Seed.Migrate = ""

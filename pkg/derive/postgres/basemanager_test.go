@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -21,6 +22,83 @@ func testBlueprint() *blueprint.Blueprint {
 			Workdir: ".",
 		},
 	}
+}
+
+func amBlueprint() *blueprint.Blueprint {
+	bp := testBlueprint()
+	bp.Seed.AppliedMigrations = &blueprint.AppliedMigrations{Table: "pgmigrations", Column: "name"}
+	return bp
+}
+
+func TestPostgres_AppliedMigrations_TablePresent(t *testing.T) {
+	bm := testManagerWith(t, amBlueprint())
+	ctx := context.Background()
+
+	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "am_test")
+
+	if err := bm.CreateBase(ctx); err != nil {
+		t.Fatalf("CreateBase: %v", err)
+	}
+	if err := bm.CloneBase(ctx, "am_test"); err != nil {
+		t.Fatalf("CloneBase: %v", err)
+	}
+
+	pool, err := pgxpool.New(ctx, bm.dsnForDB("am_test"))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer pool.Close()
+	if _, err := pool.Exec(ctx, `CREATE TABLE pgmigrations (name TEXT NOT NULL)`); err != nil {
+		t.Fatalf("create tracking table: %v", err)
+	}
+	for _, n := range []string{"0002_add_users", "0001_init"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO pgmigrations (name) VALUES ($1)`, n); err != nil {
+			t.Fatalf("insert %s: %v", n, err)
+		}
+	}
+	// A duplicate row must be collapsed by DISTINCT.
+	if _, err := pool.Exec(ctx, `INSERT INTO pgmigrations (name) VALUES ($1)`, "0001_init"); err != nil {
+		t.Fatalf("insert duplicate: %v", err)
+	}
+
+	names, err := bm.AppliedMigrations(ctx, "am_test")
+	if err != nil {
+		t.Fatalf("AppliedMigrations: %v", err)
+	}
+	want := []string{"0001_init", "0002_add_users"}
+	if !slices.Equal(names, want) {
+		t.Errorf("applied = %v, want %v", names, want)
+	}
+
+	_ = bm.DropInstanceDB(ctx, "am_test")
+	_ = bm.DropInstanceDB(ctx, bm.baseName)
+}
+
+func TestPostgres_AppliedMigrations_TableAbsent(t *testing.T) {
+	bm := testManagerWith(t, amBlueprint())
+	ctx := context.Background()
+
+	_ = bm.DropInstanceDB(ctx, bm.baseName)
+	_ = bm.DropInstanceDB(ctx, "am_absent")
+
+	if err := bm.CreateBase(ctx); err != nil {
+		t.Fatalf("CreateBase: %v", err)
+	}
+	if err := bm.CloneBase(ctx, "am_absent"); err != nil {
+		t.Fatalf("CloneBase: %v", err)
+	}
+
+	names, err := bm.AppliedMigrations(ctx, "am_absent")
+	if err != nil {
+		t.Fatalf("AppliedMigrations: %v", err)
+	}
+	if names != nil {
+		t.Errorf("applied = %v, want nil", names)
+	}
+
+	_ = bm.DropInstanceDB(ctx, "am_absent")
+	_ = bm.DropInstanceDB(ctx, bm.baseName)
 }
 
 func failingSeedBlueprint() *blueprint.Blueprint {
