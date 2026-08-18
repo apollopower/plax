@@ -531,27 +531,26 @@ func TestInstance_UpEnvCheckFailure_RollsBack(t *testing.T) {
 	}
 }
 
-func TestInstance_UpRuntimeCheckFailure_StaysUpUnhealthy(t *testing.T) {
+func TestInstance_Up_DoesNotBlockOnTCPReadiness(t *testing.T) {
 	deps, _, drv := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
-	// Don't bind TCP listeners so the verify TCP check fails.
+	// Don't bind TCP listeners. A freshly started service legitimately takes
+	// time to answer, so `up` must not block on or flag TCP readiness — that
+	// is deferred to the live ls/status/verify probes. (Plan 16.)
 	drv.skipBindListeners = true
 
 	err := Up(context.Background(), deps, "i1")
-	if err == nil {
-		t.Fatal("Up should fail with verification error")
-	}
-	if !strings.Contains(err.Error(), "tcp-reachability") {
-		t.Fatalf("expected tcp-reachability error, got: %v", err)
+	if err != nil {
+		t.Fatalf("Up should succeed without TCP readiness probe, got: %v", err)
 	}
 
 	rec, found := deps.Registry.GetInstance("i1")
 	if !found {
-		t.Fatal("instance should still be registered despite verification failure")
+		t.Fatal("instance should be registered after up")
 	}
-	if rec.Health != registry.HealthUnhealthy {
-		t.Errorf("Health = %q, want unhealthy", rec.Health)
+	if rec.Health != registry.HealthHealthy {
+		t.Errorf("Health = %q, want healthy (liveness + env passed)", rec.Health)
 	}
 	if !worktree.BranchExists(deps.RepoRoot, "i1") {
 		t.Error("worktree should not have been rolled back")

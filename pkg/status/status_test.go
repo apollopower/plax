@@ -4,15 +4,18 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/derive/postgres"
 	"github.com/apollopower/plax/pkg/registry"
+	"github.com/apollopower/plax/pkg/verify"
 	"github.com/apollopower/plax/pkg/worktree"
 )
 
@@ -486,5 +489,81 @@ func TestStatus_BuildConfigDrift(t *testing.T) {
 	}
 	if report.Config.Level != Drift {
 		t.Errorf("config = %s, want drift: %s", report.Config.Level, report.Config.Detail)
+	}
+}
+
+func TestStatus_Health_UnknownWhenSuspended(t *testing.T) {
+	dir, bp, reg, wtPath := initStatusRepo(t)
+	rec := registry.InstanceRecord{
+		ID: "i1", Branch: worktree.BranchName("i1"), WorktreePath: wtPath,
+		State: registry.StateSuspended, DBName: "plax_i1", BaseRef: "main",
+	}
+	if err := reg.AddInstance("i1", rec); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir, CurrentStamp: reg.BlueprintStamp}
+	report, err := Build(context.Background(), deps, "i1")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if report.Health.Level != Unknown {
+		t.Errorf("health = %s, want unknown: %s", report.Health.Level, report.Health.Detail)
+	}
+}
+
+func TestStatus_Health_LivePass(t *testing.T) {
+	verify.CheckDeadline = 200 * time.Millisecond
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	port := l.Addr().(*net.TCPAddr).Port
+
+	dir, bp, reg, wtPath := initStatusRepo(t)
+	bp.Services = map[string]blueprint.ServiceDef{
+		"redis": {Isolation: blueprint.IsolationDedicated, Ports: map[string]blueprint.PortDef{"6379": {Var: "REDIS_PORT"}}},
+	}
+	rec := registry.InstanceRecord{
+		ID: "i1", Branch: worktree.BranchName("i1"), WorktreePath: wtPath,
+		State: registry.StateRunning, DBName: "plax_i1", BaseRef: "main",
+		Ports: map[string]int{"REDIS_PORT": port},
+	}
+	if err := reg.AddInstance("i1", rec); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir, CurrentStamp: reg.BlueprintStamp}
+	report, err := Build(context.Background(), deps, "i1")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if report.Health.Level != OK {
+		t.Errorf("health = %s, want ok: %s", report.Health.Level, report.Health.Detail)
+	}
+}
+
+func TestStatus_Health_LiveFail_DeadProcess(t *testing.T) {
+	dir, bp, reg, wtPath := initStatusRepo(t)
+	rec := registry.InstanceRecord{
+		ID: "i1", Branch: worktree.BranchName("i1"), WorktreePath: wtPath,
+		State: registry.StateRunning, DBName: "plax_i1", BaseRef: "main",
+		PIDs: map[string]int{"app": 999999999},
+	}
+	// A stored "healthy" value must not mask a live failure.
+	rec.Health = registry.HealthHealthy
+	if err := reg.AddInstance("i1", rec); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir, CurrentStamp: reg.BlueprintStamp}
+	report, err := Build(context.Background(), deps, "i1")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if report.Health.Level != Drift {
+		t.Errorf("health = %s, want drift despite stored healthy: %s", report.Health.Level, report.Health.Detail)
 	}
 }

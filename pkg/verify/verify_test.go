@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/derive/postgres"
@@ -229,20 +230,29 @@ func TestVerify_EnvNoScrubbedLeaks_PlaceholderValue_Ignored(t *testing.T) {
 	}
 }
 
-func TestVerify_Services_TCPReachable(t *testing.T) {
+// listen opens a listener on a random loopback port and returns that port,
+// closing the listener when the test finishes. It lets CheckServices probe a
+// genuinely reachable endpoint.
+func listen(t *testing.T) int {
+	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = l.Close() })
-	port := l.Addr().(*net.TCPAddr).Port
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+func TestVerify_Services_TCPReachable(t *testing.T) {
+	CheckDeadline = 200 * time.Millisecond
+	port := listen(t)
 
 	services := map[string]blueprint.ServiceDef{
 		"redis": {Isolation: blueprint.IsolationDedicated, Ports: map[string]blueprint.PortDef{"6379": {Var: "REDIS_PORT"}}},
 	}
 	allocated := map[string]int{"REDIS_PORT": port}
 
-	results := CheckServices(context.Background(), services, allocated)
+	results := CheckServices(context.Background(), services, nil, allocated)
 	for _, r := range results {
 		if !r.Passed {
 			t.Errorf("unexpected failure: %s: %s", r.Check, r.Detail)
@@ -251,12 +261,13 @@ func TestVerify_Services_TCPReachable(t *testing.T) {
 }
 
 func TestVerify_Services_TCPUnreachable(t *testing.T) {
+	CheckDeadline = 200 * time.Millisecond
 	services := map[string]blueprint.ServiceDef{
 		"redis": {Isolation: blueprint.IsolationDedicated, Ports: map[string]blueprint.PortDef{"6379": {Var: "REDIS_PORT"}}},
 	}
 	allocated := map[string]int{"REDIS_PORT": 19999}
 
-	results := CheckServices(context.Background(), services, allocated)
+	results := CheckServices(context.Background(), services, nil, allocated)
 	found := false
 	for _, r := range results {
 		if r.Check == "tcp-reachability" && !r.Passed {
@@ -273,9 +284,85 @@ func TestVerify_Services_NoDedicatedServices(t *testing.T) {
 	services := map[string]blueprint.ServiceDef{
 		"db": {Isolation: blueprint.IsolationLogical, Type: "postgres"},
 	}
-	results := CheckServices(context.Background(), services, nil)
+	results := CheckServices(context.Background(), services, nil, nil)
 	if len(results) > 0 {
 		t.Errorf("expected no results for logical services, got %v", results)
+	}
+}
+
+func TestVerify_Services_ProcessPortReachable(t *testing.T) {
+	CheckDeadline = 200 * time.Millisecond
+	port := listen(t)
+
+	processes := []blueprint.ProcessDef{{Name: "app", PortVar: "PORT"}}
+	allocated := map[string]int{"PORT": port}
+
+	results := CheckServices(context.Background(), nil, processes, allocated)
+	if len(results) != 1 || !results[0].Passed {
+		t.Fatalf("expected one passing result, got %v", results)
+	}
+}
+
+func TestVerify_Services_ProcessPortUnreachable(t *testing.T) {
+	CheckDeadline = 200 * time.Millisecond
+	processes := []blueprint.ProcessDef{{Name: "app", PortVar: "PORT"}}
+	allocated := map[string]int{"PORT": 19999}
+
+	results := CheckServices(context.Background(), nil, processes, allocated)
+	found := false
+	for _, r := range results {
+		if r.Check == "tcp-reachability" && !r.Passed && r.Artifact == "127.0.0.1:19999" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected tcp-reachability failure for process port")
+	}
+}
+
+func TestVerify_Services_MixedServiceAndProcess(t *testing.T) {
+	CheckDeadline = 200 * time.Millisecond
+	svcPort := listen(t)
+	procPort := listen(t)
+
+	services := map[string]blueprint.ServiceDef{
+		"redis": {Isolation: blueprint.IsolationDedicated, Ports: map[string]blueprint.PortDef{"6379": {Var: "REDIS_PORT"}}},
+	}
+	processes := []blueprint.ProcessDef{{Name: "app", PortVar: "PORT"}}
+	allocated := map[string]int{"REDIS_PORT": svcPort, "PORT": procPort}
+
+	results := CheckServices(context.Background(), services, processes, allocated)
+	if len(results) != 1 || !results[0].Passed {
+		t.Fatalf("expected one passing result covering both endpoints, got %v", results)
+	}
+	if !strings.Contains(results[0].Detail, "2 endpoints") {
+		t.Errorf("expected both endpoints counted, detail = %q", results[0].Detail)
+	}
+}
+
+func TestVerify_Services_UnallocatedPortSkipped(t *testing.T) {
+	CheckDeadline = 200 * time.Millisecond
+	services := map[string]blueprint.ServiceDef{
+		"redis": {Isolation: blueprint.IsolationDedicated, Ports: map[string]blueprint.PortDef{"6379": {Var: "REDIS_PORT"}}},
+	}
+	results := CheckServices(context.Background(), services, nil, nil)
+	if len(results) > 0 {
+		t.Errorf("expected no results for unallocated ports, got %v", results)
+	}
+}
+
+func TestVerify_Services_CtxCancelReturnsFailures(t *testing.T) {
+	CheckDeadline = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	processes := []blueprint.ProcessDef{{Name: "app", PortVar: "PORT"}}
+	allocated := map[string]int{"PORT": 19999}
+
+	results := CheckServices(ctx, nil, processes, allocated)
+	if len(results) == 0 || results[0].Passed {
+		t.Errorf("expected failure result on cancelled context, got %v", results)
 	}
 }
 
@@ -392,6 +479,54 @@ func TestVerify_RunVerify_AggregatesResults(t *testing.T) {
 	}
 	if rec.VerifiedAt == nil {
 		t.Error("VerifiedAt should be set")
+	}
+}
+
+func TestVerify_RunVerify_RuntimeChecksGatesTCPProbe(t *testing.T) {
+	CheckDeadline = 200 * time.Millisecond
+	bp := &blueprint.Blueprint{
+		Env:       blueprint.EnvConfig{Template: ".env.example"},
+		Processes: []blueprint.ProcessDef{{Name: "app", PortVar: "PORT"}},
+	}
+
+	run := func(runtime bool) []CheckResult {
+		runDir := t.TempDir()
+		writeFile(t, filepath.Join(runDir, ".env.example"), "PORT=3000\n")
+		writeFile(t, filepath.Join(runDir, ".env"), "PORT=3000\n")
+		reg := openTestRegistry(t, runDir)
+		_ = reg.AddInstance("i1", registry.InstanceRecord{
+			State:        registry.StateRunning,
+			WorktreePath: runDir,
+			Ports:        map[string]int{"PORT": 19999},
+			PIDs:         map[string]int{"app": 999999999},
+		})
+		_ = reg.Save()
+		t.Cleanup(reg.Close)
+		deps := &Deps{
+			Blueprint:     bp,
+			Registry:      reg,
+			BM:            &fakeBM{},
+			RepoRoot:      runDir,
+			RuntimeChecks: runtime,
+		}
+		results, _ := RunVerify(context.Background(), deps, "i1")
+		return results
+	}
+
+	for _, r := range run(false) {
+		if r.Check == "tcp-reachability" {
+			t.Fatalf("tcp probe should be skipped when RuntimeChecks is false: %v", r)
+		}
+	}
+	found := false
+	for _, r := range run(true) {
+		if r.Check == "tcp-reachability" && !r.Passed {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected tcp-reachability failure when RuntimeChecks is true")
 	}
 }
 

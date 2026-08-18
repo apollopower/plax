@@ -8,12 +8,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/derive/postgres"
+	"github.com/apollopower/plax/pkg/process"
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/toolchain"
+	"github.com/apollopower/plax/pkg/verify"
 	"github.com/apollopower/plax/pkg/worktree"
 )
 
@@ -70,7 +71,7 @@ func Build(ctx context.Context, deps *Deps, name string) (*Report, error) {
 	report.Code = codeDrift(deps.RepoRoot, base, &rec)
 	report.Host = hostDrift(deps.RepoRoot, deps.Blueprint, &rec)
 	report.Config = configDrift(deps.Registry, deps.CurrentStamp)
-	report.Health = healthDrift(&rec)
+	report.Health = LiveHealth(ctx, deps.Blueprint, &rec)
 
 	migrationsDir := deps.Blueprint.Seed.MigrationsDir
 	if migrationsDir == "" {
@@ -215,37 +216,39 @@ func hostDrift(repoRoot string, bp *blueprint.Blueprint, rec *registry.InstanceR
 	return d
 }
 
-func healthDrift(rec *registry.InstanceRecord) Dimension {
+// LiveHealth probes the instance's running workloads directly rather than
+// reading the stored rec.Health snapshot. Suspended instances have no runtime
+// to probe. A read, it never writes the registry. Exported so both status.Build
+// and `plax ls` compute health identically.
+func LiveHealth(ctx context.Context, bp *blueprint.Blueprint, rec *registry.InstanceRecord) Dimension {
 	var d Dimension
-	switch rec.Health {
-	case registry.HealthHealthy:
-		d.Level = OK
-		d.Detail = "healthy"
-	case registry.HealthUnhealthy:
-		d.Level = Drift
-		d.Detail = "unhealthy"
-		if rec.VerifiedAt != nil {
-			d.Detail += fmt.Sprintf(" (last verified %s)", formatTimeAgo(*rec.VerifiedAt))
+	if rec.State == registry.StateSuspended {
+		d.Level = Unknown
+		d.Detail = "suspended"
+		return d
+	}
+
+	results := verify.CheckServices(ctx, bp.Services, bp.Processes, rec.Ports)
+	results = append(results, verify.CheckProcesses(rec.PIDs, process.IsAlive)...)
+
+	var failures []string
+	for _, r := range results {
+		if !r.Passed {
+			failures = append(failures, r.Detail)
 		}
+	}
+	switch {
+	case len(failures) > 0:
+		d.Level = Drift
+		d.Detail = strings.Join(failures, "; ")
+	case len(results) > 0:
+		d.Level = OK
+		d.Detail = "live checks passed"
 	default:
 		d.Level = Unknown
-		d.Detail = "never verified"
+		d.Detail = "no runtime checks defined"
 	}
 	return d
-}
-
-func formatTimeAgo(t time.Time) string {
-	d := time.Since(t)
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%ds ago", int(d.Seconds()))
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-	}
 }
 
 func configDrift(reg *registry.Registry, current registry.BlueprintStamp) Dimension {

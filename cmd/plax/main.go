@@ -535,6 +535,9 @@ func runLs(cmd LsCmd) error {
 	}
 	sort.Strings(names)
 
+	ctx := context.Background()
+	health := liveHealthForInstances(ctx, bp, reg.Instances)
+
 	for _, name := range names {
 		rec := reg.Instances[name]
 		ports := formatPorts(rec.Ports)
@@ -544,11 +547,53 @@ func runLs(cmd LsCmd) error {
 		if mailErr != nil {
 			mailStr = "?"
 		}
-		healthStr := formatHealth(rec.Health)
+		healthStr := formatHealth(health[name])
 		fmt.Printf("%-8s %-10s %-20s %-5s %-24s %-10s %s\n", name, rec.State, rec.Branch, mailStr, ports, healthStr, age)
 	}
 
 	return nil
+}
+
+// liveHealthForInstances probes each running instance's workloads in parallel
+// and returns a per-instance Health. Suspended instances fall back to their
+// stored value. Probing is bounded by verify.CheckDeadline so a slow workload
+// does not stall ls for the whole instance set.
+func liveHealthForInstances(ctx context.Context, bp *blueprint.Blueprint, instances map[string]registry.InstanceRecord) map[string]registry.Health {
+	out := make(map[string]registry.Health, len(instances))
+	if bp == nil {
+		for name, rec := range instances {
+			out[name] = rec.Health
+		}
+		return out
+	}
+
+	type result struct {
+		name string
+		h    registry.Health
+	}
+	ch := make(chan result, len(instances))
+	for name, rec := range instances {
+		name, rec := name, rec
+		go func() {
+			if rec.State != registry.StateRunning {
+				ch <- result{name, rec.Health}
+				return
+			}
+			var h registry.Health
+			switch status.LiveHealth(ctx, bp, &rec).Level {
+			case status.OK:
+				h = registry.HealthHealthy
+			case status.Drift:
+				h = registry.HealthUnhealthy
+			}
+			ch <- result{name, h}
+		}()
+	}
+	for range instances {
+		r := <-ch
+		out[r.name] = r.h
+	}
+	return out
 }
 
 func runAttach(cmd AttachCmd) error {
@@ -1209,9 +1254,10 @@ func runVerify(cmd VerifyCmd) error {
 	ctx := context.Background()
 
 	vDeps := &verify.Deps{
-		Blueprint: bp,
-		Registry:  reg,
-		RepoRoot:  root,
+		Blueprint:     bp,
+		Registry:      reg,
+		RepoRoot:      root,
+		RuntimeChecks: true,
 	}
 
 	if connStr != "" {
