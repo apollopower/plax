@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -56,6 +57,12 @@ type Deps struct {
 	Registry  *registry.Registry
 	BM        BMInterface
 	RepoRoot  string
+	// RuntimeChecks enables the TCP reachability probe. `up`/`resume` leave it
+	// false: a freshly started app legitimately takes time to bind, so probing
+	// synchronously there would block on readiness and false-flag healthy
+	// instances. The explicit `plax verify` command and the live ls/status
+	// paths set it true, where the bounded poll is the point.
+	RuntimeChecks bool
 }
 
 func RunVerify(ctx context.Context, deps *Deps, name string) ([]CheckResult, error) {
@@ -73,7 +80,9 @@ func RunVerify(ctx context.Context, deps *Deps, name string) ([]CheckResult, err
 	results = append(results, CheckEnv(templatePath, userEnvPath, derivedPath, deps.Blueprint.Env.Holes, scrub)...)
 
 	if rec.State == registry.StateRunning {
-		results = append(results, CheckServices(ctx, deps.Blueprint.Services, rec.Ports)...)
+		if deps.RuntimeChecks {
+			results = append(results, CheckServices(ctx, deps.Blueprint.Services, deps.Blueprint.Processes, rec.Ports)...)
+		}
 		results = append(results, CheckProcesses(rec.PIDs, process.IsAlive)...)
 	}
 
@@ -274,65 +283,104 @@ func checkEnvNoScrubbedLeaks(userEnvPath, derivedEnvPath string, scrub map[strin
 	}}
 }
 
-func CheckServices(ctx context.Context, services map[string]blueprint.ServiceDef, allocated map[string]int) []CheckResult {
-	var results []CheckResult
-	checked := 0
-	for svcName, svc := range services {
-		if svc.Isolation != blueprint.IsolationDedicated {
-			continue
-		}
-		for _, portDef := range svc.Ports {
-			port, ok := allocated[portDef.Var]
-			if !ok {
-				continue
-			}
-			checked++
-			addr := fmt.Sprintf("127.0.0.1:%d", port)
+// CheckPollInterval is how long CheckServices waits between probe attempts.
+// CheckDeadline bounds the whole probe so a slow-to-bind workload has time to
+// answer without blocking the caller indefinitely. Both are vars (not consts)
+// so tests can shrink them.
+var (
+	CheckPollInterval = 500 * time.Millisecond
+	CheckDeadline     = 3 * time.Second
+)
+
+// CheckServices probes the TCP endpoints an instance declares: dedicated
+// service ports and native-process PortVar ports. It polls until all are
+// reachable, the deadline passes, or the context is cancelled. A workload that
+// is still starting up is given CheckDeadline to bind before being reported
+// down.
+func CheckServices(ctx context.Context, services map[string]blueprint.ServiceDef, processes []blueprint.ProcessDef, allocated map[string]int) []CheckResult {
+	endpoints := tcpEndpoints(services, processes, allocated)
+	if len(endpoints) == 0 {
+		return nil
+	}
+
+	deadline := time.Now().Add(CheckDeadline)
+	for {
+		var failed []tcpEndpoint
+		for _, ep := range endpoints {
+			addr := "127.0.0.1:" + strconv.Itoa(ep.port)
 			conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 			if err == nil {
 				_ = conn.Close()
 				continue
 			}
-			if isRefused(err) {
-				time.Sleep(1 * time.Second)
-				conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-				if err == nil {
-					_ = conn.Close()
-					continue
-				}
-			}
-			detail := fmt.Sprintf("service %s on port %d is not reachable", svcName, port)
-			if isTimeout(err) {
-				detail = fmt.Sprintf("service %s on port %d timed out after 2s", svcName, port)
-			}
-			results = append(results, CheckResult{
-				Check: "tcp-reachability", Layer: 1, Passed: false,
-				Detail: detail, Artifact: addr,
-			})
+			failed = append(failed, ep)
+		}
+		if len(failed) == 0 {
+			return []CheckResult{{
+				Check: "tcp-reachability", Layer: 1, Passed: true,
+				Detail: fmt.Sprintf("all %d %s reachable", len(endpoints), endpointNoun(len(endpoints))),
+			}}
+		}
+		if time.Now().After(deadline) {
+			return tcpFailures(failed)
+		}
+		select {
+		case <-ctx.Done():
+			return tcpFailures(failed)
+		case <-time.After(CheckPollInterval):
 		}
 	}
-	if len(results) > 0 {
-		return results
-	}
-	if checked == 0 {
-		return nil
-	}
-	noun := "service endpoints"
-	if checked == 1 {
-		noun = "service endpoint"
-	}
-	return []CheckResult{{
-		Check: "tcp-reachability", Layer: 1, Passed: true,
-		Detail: fmt.Sprintf("all %d %s reachable", checked, noun),
-	}}
 }
 
-func isRefused(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "connection refused")
+type tcpEndpoint struct {
+	name string
+	port int
 }
 
-func isTimeout(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "i/o timeout")
+// tcpEndpoints collects the port-bearing endpoints from dedicated services and
+// processes, using the per-instance allocation map. A port var with no
+// allocation is skipped.
+func tcpEndpoints(services map[string]blueprint.ServiceDef, processes []blueprint.ProcessDef, allocated map[string]int) []tcpEndpoint {
+	var eps []tcpEndpoint
+	for svcName, svc := range services {
+		if svc.Isolation != blueprint.IsolationDedicated {
+			continue
+		}
+		for _, portDef := range svc.Ports {
+			if port, ok := allocated[portDef.Var]; ok {
+				eps = append(eps, tcpEndpoint{name: svcName, port: port})
+			}
+		}
+	}
+	for _, proc := range processes {
+		if proc.PortVar == "" {
+			continue
+		}
+		if port, ok := allocated[proc.PortVar]; ok {
+			eps = append(eps, tcpEndpoint{name: proc.Name, port: port})
+		}
+	}
+	return eps
+}
+
+func tcpFailures(endpoints []tcpEndpoint) []CheckResult {
+	results := make([]CheckResult, 0, len(endpoints))
+	for _, ep := range endpoints {
+		addr := "127.0.0.1:" + strconv.Itoa(ep.port)
+		results = append(results, CheckResult{
+			Check: "tcp-reachability", Layer: 1, Passed: false,
+			Detail:   fmt.Sprintf("endpoint %s on port %d is not reachable", ep.name, ep.port),
+			Artifact: addr,
+		})
+	}
+	return results
+}
+
+func endpointNoun(n int) string {
+	if n == 1 {
+		return "endpoint"
+	}
+	return "endpoints"
 }
 
 func CheckProcesses(pids map[string]int, isAlive func(int) bool) []CheckResult {
