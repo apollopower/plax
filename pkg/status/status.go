@@ -89,7 +89,7 @@ func Build(ctx context.Context, deps *Deps, name string) (*Report, error) {
 	// tracking table when configured, so it must run even if the provenance
 	// fetch failed. dataDrift still reads provenance version numbers and stays
 	// gated on provErr.
-	report.Schema = schemaDrift(ctx, deps.RepoRoot, base, migrationsDir, deps.Blueprint.Seed.AppliedMigrations, deps.BM, &rec, prov)
+	report.Schema = schemaDrift(ctx, deps.RepoRoot, base, migrationsDir, deps.Blueprint.Seed.AppliedMigrations, deps.BM, &rec, prov, provErr)
 	if provErr != nil {
 		report.Data = Dimension{Level: Unknown, Detail: fmt.Sprintf("instance provenance: %v", provErr)}
 	} else {
@@ -290,13 +290,13 @@ func configDrift(reg *registry.Registry, current registry.BlueprintStamp) Dimens
 // against the worktree files (liveSchemaDrift); otherwise it falls back to
 // comparing the frozen clone-time stamp (legacySchemaDrift). The prov
 // parameter is used only by the legacy fallback.
-func schemaDrift(ctx context.Context, repoRoot, base, migrationsDir string, am *blueprint.AppliedMigrations, bm BaseManager, rec *registry.InstanceRecord, prov *postgres.ProvenanceRow) Dimension {
+func schemaDrift(ctx context.Context, repoRoot, base, migrationsDir string, am *blueprint.AppliedMigrations, bm BaseManager, rec *registry.InstanceRecord, prov *postgres.ProvenanceRow, provErr error) Dimension {
 	var d Dimension
 
 	if am == nil {
 		// Legacy fallback: bail out before any git work when the stamp is
 		// unavailable, matching the pre-live-tracking behaviour.
-		if d, unavailable := legacyUnavailable(bm, prov); unavailable {
+		if d, unavailable := legacyUnavailable(bm, prov, provErr); unavailable {
 			return d
 		}
 	}
@@ -338,12 +338,14 @@ func schemaDrift(ctx context.Context, repoRoot, base, migrationsDir string, am *
 // legacyUnavailable reports whether the legacy stamp comparison cannot run
 // (no postgres, no provenance row, or no recorded schema hash) and, if so,
 // returns the corresponding Unknown dimension.
-func legacyUnavailable(bm BaseManager, prov *postgres.ProvenanceRow) (Dimension, bool) {
-	if bm != nil && prov != nil && prov.SchemaHash != "" {
+func legacyUnavailable(bm BaseManager, prov *postgres.ProvenanceRow, provErr error) (Dimension, bool) {
+	if provErr == nil && bm != nil && prov != nil && prov.SchemaHash != "" {
 		return Dimension{}, false
 	}
 	d := Dimension{Level: Unknown}
 	switch {
+	case provErr != nil:
+		d.Detail = fmt.Sprintf("instance provenance: %v", provErr)
 	case bm == nil:
 		d.Detail = "postgres unreachable"
 	case prov == nil:
@@ -360,9 +362,6 @@ func legacyUnavailable(bm BaseManager, prov *postgres.ProvenanceRow) (Dimension,
 // seed.applied_migrations.
 func legacySchemaDrift(repoRoot, base, migrationsDir string, usingWorktreeHead bool, bm BaseManager, prov *postgres.ProvenanceRow, names []string) Dimension {
 	var d Dimension
-	if d, unavailable := legacyUnavailable(bm, prov); unavailable {
-		return d
-	}
 
 	repoHash := postgres.HashMigrationNames(names)
 

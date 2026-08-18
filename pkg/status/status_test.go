@@ -335,7 +335,7 @@ func schemaDriftResult(t *testing.T, repoRoot, baseRef string, bm BaseManager, a
 		WorktreePath: wtPath,
 		DBName:       "plax_schema",
 	}
-	return schemaDrift(context.Background(), repoRoot, baseRef, "src/db/migrations", am, bm, rec, prov)
+	return schemaDrift(context.Background(), repoRoot, baseRef, "src/db/migrations", am, bm, rec, prov, nil)
 }
 
 func TestStatus_SchemaDriftBaseAhead(t *testing.T) {
