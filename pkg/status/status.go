@@ -285,8 +285,21 @@ func configDrift(reg *registry.Registry, current registry.BlueprintStamp) Dimens
 	return d
 }
 
+// schemaDrift reports schema drift for an instance. When the blueprint
+// declares seed.applied_migrations it compares the live applied-migration set
+// against the worktree files (liveSchemaDrift); otherwise it falls back to
+// comparing the frozen clone-time stamp (legacySchemaDrift). The prov
+// parameter is used only by the legacy fallback.
 func schemaDrift(ctx context.Context, repoRoot, base, migrationsDir string, am *blueprint.AppliedMigrations, bm BaseManager, rec *registry.InstanceRecord, prov *postgres.ProvenanceRow) Dimension {
 	var d Dimension
+
+	if am == nil {
+		// Legacy fallback: bail out before any git work when the stamp is
+		// unavailable, matching the pre-live-tracking behaviour.
+		if d, unavailable := legacyUnavailable(bm, prov); unavailable {
+			return d
+		}
+	}
 
 	if base == "" {
 		d.Level = Unknown
@@ -322,22 +335,32 @@ func schemaDrift(ctx context.Context, repoRoot, base, migrationsDir string, am *
 	return liveSchemaDrift(ctx, am, bm, rec.DBName, names, usingWorktreeHead)
 }
 
+// legacyUnavailable reports whether the legacy stamp comparison cannot run
+// (no postgres, no provenance row, or no recorded schema hash) and, if so,
+// returns the corresponding Unknown dimension.
+func legacyUnavailable(bm BaseManager, prov *postgres.ProvenanceRow) (Dimension, bool) {
+	if bm != nil && prov != nil && prov.SchemaHash != "" {
+		return Dimension{}, false
+	}
+	d := Dimension{Level: Unknown}
+	switch {
+	case bm == nil:
+		d.Detail = "postgres unreachable"
+	case prov == nil:
+		d.Detail = "no provenance row"
+	default:
+		d.Detail = "no schema hash recorded"
+	}
+	return d, true
+}
+
 // legacySchemaDrift compares the clone-time SchemaHash stamp against the
 // migration files at the worktree HEAD. It is the pre-live-tracking behaviour,
 // kept as the fallback for blueprints that do not declare
 // seed.applied_migrations.
 func legacySchemaDrift(repoRoot, base, migrationsDir string, usingWorktreeHead bool, bm BaseManager, prov *postgres.ProvenanceRow, names []string) Dimension {
 	var d Dimension
-	if bm == nil || prov == nil || prov.SchemaHash == "" {
-		d.Level = Unknown
-		switch {
-		case bm == nil:
-			d.Detail = "postgres unreachable"
-		case prov == nil:
-			d.Detail = "no provenance row"
-		default:
-			d.Detail = "no schema hash recorded"
-		}
+	if d, unavailable := legacyUnavailable(bm, prov); unavailable {
 		return d
 	}
 
