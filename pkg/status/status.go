@@ -240,7 +240,7 @@ func LiveHealth(ctx context.Context, bp *blueprint.Blueprint, rec *registry.Inst
 	switch {
 	case len(failures) > 0:
 		d.Level = Drift
-		d.Detail = failures[0]
+		d.Detail = strings.Join(failures, "; ")
 	case len(results) > 0:
 		d.Level = OK
 		d.Detail = "live checks passed"
