@@ -669,6 +669,9 @@ func TestEndToEnd_ScratchDirectory(t *testing.T) {
 	if !strings.Contains(stderr, "scratch:") {
 		t.Errorf("up summary missing scratch line:\n%s", stderr)
 	}
+	if !strings.Contains(stderr, "psql -d plax_i1") {
+		t.Errorf("up summary missing psql hint:\n%s", stderr)
+	}
 
 	wtPath := filepath.Join(repo, ".plax", "worktrees", "i1")
 	if info, err := os.Stat(filepath.Join(wtPath, "scratch")); err != nil || !info.IsDir() {

@@ -422,7 +422,9 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		if len(dbList) == 1 {
 			label = "  database:"
 		}
-		fmt.Fprintf(os.Stderr, "%s %s\n", label, strings.Join(dbList, ", "))
+		// psql hint names the primary clone so the DB is reachable for
+		// investigation without opening the registry.
+		fmt.Fprintf(os.Stderr, "%s %s (psql -d %s)\n", label, strings.Join(dbList, ", "), dbNames[""])
 	}
 	if len(allocated) > 0 {
 		fmt.Fprintf(os.Stderr, "  ports:")
