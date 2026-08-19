@@ -96,6 +96,16 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 		}
 	})
 
+	// Step 1.5: Create the scratch directory. No rollback entry: the
+	// worktree-removal cleanup already removes the whole directory.
+	scratchDir := filepath.Join(worktreePath, "scratch")
+	if err := os.MkdirAll(scratchDir, 0755); err != nil {
+		return fmt.Errorf("scratch: creating directory: %w", err)
+	}
+	if err := worktree.AddExclude(worktreePath, "scratch/"); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot ignore scratch/ in worktree: %v\n", err)
+	}
+
 	// Step 2: Create mailbox directory.
 	if err := mailbox.CreateDir(deps.RepoRoot, name); err != nil {
 		return fmt.Errorf("mailbox: creating directory: %w", err)
@@ -430,6 +440,7 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	if len(pids) > 0 {
 		fmt.Fprintf(os.Stderr, "  logs:      .plax/logs/%s/\n", name)
 	}
+	fmt.Fprintf(os.Stderr, "  scratch:   .plax/worktrees/%s/scratch/\n", name)
 
 	// Step 8.5: Runtime verification — failure keeps the instance up.
 	results, verr := verify.RunVerify(ctx, &verify.Deps{

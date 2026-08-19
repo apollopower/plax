@@ -684,6 +684,216 @@ func TestVerify_VerificationError_Format(t *testing.T) {
 	}
 }
 
+// depIsolationDirs returns a repo root (with a shared node_modules) and a
+// worktree path inside it, both empty of manifests.
+func depIsolationDirs(t *testing.T) (repoRoot, wt string) {
+	t.Helper()
+	repoRoot = t.TempDir()
+	wt = filepath.Join(repoRoot, ".plax", "worktrees", "i1")
+	if err := os.MkdirAll(filepath.Join(repoRoot, "node_modules"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(wt, 0755); err != nil {
+		t.Fatal(err)
+	}
+	return repoRoot, wt
+}
+
+func findDepResult(results []CheckResult) *CheckResult {
+	for i := range results {
+		if results[i].Check == "dependency-isolation" {
+			return &results[i]
+		}
+	}
+	return nil
+}
+
+func TestVerify_DependencyIsolation_SharedTree_ManifestsMatch(t *testing.T) {
+	repoRoot, wt := depIsolationDirs(t)
+	writeFile(t, filepath.Join(repoRoot, "package.json"), `{"a":"1"}`)
+	writeFile(t, filepath.Join(repoRoot, "package-lock.json"), "lock1")
+	writeFile(t, filepath.Join(wt, "package.json"), `{"a":"1"}`)
+	writeFile(t, filepath.Join(wt, "package-lock.json"), "lock1")
+
+	results := CheckDependencyIsolation(repoRoot, wt)
+	r := findDepResult(results)
+	if r == nil {
+		t.Fatalf("no dependency-isolation result in %v", results)
+	}
+	if !r.Passed {
+		t.Errorf("expected pass, got %+v", r)
+	}
+	if len(results) != 1 {
+		t.Errorf("results = %v, want exactly 1", results)
+	}
+	if r.Layer != 1 {
+		t.Errorf("Layer = %d, want 1", r.Layer)
+	}
+}
+
+func TestVerify_DependencyIsolation_SharedTree_ManifestDiffers(t *testing.T) {
+	repoRoot, wt := depIsolationDirs(t)
+	writeFile(t, filepath.Join(repoRoot, "package.json"), `{"a":"1"}`)
+	writeFile(t, filepath.Join(repoRoot, "package-lock.json"), "lock1")
+	writeFile(t, filepath.Join(wt, "package.json"), `{"a":"2"}`)
+	writeFile(t, filepath.Join(wt, "package-lock.json"), "lock1")
+
+	results := CheckDependencyIsolation(repoRoot, wt)
+	if len(results) != 1 {
+		t.Fatalf("results = %v, want exactly 1 failure", results)
+	}
+	if results[0].Passed || results[0].Artifact != "package.json" {
+		t.Errorf("unexpected result: %+v", results[0])
+	}
+}
+
+func TestVerify_DependencyIsolation_SharedTree_LockfileDiffers(t *testing.T) {
+	repoRoot, wt := depIsolationDirs(t)
+	writeFile(t, filepath.Join(repoRoot, "package.json"), `{"a":"1"}`)
+	writeFile(t, filepath.Join(repoRoot, "package-lock.json"), "lock1")
+	writeFile(t, filepath.Join(wt, "package.json"), `{"a":"1"}`)
+	writeFile(t, filepath.Join(wt, "package-lock.json"), "lock2")
+
+	results := CheckDependencyIsolation(repoRoot, wt)
+	if len(results) != 1 {
+		t.Fatalf("results = %v, want exactly 1 failure", results)
+	}
+	if results[0].Passed || results[0].Artifact != "package-lock.json" {
+		t.Errorf("unexpected result: %+v", results[0])
+	}
+}
+
+func TestVerify_DependencyIsolation_LocalNodeModules_Silent(t *testing.T) {
+	repoRoot, wt := depIsolationDirs(t)
+	writeFile(t, filepath.Join(repoRoot, "package.json"), `{"a":"1"}`)
+	writeFile(t, filepath.Join(wt, "package.json"), `{"a":"2"}`)
+	if err := os.MkdirAll(filepath.Join(wt, "node_modules"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if results := CheckDependencyIsolation(repoRoot, wt); len(results) != 0 {
+		t.Errorf("results = %v, want none (own node_modules installed)", results)
+	}
+}
+
+func TestVerify_DependencyIsolation_NoManifests_NoResults(t *testing.T) {
+	repoRoot, wt := depIsolationDirs(t)
+	if results := CheckDependencyIsolation(repoRoot, wt); len(results) != 0 {
+		t.Errorf("results = %v, want none (nothing declared)", results)
+	}
+}
+
+func TestVerify_DependencyIsolation_ParentManifestMissing_Fails(t *testing.T) {
+	repoRoot, wt := depIsolationDirs(t)
+	writeFile(t, filepath.Join(wt, "package.json"), `{"a":"1"}`)
+
+	results := CheckDependencyIsolation(repoRoot, wt)
+	if len(results) != 1 {
+		t.Fatalf("results = %v, want exactly 1 failure", results)
+	}
+	if results[0].Passed || results[0].Artifact != "package.json" {
+		t.Errorf("unexpected result: %+v", results[0])
+	}
+}
+
+func TestVerify_DependencyIsolation_UnreadableManifest_Fails(t *testing.T) {
+	repoRoot, wt := depIsolationDirs(t)
+	manifest := filepath.Join(wt, "package.json")
+	writeFile(t, manifest, `{"a":"1"}`)
+	if err := os.Chmod(manifest, 0000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	defer func() { _ = os.Chmod(manifest, 0644) }()
+
+	results := CheckDependencyIsolation(repoRoot, wt)
+	if len(results) != 1 {
+		t.Fatalf("results = %v, want exactly 1 failure", results)
+	}
+	if results[0].Passed || results[0].Artifact != "package.json" {
+		t.Errorf("unexpected result: %+v", results[0])
+	}
+}
+
+func TestVerify_DependencyIsolation_UnreadableParentManifest_Fails(t *testing.T) {
+	repoRoot, wt := depIsolationDirs(t)
+	parentManifest := filepath.Join(repoRoot, "package.json")
+	writeFile(t, parentManifest, `{"a":"1"}`)
+	writeFile(t, filepath.Join(wt, "package.json"), `{"a":"1"}`)
+	if err := os.Chmod(parentManifest, 0000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	defer func() { _ = os.Chmod(parentManifest, 0644) }()
+
+	results := CheckDependencyIsolation(repoRoot, wt)
+	if len(results) != 1 {
+		t.Fatalf("results = %v, want exactly 1 failure", results)
+	}
+	if results[0].Passed || results[0].Artifact != "package.json" {
+		t.Errorf("unexpected result: %+v", results[0])
+	}
+}
+
+func TestVerify_DependencyIsolation_NoSharedTree_NoResults(t *testing.T) {
+	repoRoot := t.TempDir()
+	wt := filepath.Join(repoRoot, ".plax", "worktrees", "i1")
+	if err := os.MkdirAll(wt, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repoRoot, "package.json"), `{"a":"1"}`)
+	writeFile(t, filepath.Join(wt, "package.json"), `{"a":"2"}`)
+
+	if results := CheckDependencyIsolation(repoRoot, wt); len(results) != 0 {
+		t.Errorf("results = %v, want none (no shared tree)", results)
+	}
+}
+
+func TestVerify_RunVerify_IncludesDependencyCheck(t *testing.T) {
+	repoRoot := t.TempDir()
+	wt := filepath.Join(repoRoot, ".plax", "worktrees", "i1")
+	if err := os.MkdirAll(wt, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repoRoot, "node_modules"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(repoRoot, ".env.example"), "PORT=3000\n")
+	writeFile(t, filepath.Join(repoRoot, ".env"), "")
+	writeFile(t, filepath.Join(wt, ".env"), "PORT=3000\n")
+	writeFile(t, filepath.Join(repoRoot, "package.json"), `{"a":"1"}`)
+	writeFile(t, filepath.Join(wt, "package.json"), `{"a":"2"}`)
+
+	reg := openTestRegistry(t, repoRoot)
+	_ = reg.AddInstance("i1", registry.InstanceRecord{
+		State:        registry.StateRunning,
+		WorktreePath: wt,
+		Ports:        map[string]int{},
+		PIDs:         map[string]int{},
+	})
+	_ = reg.Save()
+
+	deps := &Deps{
+		Blueprint: &blueprint.Blueprint{Env: blueprint.EnvConfig{Template: ".env.example"}},
+		Registry:  reg,
+		BM:        nil,
+		RepoRoot:  repoRoot,
+	}
+
+	_, err := RunVerify(context.Background(), deps, "i1")
+	var vErr *VerificationError
+	if !asVerificationError(err, &vErr) {
+		t.Fatalf("RunVerify: %v, want *VerificationError", err)
+	}
+	r := findDepResult(vErr.Results)
+	if r == nil || r.Passed {
+		t.Errorf("expected failed dependency-isolation in %v", vErr.Results)
+	}
+
+	rec, _ := reg.GetInstance("i1")
+	if rec.Health != registry.HealthUnhealthy {
+		t.Errorf("Health = %q, want unhealthy", rec.Health)
+	}
+}
+
 func TestVerify_RunVerify_HealthUnhealthyPersisted(t *testing.T) {
 	dir := t.TempDir()
 	tmpl := filepath.Join(dir, ".env.example")

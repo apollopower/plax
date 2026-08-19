@@ -645,6 +645,56 @@ func TestEndToEnd_UpWithRef(t *testing.T) {
 	}
 }
 
+// TestEndToEnd_ScratchDirectory verifies that up creates a scratch directory
+// that is ignored by git, and that down removes it.
+func TestEndToEnd_ScratchDirectory(t *testing.T) {
+	pgURL := e2ePrereqs(t)
+	bin := buildPlax(t)
+	repo := initFixtureRepo(t)
+
+	suffix := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(t.Name(), "/", "_"), "#", "_"))
+	t.Setenv("PLAX_BASE_NAME", "plax_e2e_"+suffix)
+
+	_, stderr, err := runPlax(bin, repo, "base", "reset", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("base reset: %v\nstderr: %s", err, stderr)
+	}
+	t.Cleanup(func() { dropBaseDB(t, pgURL) })
+	t.Cleanup(func() { _, _, _ = runPlax(bin, repo, "down", "i1", "--pg-url", pgURL) })
+
+	_, stderr, err = runPlax(bin, repo, "up", "i1", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("up i1: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stderr, "scratch:") {
+		t.Errorf("up summary missing scratch line:\n%s", stderr)
+	}
+
+	wtPath := filepath.Join(repo, ".plax", "worktrees", "i1")
+	if info, err := os.Stat(filepath.Join(wtPath, "scratch")); err != nil || !info.IsDir() {
+		t.Fatalf("scratch dir after up: info=%v err=%v", info, err)
+	}
+
+	// The fixture's tracked .env legitimately shows as modified (the derived
+	// .env differs); scratch must not appear in the status.
+	status := exec.Command("git", "status", "--porcelain")
+	status.Dir = wtPath
+	statusOut, err := status.Output()
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if strings.Contains(string(statusOut), "scratch") {
+		t.Errorf("scratch appears in git status:\n%s", statusOut)
+	}
+
+	if _, _, err := runPlax(bin, repo, "down", "i1", "--pg-url", pgURL); err != nil {
+		t.Fatalf("down i1: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(wtPath, "scratch")); !os.IsNotExist(err) {
+		t.Errorf("scratch residue after down: %v", err)
+	}
+}
+
 // initFixtureRepoWithBranch returns a fixture repo that has an "other-branch"
 // with distinct content from main.
 func initFixtureRepoWithBranch(t *testing.T) string {

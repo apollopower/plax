@@ -4,6 +4,7 @@ package verify
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -78,6 +79,7 @@ func RunVerify(ctx context.Context, deps *Deps, name string) ([]CheckResult, err
 	derivedPath := filepath.Join(rec.WorktreePath, ".env")
 	scrub := BuildScrubSet(deps.Blueprint)
 	results = append(results, CheckEnv(templatePath, userEnvPath, derivedPath, deps.Blueprint.Env.Holes, scrub)...)
+	results = append(results, CheckDependencyIsolation(deps.RepoRoot, rec.WorktreePath)...)
 
 	if rec.State == registry.StateRunning {
 		if deps.RuntimeChecks {
@@ -281,6 +283,91 @@ func checkEnvNoScrubbedLeaks(userEnvPath, derivedEnvPath string, scrub map[strin
 		Check: "env-scrubbed-leaks", Layer: 1, Passed: true,
 		Detail: "no scrubbed values leaked into derived .env",
 	}}
+}
+
+// depManifests are the root dependency-declaration files whose content
+// determines a Node-ecosystem dependency tree. The lockfile entries make
+// the common dependency-bump branch (lockfile-only change) detectable.
+var depManifests = []string{
+	"package.json",
+	"package-lock.json",
+	"npm-shrinkwrap.json",
+	"bun.lockb",
+	"bun.lock",
+	"yarn.lock",
+	"pnpm-lock.yaml",
+}
+
+// CheckDependencyIsolation detects the shared-parent-tree dependency hazard:
+// a worktree without its own node_modules resolves dependencies by climbing
+// up into the parent checkout's tree, so a branch whose manifests diverge
+// from the parent's silently runs the parent's dependencies. The comparison
+// is worktree working tree vs repo-root working tree, as they are on disk —
+// pure file reads, no git.
+//
+// It fires only when the worktree lacks its own node_modules AND the parent
+// has a tree to share: an in-tree install is the deliberate escape hatch,
+// and without a shared tree there is nothing to diverge from.
+func CheckDependencyIsolation(repoRoot, worktreePath string) []CheckResult {
+	if _, err := os.Stat(filepath.Join(worktreePath, "node_modules")); err == nil {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(repoRoot, "node_modules")); err != nil {
+		return nil
+	}
+
+	var results []CheckResult
+	var differing []string
+	present := 0
+	for _, rel := range depManifests {
+		wtData, err := os.ReadFile(filepath.Join(worktreePath, rel))
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			present++
+			results = append(results, CheckResult{
+				Check: "dependency-isolation", Layer: 1, Passed: false,
+				Detail:   fmt.Sprintf("cannot read %s in worktree: %v", rel, err),
+				Artifact: rel,
+			})
+			continue
+		}
+		present++
+		parentData, perr := os.ReadFile(filepath.Join(repoRoot, rel))
+		if perr != nil && !os.IsNotExist(perr) {
+			results = append(results, CheckResult{
+				Check: "dependency-isolation", Layer: 1, Passed: false,
+				Detail:   fmt.Sprintf("cannot read %s in the parent working tree: %v", rel, perr),
+				Artifact: rel,
+			})
+			continue
+		}
+		if os.IsNotExist(perr) || !bytes.Equal(wtData, parentData) {
+			differing = append(differing, rel)
+		}
+	}
+
+	if present == 0 {
+		return nil
+	}
+	if len(results) > 0 {
+		return results
+	}
+	if len(differing) == 0 {
+		return []CheckResult{{
+			Check: "dependency-isolation", Layer: 1, Passed: true,
+			Detail: fmt.Sprintf("%d manifest(s) match the parent tree the instance shares", present),
+		}}
+	}
+	for _, rel := range differing {
+		results = append(results, CheckResult{
+			Check: "dependency-isolation", Layer: 1, Passed: false,
+			Detail:   "instance shares the parent node_modules tree but " + rel + " differs — the instance runs the parent's dependencies, not this branch's. Install in the worktree or rebuild the instance",
+			Artifact: rel,
+		})
+	}
+	return results
 }
 
 // CheckPollInterval is how long CheckServices waits between probe attempts.

@@ -2,6 +2,7 @@
 package worktree
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -124,6 +125,36 @@ func ResolveRef(repoRoot, ref string) (string, error) {
 		return "origin/" + ref, nil
 	}
 	return "", fmt.Errorf("ref %q not found — check the branch name or run 'git fetch'", ref)
+}
+
+// AddExclude appends a pattern to a linked worktree's local exclude file
+// (.git/worktrees/<name>/info/exclude). It never touches the repo's tracked
+// .gitignore. The resolve uses --git-path so it lands in the worktree-local
+// gitdir in every layout, including --separate-git-dir.
+func AddExclude(worktreePath, pattern string) error {
+	cmd := exec.Command("git", "rev-parse", "--git-path", "info/exclude")
+	cmd.Dir = worktreePath
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("worktree: resolve exclude path: %w", err)
+	}
+	excludePath := strings.TrimSpace(string(out))
+
+	data, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("worktree: read exclude file: %w", err)
+	}
+	if bytes.Contains(data, []byte(pattern+"\n")) {
+		return nil
+	}
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
+	data = append(data, []byte(pattern+"\n")...)
+	if err := os.WriteFile(excludePath, data, 0644); err != nil {
+		return fmt.Errorf("worktree: write exclude file: %w", err)
+	}
+	return nil
 }
 
 // Remove removes the worktree and force-deletes the branch.

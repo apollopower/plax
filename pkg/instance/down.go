@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/apollopower/plax/pkg/mailbox"
@@ -107,6 +108,15 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 		netName := "plax-" + name + "-net"
 		if err := deps.Docker.RemoveNetwork(ctx, netName); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: remove network: %v\n", err)
+		}
+	}
+
+	// Step 5.5: Best-effort scratch removal. git worktree remove deletes the
+	// whole directory, so this normally no-ops; it covers a failed worktree
+	// removal stranding a scratch tree full of agent debris.
+	if rec.WorktreePath != "" {
+		if err := os.RemoveAll(filepath.Join(rec.WorktreePath, "scratch")); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: remove scratch: %v\n", err)
 		}
 	}
 
