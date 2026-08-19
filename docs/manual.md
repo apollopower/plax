@@ -18,6 +18,12 @@ run a command inside it. That is the whole lifecycle.
 Plax manages environments. It does not manage agents, windows, panes, or
 sessions. Where you put the terminal is your business.
 
+Isolation earns its cost when agents write. Instances that mutate state —
+running migrations, changing data, exercising write paths — must not share a
+database, so they each get one. For read-only fan-out (running the same test
+suite against the same data), isolation is pure overhead. "One instance per
+agent" is the wrong heuristic; "one instance per mutator" is closer.
+
 ## 2. Installation
 
 ```sh
@@ -428,6 +434,24 @@ existing `.env` and the user's `.env` are preserved; hole values are
 recomputed from the current blueprint and registry. Prints a diff per
 instance and a reminder to restart.
 
+### 5.9 Inspect the instance database
+
+The cloned database is the investigation surface for anything an instance
+does to Postgres. `plax up` prints it in the summary with a ready-to-use
+hint:
+
+```
+instance i1 up
+  database: plax_i1 (psql -d plax_i1)
+```
+
+The instance database is structurally accurate — same schema and data as
+the base at clone time. It is statistically naive: query plans depend on
+`ANALYZE` statistics, table and index sizes, and data volume, none of which
+an instance guarantees. Plax does not run `ANALYZE` on clones; a fresh clone
+inherits the base's statistics. Diagnose plan-dependent, volume-dependent,
+or statistics-dependent queries against production, not the instance.
+
 ## 6. Mailbox
 
 Instances can send each other messages. The mailbox is a directory:
@@ -443,6 +467,12 @@ plax recv otherwork --count 3
 
 Messages survive suspend. Delivery is buffered, not a rendezvous — a
 message to a suspended instance waits on disk until the receiver wakes.
+
+Use the mailbox for routine, low-stakes coordination. Direct agent-to-agent
+handoff propagates errors as efficiently as findings: a claim travels as
+fast as a bug report. Route high-stakes claims — anything that needs
+adjudicating against ground truth agents cannot reach — through the hub
+(the user), who can weigh evidence the instances cannot see.
 
 `ls` shows unread count and health. `attach` prints a notice if messages
 are waiting.
