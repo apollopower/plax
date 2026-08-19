@@ -237,6 +237,8 @@ func initRepo(t *testing.T) string {
 	}
 
 	files := map[string]string{
+		// .env is ignored so the derived .env does not dirty git status.
+		".gitignore":         ".env\n",
 		".env.example":       "PORT=3000\n",
 		".tool-versions":     "golang 1.26\n",
 		"docker-compose.yml": "services: {}\n",
@@ -412,6 +414,77 @@ func TestInstance_UpSuccess(t *testing.T) {
 	}
 	if !process.IsAlive(rec.PIDs["app"]) {
 		t.Error("native process should be alive after up")
+	}
+}
+
+func TestInstance_Up_ScratchCreatedAndExcluded(t *testing.T) {
+	deps, _, _ := testDeps(t, testBlueprint())
+	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
+
+	if err := Up(context.Background(), deps, "i1"); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+
+	rec, _ := deps.Registry.GetInstance("i1")
+	scratch := filepath.Join(rec.WorktreePath, "scratch")
+	if info, err := os.Stat(scratch); err != nil || !info.IsDir() {
+		t.Fatalf("scratch dir after up: info=%v err=%v", info, err)
+	}
+
+	excludeCmd := exec.Command("git", "rev-parse", "--git-path", "info/exclude")
+	excludeCmd.Dir = rec.WorktreePath
+	out, err := excludeCmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --git-path: %v", err)
+	}
+	excludeData, err := os.ReadFile(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatalf("read exclude file: %v", err)
+	}
+	if !strings.Contains(string(excludeData), "scratch/") {
+		t.Errorf("exclude file missing scratch/:\n%s", excludeData)
+	}
+
+	status := exec.Command("git", "status", "--porcelain")
+	status.Dir = rec.WorktreePath
+	statusOut, err := status.Output()
+	if err != nil {
+		t.Fatalf("git status: %v", err)
+	}
+	if len(statusOut) > 0 {
+		t.Errorf("git status not clean after up:\n%s", statusOut)
+	}
+}
+
+func TestInstance_Down_RemovesScratch(t *testing.T) {
+	deps, _, _ := testDeps(t, testBlueprint())
+
+	if err := Up(context.Background(), deps, "i1"); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	rec, _ := deps.Registry.GetInstance("i1")
+	scratch := filepath.Join(rec.WorktreePath, "scratch")
+	if _, err := os.Stat(scratch); err != nil {
+		t.Fatalf("scratch dir after up: %v", err)
+	}
+
+	// Lock the worktrees parent so git worktree remove fails mid-way,
+	// exercising scratch removal independent of worktree deletion.
+	wtParent := filepath.Dir(rec.WorktreePath)
+	if err := os.Chmod(wtParent, 0555); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(wtParent, 0755) })
+
+	if err := Down(context.Background(), deps, "i1"); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	if _, err := os.Stat(scratch); !os.IsNotExist(err) {
+		t.Errorf("scratch residue after down: %v", err)
+	}
+	if _, found := deps.Registry.GetInstance("i1"); found {
+		t.Error("registry still has instance")
 	}
 }
 

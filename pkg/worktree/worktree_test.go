@@ -430,3 +430,98 @@ func seedOriginRef(t *testing.T, repo, name string) {
 		t.Fatalf("seed origin ref: %s", out)
 	}
 }
+
+func infoExcludePath(t *testing.T, worktreePath string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", "--git-path", "info/exclude")
+	cmd.Dir = worktreePath
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse --git-path: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func readFileOrEmpty(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
+}
+
+func TestWorktree_AddExclude_AppendsPattern(t *testing.T) {
+	repo := initRepo(t)
+	wtPath, err := Create(repo, "i1", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	gitignorePath := filepath.Join(repo, ".gitignore")
+	before := readFileOrEmpty(t, gitignorePath)
+
+	if err := AddExclude(wtPath, "scratch/"); err != nil {
+		t.Fatalf("AddExclude: %v", err)
+	}
+
+	data := readFileOrEmpty(t, infoExcludePath(t, wtPath))
+	if !strings.Contains(data, "scratch/") {
+		t.Errorf("exclude file missing pattern:\n%s", data)
+	}
+	if got := readFileOrEmpty(t, gitignorePath); got != before {
+		t.Errorf("repo .gitignore was modified:\n%q != %q", got, before)
+	}
+}
+
+func TestWorktree_AddExclude_Idempotent(t *testing.T) {
+	repo := initRepo(t)
+	wtPath, err := Create(repo, "i1", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := AddExclude(wtPath, "scratch/"); err != nil {
+		t.Fatalf("first AddExclude: %v", err)
+	}
+	excludePath := infoExcludePath(t, wtPath)
+	after := readFileOrEmpty(t, excludePath)
+
+	if err := AddExclude(wtPath, "scratch/"); err != nil {
+		t.Fatalf("second AddExclude: %v", err)
+	}
+	if got := readFileOrEmpty(t, excludePath); got != after {
+		t.Errorf("second call modified the file:\n%s", got)
+	}
+}
+
+func TestWorktree_AddExclude_MissingGitDir(t *testing.T) {
+	if err := AddExclude(t.TempDir(), "scratch/"); err == nil {
+		t.Fatal("expected error for a path that is not a git worktree")
+	}
+}
+
+func TestWorktree_AddExclude_PreservesExistingEntries(t *testing.T) {
+	repo := initRepo(t)
+	wtPath, err := Create(repo, "i1", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	excludePath := infoExcludePath(t, wtPath)
+	if err := os.WriteFile(excludePath, []byte("existing/\n"), 0644); err != nil {
+		t.Fatalf("write exclude file: %v", err)
+	}
+
+	if err := AddExclude(wtPath, "scratch/"); err != nil {
+		t.Fatalf("AddExclude: %v", err)
+	}
+
+	data := readFileOrEmpty(t, excludePath)
+	if !strings.Contains(data, "existing/") {
+		t.Errorf("existing entry lost:\n%s", data)
+	}
+	if !strings.Contains(data, "scratch/") {
+		t.Errorf("pattern not appended:\n%s", data)
+	}
+}
