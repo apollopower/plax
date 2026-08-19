@@ -183,6 +183,8 @@ for rel in depManifests:
     if err: return failure "cannot read <rel> in worktree: <err>"
     present++
     parentData, perr = os.ReadFile(repoRoot/rel)
+    if perr != nil and !IsNotExist(perr):
+        return failure "cannot read <rel> in the parent working tree: <err>"
     if IsNotExist(perr) or !bytes.Equal(wtData, parentData):
         differing.append(rel)
 
@@ -280,6 +282,7 @@ i1:
 | repo root lacks `node_modules` | check returns no results (no shared tree to diverge from) |
 | no manifests present in the worktree | check returns no results (nothing declared) |
 | worktree manifest read error | failure, detail names path and error (cannot verify → fail loudly) |
+| parent manifest read error | failure, detail names path and error — an unreadable file is never reported as "differs" |
 | parent manifest missing or differs | failure per differing file, detail names the relative path |
 | all present manifests identical | pass, detail states the shared tree matches |
 | binary lockfile (`bun.lockb`) | byte comparison — no special handling |
@@ -317,6 +320,9 @@ i1:
   `package.json` the parent lacks → failure naming it.
 - `TestVerify_DependencyIsolation_UnreadableManifest_Fails` — `chmod 000` on
   the worktree manifest → failure naming the path.
+- `TestVerify_DependencyIsolation_UnreadableParentManifest_Fails` — `chmod
+  000` on the parent manifest → failure naming the path, not a "differs"
+  report.
 - `TestVerify_DependencyIsolation_NoSharedTree_NoResults` — repo root without
   `node_modules` (and differing manifests) → no results.
 - `TestVerify_RunVerify_IncludesDependencyCheck` — RunVerify on a record whose

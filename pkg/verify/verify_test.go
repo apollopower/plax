@@ -814,6 +814,25 @@ func TestVerify_DependencyIsolation_UnreadableManifest_Fails(t *testing.T) {
 	}
 }
 
+func TestVerify_DependencyIsolation_UnreadableParentManifest_Fails(t *testing.T) {
+	repoRoot, wt := depIsolationDirs(t)
+	parentManifest := filepath.Join(repoRoot, "package.json")
+	writeFile(t, parentManifest, `{"a":"1"}`)
+	writeFile(t, filepath.Join(wt, "package.json"), `{"a":"1"}`)
+	if err := os.Chmod(parentManifest, 0000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	defer func() { _ = os.Chmod(parentManifest, 0644) }()
+
+	results := CheckDependencyIsolation(repoRoot, wt)
+	if len(results) != 1 {
+		t.Fatalf("results = %v, want exactly 1 failure", results)
+	}
+	if results[0].Passed || results[0].Artifact != "package.json" {
+		t.Errorf("unexpected result: %+v", results[0])
+	}
+}
+
 func TestVerify_DependencyIsolation_NoSharedTree_NoResults(t *testing.T) {
 	repoRoot := t.TempDir()
 	wt := filepath.Join(repoRoot, ".plax", "worktrees", "i1")
@@ -838,6 +857,7 @@ func TestVerify_RunVerify_IncludesDependencyCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(repoRoot, ".env.example"), "PORT=3000\n")
+	writeFile(t, filepath.Join(repoRoot, ".env"), "")
 	writeFile(t, filepath.Join(wt, ".env"), "PORT=3000\n")
 	writeFile(t, filepath.Join(repoRoot, "package.json"), `{"a":"1"}`)
 	writeFile(t, filepath.Join(wt, "package.json"), `{"a":"2"}`)

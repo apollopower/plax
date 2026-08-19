@@ -335,6 +335,14 @@ func CheckDependencyIsolation(repoRoot, worktreePath string) []CheckResult {
 		}
 		present++
 		parentData, perr := os.ReadFile(filepath.Join(repoRoot, rel))
+		if perr != nil && !os.IsNotExist(perr) {
+			results = append(results, CheckResult{
+				Check: "dependency-isolation", Layer: 1, Passed: false,
+				Detail:   fmt.Sprintf("cannot read %s in the parent working tree: %v", rel, perr),
+				Artifact: rel,
+			})
+			continue
+		}
 		if os.IsNotExist(perr) || !bytes.Equal(wtData, parentData) {
 			differing = append(differing, rel)
 		}
