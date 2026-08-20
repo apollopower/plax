@@ -47,10 +47,23 @@ Records go to stdout. Human chatter goes to stderr.
 `--json` is available on `ls`, `status`, `verify`, `doctor`, `send`,
 `recv`, and `base status`.
 
-## Build
+## Install
+
+**Homebrew (macOS and Linux):**
 
 ```sh
-go build -o plax ./cmd/plax
+brew tap apollopower/plax
+brew install plax
+```
+
+**Pre-built binaries:**
+
+Download from the [latest release](https://github.com/apollopower/plax/releases/latest).
+
+**Go install:**
+
+```sh
+go install github.com/apollopower/plax/cmd/plax@latest
 ```
 
 Requires Go 1.26+.
