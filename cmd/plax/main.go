@@ -30,6 +30,12 @@ import (
 	"github.com/apollopower/plax/pkg/worktree"
 )
 
+var (
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
+)
+
 type CLI struct {
 	Init     InitCmd     `cmd:"" help:"Scaffold a blueprint by parsing the repo's docker-compose.yml and .env.example"`
 	Base     BaseCmd     `cmd:"" help:"Manage the shared Postgres base database"`
@@ -173,6 +179,9 @@ func main() {
 		kong.Name("plax"),
 		kong.Description("Run many parallel dev environments for coding agents."),
 		kong.UsageOnError(),
+		kong.Vars{
+			"version": fmt.Sprintf("%s (commit: %s, built: %s)", version, commit, date),
+		},
 	)
 
 	switch ctx.Command() {
