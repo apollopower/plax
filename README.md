@@ -1,5 +1,7 @@
 # plax
 
+[![GitHub release](https://img.shields.io/github/v/release/apollopower/plax)](https://github.com/apollopower/plax/releases/latest)
+
 Run many copies of your repo's development environment at once.
 Each copy gets its own ports, its own database, its own services.
 Built for coding agents working in parallel.
