@@ -1,0 +1,74 @@
+version: 2
+
+project_name: plax
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: plax
+    main: ./cmd/plax
+    binary: plax
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch -}}
+    format_overrides:
+      - goos: darwin
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+    documents:
+      - >-
+        {{ .ProjectName }}_
+        {{- .Version }}_
+        {{- .Os }}_
+        {{- .Arch }}.spdx.json
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+brews:
+  - name: plax
+    repository:
+      owner: apollopower
+      name: homebrew-plax
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    commit_author:
+      name: apollopower
+      email: apollopower@users.noreply.github.com
+    homepage: https://github.com/apollopower/plax
+    description: Parallel, isolated development environments for coding agents
+    license: MIT
