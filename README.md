@@ -72,8 +72,8 @@ Requires Go 1.26+.
 
 ## Documentation
 
+- [Manual](docs/manual.md) — full guide; start with the [Getting Started walkthrough](docs/manual.md#3-getting-started) (install → `plax init` → `plax up` → work → `plax down`)
 - [Design doc](docs/design.md) — architecture, isolation strategies, derivation engine
-- [Manual](docs/manual.md) — full guide for engineers who own and operate plax
 - [Implementation plans](docs/plans/index.md) — phased roadmap with detailed specs
 
 ## License
