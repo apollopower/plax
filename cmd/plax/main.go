@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -27,6 +29,7 @@ import (
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/stamp"
 	"github.com/apollopower/plax/pkg/status"
+	"github.com/apollopower/plax/pkg/upgrade"
 	"github.com/apollopower/plax/pkg/verify"
 	"github.com/apollopower/plax/pkg/worktree"
 )
@@ -70,6 +73,7 @@ type CLI struct {
 	Verify   VerifyCmd   `cmd:"" help:"Run verification checks against an existing instance and update its health state"`
 	Send     SendCmd     `cmd:"" help:"Send a message to an instance's mailbox"`
 	Recv     RecvCmd     `cmd:"" help:"Read and remove messages from an instance's mailbox"`
+	Upgrade  UpgradeCmd  `cmd:"" help:"Update plax to the latest release (honors the install method)"`
 }
 
 type InitCmd struct {
@@ -193,6 +197,11 @@ type RecvCmd struct {
 	JSON  bool   `name:"json" help:"Output as JSON"`
 }
 
+type UpgradeCmd struct {
+	Check bool `name:"check" help:"Report the latest release and update path without changing anything"`
+	Force bool `name:"force" help:"Proceed even when the current version is a dev build"`
+}
+
 func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli,
@@ -245,6 +254,8 @@ func main() {
 		ctx.FatalIfErrorf(runSend(cli.Send))
 	case "recv <name>":
 		ctx.FatalIfErrorf(runRecv(cli.Recv))
+	case "upgrade":
+		ctx.FatalIfErrorf(runUpgrade(cli.Upgrade))
 	default:
 		ctx.FatalIfErrorf(fmt.Errorf("unknown command: %s", ctx.Command()))
 	}
@@ -256,6 +267,151 @@ func main() {
 func runGuide(cmd GuideCmd) error {
 	_, err := fmt.Print(guideDoc)
 	return err
+}
+
+// upgradeRepo is the GitHub repo owning the releases.
+const upgradeRepo = "apollopower/plax"
+
+// runUpgrade drives the install-method-aware self-update. Deliberately
+// stateless like runGuide: it must work in an empty directory, because an
+// outdated binary is exactly when nothing else works.
+func runUpgrade(cmd UpgradeCmd) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("upgrade: resolving executable: %w", err)
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return fmt.Errorf("upgrade: resolving executable: %w", err)
+	}
+
+	method := upgrade.Detect(exe)
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	devBuild := version == "dev"
+	if !cmd.Check && devBuild && !cmd.Force {
+		return errors.New("upgrade: cannot determine current version: dev build — rebuild from source, or pass --force to replace the binary with the latest release")
+	}
+
+	rel, err := upgrade.LatestRelease(client, upgradeRepo)
+	if err != nil {
+		if cmd.Check {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		return fmt.Errorf("upgrade: %w", err)
+	}
+
+	if cmd.Check {
+		return checkUpgrade(method, rel)
+	}
+
+	if rel.Tag == "" {
+		fmt.Println("no releases found")
+		return nil
+	}
+
+	outdated, err := upgrade.Outdated(version, rel.Tag)
+	if err != nil {
+		return fmt.Errorf("upgrade: %w", err)
+	}
+	proceed := outdated || (devBuild && cmd.Force)
+	if !proceed {
+		fmt.Printf("already at latest (%s)\n", rel.Tag)
+		return nil
+	}
+
+	switch method {
+	case upgrade.MethodBrew:
+		os.Exit(upgrade.RunChild([]string{"brew", "upgrade", "plax"}))
+	case upgrade.MethodGoInstall:
+		os.Exit(upgrade.RunChild([]string{"go", "install", "github.com/apollopower/plax/cmd/plax@latest"}))
+	case upgrade.MethodDirect:
+		return upgradeDirect(exe, rel, client)
+	}
+	return fmt.Errorf("upgrade: cannot determine install method")
+}
+
+// checkUpgrade reports current/latest/method and the command an upgrade
+// would run, without writing anything. Exit codes: 0 current, 1 outdated
+// (or a dev build with a release available), 2 lookup failure (handled by
+// the caller).
+func checkUpgrade(method upgrade.Method, rel upgrade.Release) error {
+	fmt.Printf("current: %s\n", version)
+	if rel.Tag == "" {
+		fmt.Println("latest:  none")
+		return nil
+	}
+	fmt.Printf("latest:  %s\n", rel.Tag)
+	fmt.Printf("method:  %s\n", method)
+	fmt.Printf("run:     %s\n", methodCommand(method))
+
+	if version == "dev" {
+		os.Exit(1)
+	}
+	outdated, err := upgrade.Outdated(version, rel.Tag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if outdated {
+		os.Exit(1)
+	}
+	return nil
+}
+
+// methodCommand is the concrete command `plax upgrade` would execute for
+// the install method, shown in check mode.
+func methodCommand(method upgrade.Method) string {
+	switch method {
+	case upgrade.MethodBrew:
+		return "brew upgrade plax"
+	case upgrade.MethodGoInstall:
+		return "go install github.com/apollopower/plax/cmd/plax@latest"
+	default:
+		return "plax upgrade (direct binary replacement)"
+	}
+}
+
+// upgradeDirect downloads the matching release archive, verifies its
+// checksum, and atomically replaces the running binary.
+func upgradeDirect(exe string, rel upgrade.Release, client *http.Client) error {
+	asset, ok := upgrade.AssetFor(rel.Assets, runtime.GOOS, runtime.GOARCH)
+	if !ok {
+		return fmt.Errorf("upgrade: latest release has no archive for %s/%s", runtime.GOOS, runtime.GOARCH)
+	}
+
+	dir := filepath.Dir(exe)
+	archive, err := upgrade.Download(client, asset.URL, dir)
+	if err != nil {
+		return fmt.Errorf("upgrade: %w", err)
+	}
+	defer func() { _ = os.Remove(archive) }()
+
+	sumURL := upgrade.ChecksumsURL(rel.Assets)
+	if sumURL == "" {
+		return errors.New("upgrade: latest release has no checksums.txt — refusing an unverified upgrade")
+	}
+	if err := upgrade.VerifyChecksum(client, archive, sumURL, asset.Name); err != nil {
+		return fmt.Errorf("upgrade: %w", err)
+	}
+
+	extractDir, err := os.MkdirTemp(dir, ".plax-upgrade-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(extractDir) }()
+
+	bin, err := upgrade.ExtractArchive(archive, extractDir)
+	if err != nil {
+		return fmt.Errorf("upgrade: %w", err)
+	}
+	if err := upgrade.AtomicReplace(bin, exe); err != nil {
+		return fmt.Errorf("upgrade: replacing %s: %w", exe, err)
+	}
+
+	fmt.Printf("plax updated: %s → %s\n", version, rel.Tag)
+	return nil
 }
 
 func runInit(cmd InitCmd) error {
