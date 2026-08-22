@@ -45,6 +45,7 @@ the declaration.
     plax rederive              regenerate .env files after blueprint changes
     plax send <name>           write a message to an instance's mailbox
     plax recv <name>           read and remove messages (--all, --count)
+    plax upgrade               update plax to the latest release (--check to report)
 
 Records go to stdout. Human chatter goes to stderr.
 `--json` is available on `ls`, `status`, `verify`, `doctor`, `send`,

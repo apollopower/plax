@@ -154,6 +154,7 @@ usage.
 | `plax rederive` | Regenerate `.env` files for all instances from the current blueprint |
 | `plax send <name>` | Write a message to an instance's mailbox |
 | `plax recv <name>` | Read and remove messages (`--all`, `--count N`) |
+| `plax upgrade` | Update the plax binary to the latest release, honoring the install method (`--check` reports without changing) |
 
 ## Lifecycle states
 

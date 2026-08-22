@@ -49,6 +49,23 @@ go install github.com/apollopower/plax/cmd/plax@latest
 go build -o plax ./cmd/plax
 ```
 
+### 2.1 Upgrading
+
+`plax upgrade` updates the binary to the latest release, using the path
+that matches how it was installed:
+
+- **Homebrew** — runs `brew upgrade plax`
+- **go install** — runs `go install github.com/apollopower/plax/cmd/plax@latest`
+- **Direct binary** — downloads the release archive for your platform,
+  verifies its checksum, and replaces the binary atomically (a running
+  `plax` is replaced safely)
+
+`plax upgrade --check` reports the current and latest versions and the
+command an upgrade would run, without changing anything. Exit codes:
+`0` current, `1` outdated, `2` version lookup failed. A binary built from
+source reports its version as `dev`; `plax upgrade` refuses to update it
+unless `--force` is passed.
+
 You also need:
 
 - **Docker** — every instance gets its own Docker network, and `dedicated`

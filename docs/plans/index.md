@@ -128,6 +128,7 @@ JSON, checked into the repo root as `plax.json`. No comments.
 | 16 | [`16-health-live.md`](16-health-live.md) | `ls`/`status` run live health checks (incl. process ports) instead of reading stale `rec.Health` |
 | 17 | [`17-schema-drift-live.md`](17-schema-drift-live.md) | Schema drift reads live applied migrations from the instance DB instead of a frozen clone-time stamp |
 | 18 | [`18-isolation-hardening.md`](18-isolation-hardening.md) | `scratch/` per worktree (ignored, reported, removed) + `dependency-isolation` check for shared-tree manifest mismatch |
+| 19 | [`19-upgrade.md`](19-upgrade.md) | `plax upgrade`: install-method detection (brew / go install / direct), atomic binary replacement |
 
 ---
 
