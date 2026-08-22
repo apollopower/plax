@@ -3,6 +3,7 @@ package upgrade
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -42,20 +43,23 @@ func AtomicReplace(src, dest string) error {
 	return replaceCopy(src, dest, mode)
 }
 
-// replaceCopy is the cross-device fallback: copy src's bytes into a temp
-// file next to dest, then rename it into place.
+// replaceCopy is the cross-device fallback: stream src's bytes into a temp
+// file next to dest, then rename it into place. Streaming keeps the
+// allocation independent of the binary's size.
 func replaceCopy(src, dest string, mode fs.FileMode) error {
-	data, err := os.ReadFile(src)
+	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = in.Close() }()
+
 	tmp, err := os.CreateTemp(filepath.Dir(dest), ".plax-replace-*")
 	if err != nil {
 		return err
 	}
 	defer func() { _ = os.Remove(tmp.Name()) }()
 
-	if _, err := tmp.Write(data); err != nil {
+	if _, err := io.Copy(tmp, in); err != nil {
 		_ = tmp.Close()
 		return err
 	}

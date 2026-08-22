@@ -80,8 +80,8 @@ func GoBinPath() string {
 // goEnvGOPATH resolves GOPATH the way `go env GOPATH` would: the variable,
 // else $HOME/go. Empty when go is on PATH but refuses to answer.
 func goEnvGOPATH() string {
-	if gobin := os.Getenv("GOPATH"); gobin != "" {
-		return gobin
+	if gopath := os.Getenv("GOPATH"); gopath != "" {
+		return gopath
 	}
 	if gp, err := exec.LookPath("go"); err == nil {
 		ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)

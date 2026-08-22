@@ -321,6 +321,9 @@ func runUpgrade(cmd UpgradeCmd) error {
 		return nil
 	}
 
+	// Deliberately exit with the child's code instead of returning an
+	// error: kong's FatalIfErrorf always exits 1, which would mask a
+	// brew/go failure. Same precedent as runBaseRefresh's os.Exit(2).
 	switch method {
 	case upgrade.MethodBrew:
 		os.Exit(upgrade.RunChild([]string{"brew", "upgrade", "plax"}))
