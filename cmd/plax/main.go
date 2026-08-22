@@ -269,9 +269,6 @@ func runGuide(cmd GuideCmd) error {
 	return err
 }
 
-// upgradeRepo is the GitHub repo owning the releases.
-const upgradeRepo = "apollopower/plax"
-
 // runUpgrade drives the install-method-aware self-update. Deliberately
 // stateless like runGuide: it must work in an empty directory, because an
 // outdated binary is exactly when nothing else works.
@@ -293,7 +290,7 @@ func runUpgrade(cmd UpgradeCmd) error {
 		return errors.New("upgrade: cannot determine current version: dev build — rebuild from source, or pass --force to replace the binary with the latest release")
 	}
 
-	rel, err := upgrade.LatestRelease(client, upgradeRepo)
+	rel, err := upgrade.LatestRelease(client, upgrade.UpgradeRepo)
 	if err != nil {
 		if cmd.Check {
 			fmt.Fprintln(os.Stderr, err)

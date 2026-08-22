@@ -101,7 +101,14 @@ The orchestration (lookup → compare → method dispatch → replace) lives in
 // DefaultAPIBase is the production GitHub REST API base URL; APIBase is a
 // var so tests point it at an httptest server.
 const DefaultAPIBase = "https://api.github.com"
-var APIBase = DefaultAPIBase
+
+// APIBase and UpgradeRepo are the two references to the external system
+// that publishes releases, both vars so a fork or rename can override them
+// at build time (-X ldflags) and tests can point them at local servers.
+var (
+    APIBase     = DefaultAPIBase
+    UpgradeRepo = "apollopower/plax"
+)
 
 // Asset and Release are the decoded latest-release payload.
 type Asset struct {

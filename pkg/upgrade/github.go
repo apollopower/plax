@@ -20,10 +20,16 @@ import (
 // APIBase to it after pointing the variable at an httptest server.
 const DefaultAPIBase = "https://api.github.com"
 
-// APIBase is the GitHub REST API base URL. Tests point it at an httptest
-// server so both the package and the CLI can exercise the lookup flow
-// without network access.
-var APIBase = DefaultAPIBase
+// APIBase and UpgradeRepo are the two references to the external system
+// that publishes releases. Both are vars so a fork or a future rename can
+// override them at build time via -X ldflags, and tests can point them at
+// local servers.
+var (
+	// APIBase is the GitHub REST API base URL.
+	APIBase = DefaultAPIBase
+	// UpgradeRepo is the GitHub repo slug owning the releases.
+	UpgradeRepo = "apollopower/plax"
+)
 
 // Asset is one downloadable file attached to a release.
 type Asset struct {
