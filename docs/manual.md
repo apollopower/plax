@@ -71,6 +71,11 @@ Install the binary ([Installation](#2-installation)) and verify it runs:
 plax --help
 ```
 
+Coding agents should start from `plax guide` instead — it prints the
+complete operational reference (lifecycle states, drift model,
+verification, mailbox IPC) as one markdown document, bundled with the
+binary and independent of any repo.
+
 ### 3.2 Scaffold the blueprint
 
 Every repo that uses plax needs a `plax.json` at its root. Generate one:

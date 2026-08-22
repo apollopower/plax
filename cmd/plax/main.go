@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,8 +37,25 @@ var (
 	date    = "unknown"
 )
 
+//go:embed guide.md
+var guideDoc string
+
+// versionFlag mirrors kong's helpFlag: BeforeReset fires before command
+// resolution, so `plax --version` works without a subcommand.
+type versionFlag bool
+
+func (v versionFlag) IgnoreDefault() {}
+
+func (v versionFlag) BeforeReset(ctx *kong.Context) error {
+	fmt.Printf("plax %s (commit: %s, built: %s)\n", version, commit, date)
+	ctx.Exit(0)
+	return nil
+}
+
 type CLI struct {
+	Version  versionFlag `name:"version" help:"Print version and exit"`
 	Init     InitCmd     `cmd:"" help:"Scaffold a blueprint by parsing the repo's docker-compose.yml and .env.example"`
+	Guide    GuideCmd    `cmd:"" help:"Print the full plax guide for coding agents (markdown)"`
 	Base     BaseCmd     `cmd:"" help:"Manage the shared Postgres base database"`
 	Up       UpCmd       `cmd:"" help:"Create and start an instance"`
 	Down     DownCmd     `cmd:"" help:"Destroy an instance"`
@@ -57,6 +75,8 @@ type CLI struct {
 type InitCmd struct {
 	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
 }
+
+type GuideCmd struct{}
 
 type BaseCmd struct {
 	Create  BaseCreateCmd  `cmd:"" help:"Create an empty base (migrated, no seed data)"`
@@ -187,6 +207,8 @@ func main() {
 	switch ctx.Command() {
 	case "init":
 		ctx.FatalIfErrorf(runInit(cli.Init))
+	case "guide":
+		ctx.FatalIfErrorf(runGuide(cli.Guide))
 	case "base create":
 		ctx.FatalIfErrorf(runBaseCreate(cli.Base.Create))
 	case "base seed":
@@ -226,6 +248,14 @@ func main() {
 	default:
 		ctx.FatalIfErrorf(fmt.Errorf("unknown command: %s", ctx.Command()))
 	}
+}
+
+// runGuide prints the embedded agent-facing reference. Deliberately
+// stateless: no repo root, no registry, no blueprint — it must work in an
+// empty directory so an agent can read it before a repo exists.
+func runGuide(cmd GuideCmd) error {
+	_, err := fmt.Print(guideDoc)
+	return err
 }
 
 func runInit(cmd InitCmd) error {
