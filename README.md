@@ -25,6 +25,7 @@ the declaration.
 ## Commands
 
     plax init                  scaffold plax.json from the repo
+    plax guide                 print the full agent-facing reference (markdown)
     plax up <name>             build and start an instance
     plax up --ref <ref> <name> build from a branch, PR, tag, or commit
     plax down <name>           destroy it
@@ -73,6 +74,7 @@ Requires Go 1.26+.
 ## Documentation
 
 - [Manual](docs/manual.md) — full guide; start with the [Getting Started walkthrough](docs/manual.md#3-getting-started) (install → `plax init` → `plax up` → work → `plax down`)
+- `plax guide` — the same operational semantics, bundled with the binary as a static markdown document for coding agents
 - [Design doc](docs/design.md) — architecture, isolation strategies, derivation engine
 - [Implementation plans](docs/plans/index.md) — phased roadmap with detailed specs
 
