@@ -129,6 +129,7 @@ JSON, checked into the repo root as `plax.json`. No comments.
 | 17 | [`17-schema-drift-live.md`](17-schema-drift-live.md) | Schema drift reads live applied migrations from the instance DB instead of a frozen clone-time stamp |
 | 18 | [`18-isolation-hardening.md`](18-isolation-hardening.md) | `scratch/` per worktree (ignored, reported, removed) + `dependency-isolation` check for shared-tree manifest mismatch |
 | 19 | [`19-upgrade.md`](19-upgrade.md) | `plax upgrade`: install-method detection (brew / go install / direct), atomic binary replacement |
+| 20 | [`20-pooling.md`](20-pooling.md) | `plax pool`: pre-warmed suspended instances — seed/acquire/release/drain/status, drift-classified acquire |
 
 ---
 
