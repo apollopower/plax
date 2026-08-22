@@ -28,14 +28,25 @@ pooled instance is stale in exactly two ways:
 That gives the failsafe bound the triage asked for: **acquire's worst case
 equals the no-pool path** (a fresh `up`), never more. Deep-drift rebuilds
 branch from the instance's recorded `SourceRef` when it still resolves,
-else current HEAD.
+else current HEAD, and **refresh the pool stamp afterwards** so a rebuilt
+member is never classified stale by the next acquire (no rebuild-bounce).
 
 **Pool membership is one flag and four observable states, no ledger.**
 `InstanceRecord.Pooled` is set by `seed` and never cleared by `acquire` or
 `release`. `Pooled && suspended` = available (in the pool); `Pooled &&
 running` = in-use (acquired). The registry already records everything
-`status` needs; no new state store and no registry version bump (`pooled`
-is `omitempty`, so pre-existing registries load unchanged).
+`status` needs; no new state store.
+
+**Registry version bumps to 2 — the `omitempty` silent-strip hazard.**
+`Pooled` is `omitempty` so pre-existing v1 registries load unchanged, but
+that very property is a trap in mixed-version teams: an older binary
+(without the `Pooled` field) reading a pooled registry and writing it back
+would silently drop `pooled` from every record — the pool vanishes with no
+error. The fix is a version bump, not a heuristic guard: `Open` accepts
+version 1 (nothing to migrate structurally; `Pooled` defaults false) and
+writes version 2 on the next `Save`; **any binary that predates this plan
+refuses a v2 registry outright** ("unsupported version 2 (want 1) — run
+'plax upgrade'"). Loud failure beats silent metadata loss.
 
 **Guardrails (finalized in this plan).** `resume` is the only refusal:
 resuming a pooled instance directly would bypass `acquire`, the single
@@ -69,7 +80,7 @@ not exported for reuse.
 
 ## Type specifications
 
-### `pkg/registry/registry.go` — one new field
+### `pkg/registry/registry.go` — one new field, version 1 → 2
 
 ```go
 type InstanceRecord struct {
@@ -83,8 +94,18 @@ type InstanceRecord struct {
 }
 ```
 
-Backward compatible: `omitempty` means old registries and records written by
-older binaries simply lack the field. Registry `Version` stays 1.
+Backward compatible on read: `omitempty` means v1 registries load unchanged
+(`Pooled` defaults false). **Forward compatible by refusal:** `Registry.Version`
+moves to 2; `Open` accepts version 1 (no structural migration needed) and
+writes version 2 on the next `Save`, while pre-pool binaries — which only
+know version 1 — halt on `Open` with "unsupported version 2 (want 1)".
+This is the deliberate trade-off behind the version bump: a pooled registry
+rewritten by an older binary would silently strip `pooled` from every record
+(the `omitempty` trap); a loud halt makes the mixed-version situation
+visible and actionable ("run 'plax upgrade'").
+
+⚠ the version guard must live in `Open` before any mutation: a v2 registry
+   is never opened read-write by an old binary, so it can never be stripped.
 
 ### `pkg/pool/pool.go`
 
@@ -132,9 +153,11 @@ func Release(ctx context.Context, deps *instance.Deps, name string) error
 // running (in use) unless force is set.
 func Drain(ctx context.Context, deps *instance.Deps, force bool) (int, error)
 
-// Counts returns the pool's available/in-use/stale tallies. stale is -1
-// when current is zero-valued (blueprint unavailable — the caller prints
-// unknown).
+// Counts returns the pool's available/in-use/stale tallies. stale counts
+// pooled members while stamp.HasChanged(current, stored). The caller guards
+// blueprint availability: it computes current with stamp.Compute only when
+// a blueprint is loaded and prints "-" (unknown) otherwise — Counts itself
+// has no sentinel values.
 func Counts(reg *registry.Registry, current registry.BlueprintStamp) (available, inUse, stale int)
 ```
 
@@ -187,7 +210,7 @@ for n := 1; ; n++:
 2. session 0: reg := Open; available := len(Available(reg)); reg.Close
 3. toCreate := max(0, n - available)
 4. for i in 1..toCreate:
-     reg := Open(root)                          ⚠ one session per instance: the
+     reg := registry.Open(path)                  ⚠ one session per instance: the
                                                 lock is released between
                                                 instances, so an agent's
                                                 acquire can take pool1 the
@@ -199,11 +222,19 @@ for n := 1; ; n++:
               Docker: docker, RepoRoot: root, SourceRef: ref, ResolvedRef: resolved}
      if err := instance.Up(ctx, deps, name):    ⚠ Up rolls back fully on
          warn; continue                          failure; the slot is skipped
-     if err := instance.Suspend(ctx, deps, name):  ⚠ Up verifies health before
-         warn; continue                          it returns, so pool members
-                                                 are pre-verified
-     rec := reg.Get(name); rec.Pooled = true
-     reg.UpdateInstance(name, rec); reg.Save
+     if err := instance.Suspend(ctx, deps, name):
+         stderr: "warning: suspend %s failed: %v — tearing down"
+         instance.Down(cleanupCtx, deps, name)  ⚠ Up succeeded but Suspend
+         warn; continue                          failed: the member would
+                                                 otherwise sit running and
+                                                 non-pooled, unreachable by
+                                                 acquire/release, occupying
+                                                 its name forever. Down frees
+                                                 the slot (and the ports).
+     rec := reg.GetInstance(name); rec.Pooled = true
+     if err := reg.UpdateInstance(name, rec); err != nil:
+         warn; continue
+     if err := reg.Save(); err != nil: warn; continue
      created = append(created, name); reg.Close
 5. reg := Open; reg.BlueprintStamp = stamp.Compute(root, bp); reg.Save; reg.Close
      ⚠ one stamp covers the whole pool; all members go stale together
@@ -223,9 +254,9 @@ creating anything. Stale members are left in place; `acquire` rebuilds them.
 2. deadline := now + timeout; timeout = 0 → no deadline
 3. waited := false
 4. loop:
-     reg := Open(root)
+     reg := registry.Open(path)
      for name in Available(reg):                ⚠ sorted; lowest first
-         rec := reg.Get(name)
+         rec := reg.GetInstance(name)
          kind := Drift(stamp.Compute(root, bp), reg.BlueprintStamp)
          switch kind:
          case DriftNone:
@@ -244,8 +275,20 @@ creating anything. Stale members are left in place; `acquire` rebuilds them.
              instance.Down(ctx, deps, name)
              err := instance.Up(ctx, upDeps{..., SourceRef: rref, ResolvedRef: resolved}, name)
              if err == nil:
-                 rec = reg.Get(name); rec.Pooled = true
-                 reg.UpdateInstance(name, rec); reg.Save
+                 rec = reg.GetInstance(name); rec.Pooled = true
+                 if err := reg.UpdateInstance(name, rec); err == nil:
+                     reg.BlueprintStamp = stamp.Compute(root, bp)
+                     ⚠ the stamp must be refreshed with the rebuild: leaving
+                       the old stamp would classify the freshly rebuilt
+                       member stale again and the next acquire would tear it
+                       down and rebuild it once more — an infinite
+                       rebuild-bounce. The stamp is repo-root-relative (it
+                       hashes root files), so after the refresh the member
+                       matches by construction.
+                     err = reg.Save()
+                     if err != nil: warn
+                 else:
+                     err = the UpdateInstance error
          if err == nil:
              stdout: name; reg.Close; return name
          stderr: warning; continue              ⚠ a broken member (worktree
@@ -266,13 +309,21 @@ mutating step (resume/rebuild), exactly like every other command holds it
 across its work. Two racing acquirers serialize on the flock: the loser's
 next poll sees the winner's record as running and picks the next member.
 
+⚠ the deep-drift branch is the one slow thing in the hot path: it holds the
+   flock across a full Down+Up (potentially minutes), serializing any
+   concurrent `seed`/`release`/`status` behind it — the same trade-off every
+   long command already makes, but it is also the exact case where the pool
+   is not helping. Rebuilds are rare (they only follow a compose/toolchain
+   change), so this is accepted; `seed`-time refills and `release` are
+   unaffected because they happen while members are healthy.
+
 The acquired instance stays `Pooled: true` with `State: running` — that is
 what `status` counts as in-use.
 
 ### Release
 
 ```
-1. rec := reg.Get(name); !found → error
+1. rec := reg.GetInstance(name); !found → error
 2. !rec.Pooled → error "instance %s is not a pooled instance (created with
    'plax pool seed')"
 3. rec.State == suspended → "instance %s is already in the pool"; exit 0
@@ -300,10 +351,13 @@ permission.
 ### Status
 
 ```
-reg := Open
-current := stamp.Compute(root, bp)   ⚠ blueprint missing → stale reported
-                                     as "-" (Counts gets a zero stamp and
-                                     the caller prints unknown)
+reg := registry.Open(path)
+bp, bpErr := loadBlueprint(root)     ⚠ blueprint unavailable (missing or
+                                     unparseable plax.json) → the caller
+                                     skips stamp.Compute and prints stale
+                                     as "-"; Counts takes no zero-stamp
+                                     sentinel, the guard lives here
+current := stamp.Compute(root, bp)
 available, inUse, stale := Counts(reg, current)
 stdout (table):
   pool:
@@ -388,8 +442,11 @@ destroyed 3 pooled instance(s)
 | Failure | Behavior |
 |---|---|
 | `seed`: `Up` fails for one name | warn; continue remaining slots; exit 1 at the end; successful names still printed |
+| `seed`: `Up` succeeds but `Suspend` fails | tear the member down with `Down` to free the slot (it would otherwise sit running and non-pooled, unreachable by acquire/release); warn; continue; exit 1 at the end |
+| `seed`: `UpdateInstance`/`Save` fails after suspend | the member exists but is unmarked; warn, `Down` it to free the slot, continue |
 | `seed`: base missing or unlocked | `Up` errors per instance; exit 1 |
 | `seed`: name `poolN` collides with a non-pooled user instance | slot skipped with a warning; next free name used |
+| registry on disk is version 2 but this binary predates the pool | `Open` refuses ("unsupported version 2 (want 1)"); every command halts loudly — the old binary must never write a pooled registry (it would strip `pooled`) |
 | `acquire`: pool empty, timeout hit | "no pooled instance available within %s — run 'plax pool seed N' or 'plax up \<name\>'"; exit 1 |
 | `acquire`: `Resume` fails for one candidate (port taken, Docker down, container gone) | warn; try the next available; if none succeeds, return the last error; exit 1 |
 | `acquire`: shallow rederive fails (template missing, derivation error) | warn; try the next available |
@@ -426,9 +483,15 @@ AGENTS.md). A real `registry.Registry` on a `t.TempDir()` and a real
   nil error.
 - `TestPool_Seed_PartialFailure` — fake BM fails on the 2nd `Up` → 1 name
   returned, non-nil error.
-- `TestPool_Seed_ReleasesLockBetweenInstances` — a goroutine acquires `pool1`
-  between seed iterations (observable via the fake's call order / a registry
-  check mid-seed) → interleaving works.
+- `TestPool_Seed_SuspendFailure_DownsMember` — fake `Suspend`-path failure
+  (container stop error) after a successful `Up` → the member is torn down,
+  the slot is free, and a later `Seed` reuses the name. Deterministic: the
+  fake fails on a scripted call count, no timing.
+- `TestPool_Seed_AllowsInterleave` — channel-gated instead of timing-based:
+  the fake Docker driver blocks on a channel after `pool1` suspends; the
+  test runs an `Acquire` against a second registry session (it takes `pool1`
+  while seed is parked), then releases the gate. Asserts no deadlock and a
+  consistent final registry state.
 - `TestPool_Acquire_PicksLowest` — only `pool2` available → returns `pool2`,
   State running, `Pooled` stays true.
 - `TestPool_Acquire_EmptyTimeout` — empty pool, `timeout=50ms` → error naming
@@ -441,8 +504,11 @@ AGENTS.md). A real `registry.Registry` on a `t.TempDir()` and a real
   seed; acquire re-derives the member's `.env` (content asserted) before
   resume, resume succeeds.
 - `TestPool_Acquire_DeepDrift_Rebuilds` — compose hash changed; acquire
-  downs the stale member and ups a fresh one; result is `Pooled=true` and
-  running.
+  downs the stale member and ups a fresh one; result is `Pooled=true`,
+  running, and the registry stamp refreshed to the current inputs.
+- `TestPool_Acquire_DeepDrift_NoRebuildBounce` — after the deep-drift
+  rebuild above, a second `Acquire` classifies the member as current (no
+  drift) and only resumes it — regression for the stale-stamp bounce.
 - `TestPool_Acquire_DeepDrift_RefPreserved` — stale member's `SourceRef`
   still resolves → the rebuild passes that ref to `Up` (fake records it).
 - `TestPool_Acquire_ResumeFail_TriesNext` — fake Docker fails on `pool1`'s
@@ -459,7 +525,16 @@ AGENTS.md). A real `registry.Registry` on a `t.TempDir()` and a real
   returned.
 - `TestPool_Status_Counts` — mix of pooled/running/pooled+suspended/ordinary
   + stale stamp → (available, inUse, stale) correct.
-- `TestPool_Status_UnknownStale` — zero stamp (no blueprint) → stale -1.
+- `TestPool_Status_UnknownStale` — blueprint unavailable → the CLI caller
+  prints stale as "-" (guard lives caller-side; `Counts` takes no sentinel).
+
+### `pkg/registry/registry_test.go`
+
+- `TestRegistry_Version1_LoadsAndMigrates` — a hand-written v1 registry
+  loads; `Save` writes `"version": 2`.
+- `TestRegistry_Version2_Opens` — a v2 registry round-trips (Open + Save).
+- `TestRegistry_UnsupportedVersion_Refuses` — version 3 → error before any
+  mutation (guard placement: Open, not Save).
 
 ### `cmd/plax/main_test.go`
 
@@ -498,7 +573,11 @@ repos with a minimal `plax.json` (patterned on `instance_test.go`'s
       member's `.env` before resuming (verified by file content)
 - [ ] After a `docker-compose.yml` change, `acquire` tears down the stale
       member and rebuilds it (from the recorded ref when it resolves, else
-      current HEAD), keeping it pooled
+      current HEAD), keeping it pooled, and refreshes the registry stamp:
+      a second `acquire` resumes the member without rebuilding it
+- [ ] `plax pool seed` on a member whose `Up` succeeded but `Suspend` failed
+      tears the member down so the slot is reusable (verified: a following
+      seed reuses the name)
 - [ ] `plax pool release <name>` suspends a running member back into the
       pool; release on a non-pooled instance exits 1
 - [ ] `plax pool drain` refuses with a message naming in-use members; with
@@ -512,7 +591,10 @@ repos with a minimal `plax.json` (patterned on `instance_test.go`'s
 - [ ] `plax ls` shows pooled available members with state `pooled` (raw
       registry state stays `suspended`)
 - [ ] Registries written before this change load unchanged; `pooled` is
-      absent from their records (registry version stays 1)
+      absent from their records; the first `Save` writes `"version": 2`
+- [ ] A binary predating this plan refuses a v2 registry on `Open`
+      ("unsupported version 2 (want 1)") — the pooled registry is never
+      read-write-opened by a binary that would strip `pooled`
 - [ ] `go vet ./...` passes
 - [ ] `go test -race -count=1 ./...` passes (with and without
       `PLAX_TEST_POSTGRES_URL`)
