@@ -26,21 +26,226 @@ agent" is the wrong heuristic; "one instance per mutator" is closer.
 
 ## 2. Installation
 
+**Homebrew (macOS and Linux):**
+
+```sh
+brew tap apollopower/plax
+brew install plax
+```
+
+**Pre-built binaries** — download from the
+[latest release](https://github.com/apollopower/plax/releases/latest) and
+put the binary somewhere in your `$PATH`.
+
+**Go install:**
+
+```sh
+go install github.com/apollopower/plax/cmd/plax@latest
+```
+
+**From source** (requires Go 1.26+):
+
 ```sh
 go build -o plax ./cmd/plax
 ```
 
-Copy the binary somewhere in your `$PATH`. Requires Go 1.26+ and Docker.
-For Postgres logical isolation, a reachable Postgres server on
-`localhost:5432` (or wherever `--pg-url` points).
+You also need:
 
-## 3. First setup
+- **Docker** — every instance gets its own Docker network, and `dedicated`
+  services run as per-instance containers.
+- **Postgres** — for logical isolation, a reachable Postgres server on
+  `localhost:5432` (or wherever `--pg-url` points). Plax derives the DSN
+  from the blueprint's logical Postgres service; `--pg-url` overrides it.
+
+## 3. Getting started
+
+The five-minute path from a fresh repo to a running instance. The narrative
+uses a Next.js + Postgres + Redis app called `myapp`; your repo will differ
+in detail but not in shape. Every command runs from the repo root.
+
+### 3.1 Install plax
+
+Install the binary ([Installation](#2-installation)) and verify it runs:
+
+```sh
+plax --help
+```
+
+### 3.2 Scaffold the blueprint
+
+Every repo that uses plax needs a `plax.json` at its root. Generate one:
+
+```sh
+plax init > plax.json
+```
+
+`plax init` parses `docker-compose.yml` and `.env.example` and emits a
+skeleton blueprint on stdout — one entry per service, every env variable
+with its example value, every compose port mapped to a variable. Notices
+and warnings go to stderr, so the redirect only captures the JSON. It also
+appends `.plax/` to `.gitignore`, so instance worktrees are not traversed
+by root-globbing tooling, and warns about tooling configs (tsconfig, jest,
+eslint, …) that glob from the repo root and would traverse every instance.
+
+The skeleton is a starting point, not a finished contract. It cannot know
+your migration command, your seed command, or which services need
+per-instance state. Fill in the gaps before going further:
+
+- **seed.migrate / seed.command / seed.workdir** — how schema and fixtures
+  are loaded into the base
+- **processes** — the commands that start your app and workers
+- **isolation** — whether each service is `logical`, `dedicated`, `shared`,
+  `external`, or `native`
+- **env.holes** — which variables get per-instance values
+
+### 3.3 Inspect plax.json
+
+Open `plax.json` and read it. Every field is documented in
+[The blueprint](#4-the-blueprint); the ones that matter right now:
+
+```json
+{
+  "version": 1,
+  "name": "myapp",
+  "port_pool": { "start": 3000, "end": 4000 },
+  "seed": {
+    "migrate": "bun run db migrate",
+    "command": "bun run db fixtures",
+    "workdir": "."
+  },
+  "services": {
+    "db": {
+      "isolation": "logical",
+      "type": "postgres",
+      "image": "ankane/pgvector:v0.5.0",
+      "env": { "POSTGRES_USER": "postgres", "POSTGRES_PASSWORD": "postgres" }
+    },
+    "redis": {
+      "isolation": "dedicated",
+      "image": "redis:7.2",
+      "ports": { "6379": { "var": "REDIS_PORT" } }
+    }
+  },
+  "processes": [
+    { "name": "app", "isolation": "native", "command": "bun run dev:app",
+      "workdir": ".", "port_var": "PORT", "default_port": 3000 }
+  ],
+  "env": {
+    "template": ".env.example",
+    "holes": {
+      "DATABASE_URL": "postgres://postgres:postgres@localhost:5432/{{DB_NAME}}",
+      "WORKER_REDIS_URL": "redis://localhost:{{REDIS_PORT}}/0",
+      "NEXTAUTH_URL": "http://localhost:{{PORT}}"
+    }
+  }
+}
+```
+
+The `services` block declares what runs in every instance: `db` is
+`logical` (one Postgres database per instance, cloned from the base), and
+`redis` is `dedicated` (one container and port per instance). The
+`env.holes` block is what makes instances differ: `{{DB_NAME}}`, `{{PORT}}`,
+and `{{REDIS_PORT}}` are substituted with per-instance values when `.env`
+is derived.
+
+### 3.4 Prepare the base
+
+Instances are cloned from a shared base database, so it must exist first.
+If your blueprint has a logical Postgres service (as above), run:
+
+```sh
+plax base create
+plax base seed
+```
+
+`base create` creates `plax_base`, applies `seed.migrate`, stamps it with
+provenance, and locks it. `base seed` then loads fixture data with
+`seed.command`. If your Postgres is not on `localhost:5432`, pass `--pg-url`
+to both commands. Repos without a logical Postgres service can skip this
+section. The base is covered in depth in [The base](#5-the-base).
+
+### 3.5 Start an instance
+
+```sh
+plax up i1
+```
+
+One command does the whole lifecycle:
+
+```
+creating branch and worktree...
+creating network plax-i1-net...
+allocating ports...
+deriving .env...
+cloning database plax_i1...
+starting redis...
+starting app...
+
+instance i1 up
+  worktree:  .plax/worktrees/i1
+  branch:    plax/i1
+  database:  plax_i1 (psql -d plax_i1)
+  ports:     PORT=3301 REDIS_PORT=26380
+  logs:      .plax/logs/i1/
+  scratch:   .plax/worktrees/i1/scratch/
+
+verification: 6 check(s) passed
+```
+
+Your app is now running in `.plax/worktrees/i1`, on its own ports, against
+its own database. Nothing about it can collide with the primary checkout —
+that is the point. `plax up` verifies what it started before reporting
+success; the check count varies with the blueprint.
+
+### 3.6 Work inside the instance
+
+```sh
+plax ls
+plax status i1
+plax exec i1 -- bun run test
+plax attach i1
+```
+
+- `plax ls` — list all instances, their state, and live health.
+- `plax status i1` — the six-dimension drift report: code, schema, data,
+  host, config, and live health.
+- `plax exec i1 -- <cmd>` — run one command in the instance's worktree with
+  its `.env` loaded, non-interactively.
+- `plax attach i1` — an interactive shell in the same context. This is
+  where you live while working in the instance.
+
+### 3.7 Add a second instance
+
+Parallelism is the feature, so create another:
+
+```sh
+plax up i2
+```
+
+`i2` gets its own branch, worktree, ports, container, and database
+(`plax_i2`). Both instances run at once, writing to separate state. This is
+how multiple agents work the same repo without colliding.
+
+### 3.8 Tear down
+
+```sh
+plax down i1
+```
+
+Kills the processes, removes the container and network, drops the database,
+and deletes the worktree and branch. Every step tolerates missing resources,
+so teardown works even when Docker or Postgres is down.
+
+That is the whole loop: `init` once, then `up`, work, `down` as often as you
+like. The rest of this manual documents the surface in full.
+
+## 4. The blueprint
 
 Every repo that uses plax needs a `plax.json` at its root. This file is the
 contract between the repo and the tool. It says what an instance needs;
 the tool reads it and does what it says.
 
-### 3.1 Scaffold
+### 4.1 Scaffold
 
 ```sh
 plax init > plax.json
@@ -56,10 +261,10 @@ The skeleton is intentionally incomplete. You must fill in:
 - **seed.command** — how to load fixture data into the base
 - **seed.migrate** — how to run schema migrations
 - **isolation** — whether each service is `logical`, `dedicated`, `shared`,
-  or `native`
+  `external`, or `native`
 - **env.holes** — which variables get per-instance values
 
-### 3.2 The blueprint
+### 4.2 The blueprint
 
 A complete `plax.json` for a Next.js + Postgres + Redis repo:
 
@@ -124,7 +329,7 @@ A complete `plax.json` for a Next.js + Postgres + Redis repo:
 }
 ```
 
-### 3.3 Blueprint fields
+### 4.3 Blueprint fields
 
 **version** — Always `1`.
 
@@ -145,10 +350,18 @@ was created and to detect drift later.
 - `workdir` — directory to run both commands in
 - `migrations_dir` — where migration files live (default `src/db/migrations`); used
   by drift detection to compare applied migrations against the files on disk
+- `applied_migrations` — optional `{ "table", "column" }` pointing at the
+  framework's migration-tracking table (e.g. `pgmigrations`). When set,
+  schema drift reads the migrations actually applied to the instance
+  database, so drift correctly clears after an in-worktree migration.
+  When absent, plax falls back to comparing the clone-time migration-file
+  hash. Repos whose migration runner does not track applied migrations in
+  a table (plain `psql -f file.sql`, for example) have no tracking table
+  and should leave this unset.
 
 **services** — Map of service name to definition. Each service declares:
 
-- `isolation` — one of `logical`, `dedicated`, `shared`, `native`
+- `isolation` — one of `logical`, `dedicated`, `shared`, `external`, `native`
 - `type` — driver type (only `postgres` exists today; required for
   `logical`)
 - `image` — Docker image (required for `dedicated`)
@@ -188,7 +401,7 @@ was created and to detect drift later.
   propagating into instances. `plax verify` checks that scrubbed keys
   do not leak through, including under a different key name.
 
-### 3.4 Isolation strategies
+### 4.4 Isolation strategies
 
 **logical** — One server, one database per instance. Postgres clones via
 `CREATE DATABASE ... TEMPLATE`. Cheap (about 100 ms). All instances share
@@ -200,8 +413,8 @@ port, its own Docker container on a per-instance network. Good for
 services that cannot separate tenants (Redis, Gotenberg).
 
 **shared** — Accepted in the schema but not yet implemented. A `shared`
-service will be silently skipped during `plax up`. Use `dedicated` or
-`external` instead.
+service will be silently skipped during `plax up`. Use `dedicated`
+instead.
 
 **external** — Accepted in the schema but not yet implemented. Same
 behavior as `shared` today: silently skipped. For dependencies that
@@ -211,7 +424,7 @@ cannot be cloned (SaaS blob storage, third-party APIs).
 host, in the instance's worktree, with the derived `.env` loaded.
 Used for the app's own dev server and workers.
 
-### 3.5 Secrets
+### 4.5 Secrets
 
 Secrets are not holes. API keys, OAuth credentials, and tokens are the
 same across every instance — they vary per machine, not per instance.
@@ -227,12 +440,12 @@ This means `.env.example` can keep placeholder values. Your own `.env`
 in the repo root supplies the real secrets. Each instance's `.env` is
 written into its worktree.
 
-## 4. The base
+## 5. The base
 
 The base is a reference database that instances are cloned from. It lives
 on your Postgres server as `plax_base`. It exists to be copied.
 
-### 4.1 Creating the base
+### 5.1 Creating the base
 
 ```sh
 plax base create --pg-url "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
@@ -256,7 +469,7 @@ fresh base. Also the recovery path for an interrupted refresh.
 If `--pg-url` is omitted, plax derives the DSN from the blueprint's
 logical Postgres service definition.
 
-### 4.2 Seeding the base
+### 5.2 Seeding the base
 
 ```sh
 plax base seed --pg-url "postgres://..."
@@ -265,7 +478,7 @@ plax base seed --pg-url "postgres://..."
 Runs `seed.command` against the base, then locks it again. Do this once
 after `base reset`, and again whenever fixtures change.
 
-### 4.3 Refreshing the base
+### 5.3 Refreshing the base
 
 ```sh
 plax base refresh --pg-url "postgres://..."
@@ -284,7 +497,7 @@ If a previous refresh was interrupted mid-staging, `refresh` detects
 the incomplete `plax_base_next` and tells you to run `plax base reset`
 to clean up.
 
-### 4.4 Checking the base
+### 5.4 Checking the base
 
 ```sh
 plax base status --pg-url "postgres://..."
@@ -293,9 +506,9 @@ plax base status --pg-url "postgres://..."
 Prints whether the base exists, whether it is locked, its provenance
 version, and whether a `plax_base_next` is staging.
 
-## 5. Working with instances
+## 6. Working with instances
 
-### 5.1 Create
+### 6.1 Create
 
 ```sh
 plax up myfeature --pg-url "postgres://..."
@@ -310,6 +523,7 @@ plax up --ref 42 myfeature       # bare integer also treated as PR number
 plax up --ref abc1234 myfeature
 ```
 
+The base must exist before the first `up` (see [The base](#5-the-base)).
 This does everything:
 
 1. Creates branch `plax/myfeature` and worktree `.plax/worktrees/myfeature`
@@ -323,7 +537,7 @@ This does everything:
 
 If any step fails, all side effects are rolled back in reverse order.
 
-### 5.2 List
+### 6.2 List
 
 ```sh
 plax ls
@@ -335,9 +549,12 @@ myfeature  running    plax/myfeature       0     3000 3001                health
 otherwork  suspended  plax/otherwork       3     3002 3003                unhealthy  1h ago
 ```
 
+For running instances the `HEALTH` column is a live probe of process
+liveness and port reachability at call time — not a stored snapshot. A
+suspended instance shows its last stored value (`—` if never verified).
 Use `--json` for structured output.
 
-### 5.3 Check health
+### 6.3 Check health
 
 ```sh
 plax status myfeature --pg-url "postgres://..."
@@ -346,16 +563,24 @@ plax status myfeature --pg-url "postgres://..."
 Six dimensions:
 
 - **code** — commits ahead/behind the base branch
-- **schema** — whether migration files match the database
+- **schema** — whether migration files match the database. With
+  `seed.applied_migrations` configured, this compares the migrations
+  actually applied to the instance's database against the files at the
+  worktree's HEAD, so an in-worktree migration clears the drift. Without
+  it, plax falls back to comparing the clone-time migration-file hash
 - **data** — whether the instance was built from the current base version
 - **host** — whether tool versions have changed since creation
 - **config** — whether blueprint inputs (compose, env template, toolchain)
   have changed since last `plax up`
-- **health** — whether the last `plax verify` run passed all checks
+- **health** — a live probe, computed at call time: for a running instance,
+  plax dials every allocated port (dedicated services and process
+  `port_var`s) and checks every native process is alive. A suspended
+  instance reports `unknown` — there is no runtime to probe
 
-Each dimension is `ok`, `drift`, or `unknown`.
+Each dimension is `ok`, `drift`, or `unknown`. Reading a report never
+writes to the registry.
 
-### 5.4 Suspend and resume
+### 6.4 Suspend and resume
 
 ```sh
 plax suspend myfeature
@@ -370,7 +595,7 @@ Resume starts everything again and prints the drift report. If a port
 the instance held is now taken by something else, resume fails and names
 the offender. Free the port and retry, or `down` and `up` to reallocate.
 
-### 5.5 Run commands inside an instance
+### 6.5 Run commands inside an instance
 
 ```sh
 plax exec myfeature -- bun run test
@@ -379,10 +604,10 @@ plax attach myfeature
 
 `exec` runs a single command with the instance's environment loaded and
 the worktree as the working directory. `attach` opens an interactive shell
-in the same context. Both print drift warnings to stderr if the instance
-has moved.
+in the same context. `attach` prints drift warnings to stderr if the
+instance has moved, and reminds you about unread mailbox messages.
 
-### 5.6 Verify an instance
+### 6.6 Verify an instance
 
 ```sh
 plax verify myfeature --pg-url "postgres://..."
@@ -396,7 +621,12 @@ registry:
 - **env-unresolved-holes** — no `{{VAR}}` placeholders remain unsubstituted
 - **env-scrubbed-leaks** — compares parsed values: no scrubbed key's real
   value appears in the derived `.env`, even under a different key name
-- **tcp-reachability** — every allocated port has a listener
+- **dependency-isolation** — the worktree shares the parent's `node_modules`
+  only if the dependency manifests (package.json, lockfiles) match; a
+  manifest mismatch means the instance runs the parent's dependencies,
+  not this branch's
+- **tcp-reachability** — every allocated port has a listener (dedicated
+  services and process `port_var`s)
 - **process-liveness** — every declared native process is alive
 - **db-existence** — every declared database exists
 - **db-provenance** — every database has its provenance table (catches
@@ -404,13 +634,22 @@ registry:
 
 The `check` field in `--json` output is the stable identifier for scripting.
 
-On `plax up`, verification runs automatically before the command reports
-success. On failure, the instance stays up for debugging and is marked
-`unhealthy`. A suspended instance skips runtime checks.
+Verification also runs automatically on `plax up` and `plax resume`, before
+either reports success. The static env checks run first and fail fast: a
+broken `.env` rolls the whole `up` back, leaving nothing behind. After the
+workloads settle, process liveness and the database checks run. The TCP
+probe is deliberately left out of `up`/`resume` — a freshly started app
+legitimately takes seconds to bind, and `up` must not block on readiness.
+Run `plax verify` for the full probe, including ports.
+
+On a runtime-check failure the instance stays up for debugging and is
+marked `unhealthy`; the exit code is 1. A suspended instance skips runtime
+checks with a note. With Postgres unreachable, DB checks are skipped with a
+note.
 
 `--json` is supported. Use `--pg-url` to override the DSN.
 
-### 5.7 Destroy
+### 6.7 Destroy
 
 ```sh
 plax down myfeature --pg-url "postgres://..."
@@ -422,7 +661,7 @@ entry, removes the mailbox. Every step tolerates missing resources — a
 stopped Docker daemon or dead Postgres will not prevent teardown of
 everything else.
 
-### 5.8 Regenerate .env files
+### 6.8 Regenerate .env files
 
 ```sh
 plax rederive
@@ -434,7 +673,7 @@ existing `.env` and the user's `.env` are preserved; hole values are
 recomputed from the current blueprint and registry. Prints a diff per
 instance and a reminder to restart.
 
-### 5.9 Inspect the instance database
+### 6.9 Inspect the instance database
 
 The cloned database is the investigation surface for anything an instance
 does to Postgres. `plax up` prints it in the summary with a ready-to-use
@@ -442,7 +681,12 @@ hint:
 
 ```
 instance i1 up
-  database: plax_i1 (psql -d plax_i1)
+  worktree:  .plax/worktrees/i1
+  branch:    plax/i1
+  database:  plax_i1 (psql -d plax_i1)
+  ports:     PORT=3301 REDIS_PORT=26380
+  logs:      .plax/logs/i1/
+  scratch:   .plax/worktrees/i1/scratch/
 ```
 
 The instance database is structurally accurate — same schema and data as
@@ -452,7 +696,7 @@ an instance guarantees. Plax does not run `ANALYZE` on clones; a fresh clone
 inherits the base's statistics. Diagnose plan-dependent, volume-dependent,
 or statistics-dependent queries against production, not the instance.
 
-## 6. Mailbox
+## 7. Mailbox
 
 Instances can send each other messages. The mailbox is a directory:
 `.plax/mail/<name>/`. `send` writes a JSON file; `recv` reads and removes.
@@ -477,7 +721,7 @@ adjudicating against ground truth agents cannot reach — through the hub
 `ls` shows unread count and health. `attach` prints a notice if messages
 are waiting.
 
-## 7. Doctor
+## 8. Doctor
 
 ```sh
 plax doctor --pg-url "postgres://..."
@@ -499,7 +743,7 @@ Four areas:
 Each check reports `ok`, `warn`, or `fail`. Exit code is 0 if no check
 fails, 1 if any do. Use `--json` for structured output.
 
-## 8. Output conventions
+## 9. Output conventions
 
 Records go to stdout. Human chatter goes to stderr. A pipe never has to
 strip out a banner.
@@ -511,14 +755,14 @@ plax ls | awk '$2 == "suspended" { print $1 }' | xargs -n1 plax down
 Commands that support `--json`: `ls`, `status`, `verify`, `doctor`, `send`,
 `recv`, `base status`.
 
-## 9. Files and directories
+## 10. Files and directories
 
 Plax stores its state inside the repo under `.plax/`:
 
 ```
 .plax/
   registry.json          instance records, blueprint stamp
-  worktrees/<name>/      git worktrees
+  worktrees/<name>/      git worktrees (each with a scratch/ directory)
   logs/<name>/           process logs (app.log, workers.log, ...)
   mail/<name>/           mailbox directories
 ```
@@ -526,9 +770,10 @@ Plax stores its state inside the repo under `.plax/`:
 The registry is a single JSON file. It records: branch, worktree path,
 allocated ports, database name, container IDs, process group IDs,
 creation time, provenance (base version, toolchain hash, tool versions),
-and state (`running` or `suspended`).
+state (`running` or `suspended`), and the last verification outcome
+(health, verified-at). Writes are serialized with a file lock.
 
-### 9.1 Ignore entries
+### 10.1 Ignore entries
 
 Instance worktrees live inside the repo at `.plax/worktrees/<name>`. Any
 tool that globs from the repo root therefore traverses every instance —
@@ -550,14 +795,14 @@ The complete ignore list:
 `plax init` prints a warning naming any detected config file that does not
 already reference `.plax`.
 
-## 10. Environment variables
+## 11. Environment variables
 
 - `PLAX_INSTANCE` — read by `send` as the default `--from` value.
   Set it yourself (e.g., in your shell profile or tmux config) if you
   want `send` to know which instance is writing.
 - `SHELL` — used by `attach` to find your shell
 
-## 11. Known limitations
+## 12. Known limitations
 
 - **Postgres only.** Logical isolation requires a driver. Only Postgres
   has one. Redis and other services use `dedicated`.
@@ -569,6 +814,3 @@ already reference `.plax`.
 - **No archive.** There is no way to freeze an instance's state into a
   named blob. If state is worth keeping, promote it into the base or
   into a fixture.
-- **One repo, one registry.** Two concurrent `plax up` commands on the
-  same repo can race on the registry file. This is a known issue
-  planned for Phase 8.
