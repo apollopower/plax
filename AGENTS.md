@@ -86,6 +86,7 @@ are real — but when in doubt, follow them.
   | `doctor` | Multi-facet health checks (blueprint, registry, Docker, Postgres) |
   | `instance` | Orchestrates full lifecycle: up/down/suspend/resume/rederive |
   | `mailbox` | File-based inter-instance message passing under `.plax/mail/` |
+  | `pool` | Pre-warmed instance pool: seed/acquire/release/drain/status, drift-classified acquire |
   | `portpool` | CSP-style TCP port allocation from a configurable range |
   | `process` | Native process lifecycle: spawn, terminate, liveness |
   | `registry` | Persists instance records and port allocations to `.plax/registry.json` |
