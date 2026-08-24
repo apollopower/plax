@@ -77,27 +77,21 @@ are real — but when in doubt, follow them.
 
 - `cmd/plax/` — CLI entrypoint only. No business logic.
 - `pkg/<domain>/` — one package per domain. No circular imports.
-  | Package | Responsibility |
-  |---|---|
-  | `blueprint` | Schema for `plax.json` (the repo config) and `plax init` scaffolding |
-  | `derive/env` | Per-instance `.env` file derivation via `{{VAR}}` holes |
-  | `derive/postgres` | Shared base database lifecycle, template cloning, provenance |
-  | `derive/docker` | Docker driver: networks, containers, port bindings |
-  | `doctor` | Multi-facet health checks (blueprint, registry, Docker, Postgres) |
-  | `instance` | Orchestrates full lifecycle: up/down/suspend/resume/rederive |
-  | `mailbox` | File-based inter-instance message passing under `.plax/mail/` |
-  | `portpool` | CSP-style TCP port allocation from a configurable range |
-  | `process` | Native process lifecycle: spawn, terminate, liveness |
-  | `registry` | Persists instance records and port allocations to `.plax/registry.json` |
-  | `stamp` | SHA-256 hashes of blueprint inputs for config drift detection |
-  | `status` | Six-dimension per-instance drift reporting |
-  | `testutil` | Cross-package test helpers (Postgres advisory lock serialization) |
-  | `toolchain` | `.tool-versions` pin parsing and version comparison |
-  | `worktree` | Git branch and worktree management under `.plax/worktrees/` |
   `derive/` is a namespace directory with three sub-packages — an exception
   justified by tight coupling and shared types.
-- `docs/` — design doc and phased plans. Plans track implementation status
-  with checkboxes.
+- The authoritative package inventory and per-phase package layout live in
+  `docs/plans/index.md` (phase table) and the `pkg/` tree itself. Keep those
+  in sync — don't maintain a duplicate table here.
+
+### Docs
+
+- `docs/` — design doc, manual, and phased plans. Plans track implementation
+  status with checkboxes.
+- `docs/plans/index.md` defines the plan-file conventions (section order,
+  `⚠`/`→` markers, specific test names). Every new plan must follow them.
+- The agent-facing operational reference is the bundled `cmd/plax/guide.md`
+  (printed by `plax guide`); `docs/manual.md` is the human-oriented full
+  guide.
 
 ### JSON
 
@@ -143,3 +137,6 @@ are real — but when in doubt, follow them.
 - Kong for argument parsing.
 - Records go to stdout, human chatter to stderr.
 - `--json` flag for structured output where applicable.
+- The command surface is defined by the Kong structs in `cmd/plax/main.go`;
+  per-command semantics live in the bundled guide and `docs/manual.md` — keep
+  the lists there, not here.
