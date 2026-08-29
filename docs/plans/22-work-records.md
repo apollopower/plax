@@ -44,7 +44,15 @@ type Record struct {
     Intent     string   `json:"intent"`
     Contract   []string `json:"contract,omitempty"`
     Body       string   `json:"body,omitempty"`
-    Verdict    string   `json:"verdict,omitempty"`
+    Verdict    *Verdict `json:"verdict,omitempty"`
+}
+
+// Verdict is the executor's terminal declaration about the work record.
+type Verdict struct {
+    Status   string    `json:"status"`
+    Contract string    `json:"contract,omitempty"`
+    At       time.Time `json:"at"`
+    Summary  string    `json:"summary,omitempty"`
 }
 
 // CreateInput supplies the operator-authored portion of a record.
@@ -88,7 +96,9 @@ The child task was assigned from i0's billing work.
 Found the retry path; adding a regression test.
 
 ## verdict
+status: pass
 contract: pass
+at: 2026-08-29T12:01:00Z
 Tests and typecheck pass.
 ```
 
@@ -113,6 +123,16 @@ Rules:
 - `Append` writes only after the record exists and never rewrites prior bytes.
 - Record paths are `.plax/records/<name>.md`; instance names are validated by
   the existing instance-name rules before path construction.
+
+Body sections have a fixed grammar for parsing and JSON projection:
+
+- Exactly one `## intent` section contains the complete intent prose.
+- Zero or more `## log` sections contain `at: <RFC3339>` followed by prose.
+- Zero or one terminal `## verdict` section contains `status: pass|fail`, an
+  optional `contract: pass|fail`, an `at: <RFC3339>` line, and prose summary.
+- Unknown `##` sections and duplicate verdict sections are parse errors.
+- A verdict is terminal. `plax log` after a verdict remains allowed for
+  historical notes, but `plax verdict` cannot append a second verdict.
 
 ### `pkg/registry`
 
@@ -220,6 +240,21 @@ plax record i1
 The default output is the file content, not a synthesized summary, so tools
 can compose around the same representation.
 
+### Verdict authoring
+
+```
+plax verdict i1 --status pass --contract pass -- "Tests and typecheck pass"
+
+1. Read and parse i1's record.
+2. Reject the operation if a verdict already exists.
+3. Validate status and contract values (`pass` or `fail`).
+4. Append one terminal `## verdict` section with the current RFC3339 time and
+   optional summary prose.
+5. Flush and close under the same OS-level `flock` used by `log`.
+   ⚠ This records the operator's declaration; it does not claim that Plax
+   independently validated the task contract.
+```
+
 ### Record lifecycle
 
 Records survive `down`, `suspend`, and `resume`. `down` removes the worktree
@@ -278,6 +313,20 @@ plax record [--json] <name>
 - `--json`: parsed projection to stdout.
 - Missing records and malformed records return non-zero.
 
+### `plax verdict`
+
+```
+plax verdict [--status pass|fail] [--contract pass|fail] <name> -- [summary]
+```
+
+- `--status` is required and is the task outcome declaration.
+- `--contract` is required when the record declares a contract; it is omitted
+  when no contract was declared.
+- The optional summary is appended as verdict prose.
+- A second verdict is rejected; use `plax log` for later historical notes.
+- `plax verify` remains separate: it reports environment checks and does not
+  automatically author a work verdict.
+
 ## Error handling
 
 | Failure | Expected behavior |
@@ -293,6 +342,8 @@ plax record [--json] <name>
 | Record write fails during `up` | Fail `up` → roll back worktree, resources, and registry entry |
 | Append target missing | Fail → `log` never creates an implicit record |
 | Append cannot complete | Fail → report the write error; never report success |
+| Verdict status or contract value is not `pass` or `fail` | Reject → do not append a verdict |
+| Verdict already exists | Reject → preserve the terminal first verdict; use `log` for later notes |
 | Record malformed | `record` fails with path and parse error; preserve the file for inspection |
 | Parent is down and its branch was deleted | Reject new child creation → use `resume` or recreate an explicit base |
 | Parent advances after child creation | No automatic mutation → child retains captured `base_commit` |
@@ -311,6 +362,8 @@ plax record [--json] <name>
   body.
 - `TestRecord_Read_RepeatedContractHeadersPreserveCommas` — contract entries
   remain distinct and commas require no escaping.
+- `TestRecord_ParseSections_RejectsUnknownOrDuplicateVerdict` — body grammar
+  is unambiguous and permits at most one terminal verdict.
 - `TestRecord_Create_RefusesExistingRecord` — create is non-destructive.
 - `TestRecord_Create_IsAtomicOnFailure` — failed creation does not leave a
   parseable partial record.
@@ -339,6 +392,11 @@ plax record [--json] <name>
   resources created by `up`.
 - `TestLog_AppendsToExistingRecord` — `plax log` adds timestamped prose.
 - `TestLog_MissingRecord_Fails` — no implicit record creation.
+- `TestVerdict_AppendsStructuredTerminalVerdict` — status, contract status,
+  timestamp, and summary are authored in the verdict section.
+- `TestVerdict_RejectsSecondVerdict` — the first terminal outcome is preserved.
+- `TestVerdict_DoesNotClaimVerifyResults` — task verdict authoring remains
+  separate from fixed environment verification.
 - `TestRecord_DefaultPrintsOriginalText` — stdout is the complete file.
 - `TestRecord_JSON_ProjectsParsedRecord` — JSON contains lineage, intent,
   contract, log, and verdict fields.
@@ -370,12 +428,16 @@ the actual `up` lifecycle.
   or rewriting prior content.
 - `plax record <name>` prints the complete text record, and `--json` emits a
   stable structured projection.
+- `plax verdict <name> --status pass|fail` appends exactly one structured,
+  terminal verdict and rejects subsequent verdicts.
 - Missing, malformed, duplicate, or failed records produce non-zero exits
   and actionable diagnostics.
 - Existing untracked `plax up <name>` behavior remains available with a
   warning; tracked records are opt-in.
 - `contract` is stored and surfaced, but no arbitrary contract syntax is
   claimed to be executed by the existing fixed-check `verify` command.
+- `plax verify` does not automatically create or overwrite a task verdict;
+  environment health and task completion remain distinct facts.
 - Guide, manual, plan index, and the 2026-08-26 triage snapshot reference
   the shipped interface.
 
