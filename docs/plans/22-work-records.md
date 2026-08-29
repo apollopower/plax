@@ -16,6 +16,7 @@ pkg/worktree/worktree_test.go # parent-base and missing-parent tests
 pkg/registry/registry.go      # instance lookup needed by parent resolution
 cmd/plax/main.go              # up flags, log and record commands
 cmd/plax/main_test.go         # CLI validation and stdout/stderr behavior
+cmd/plax/e2e_test.go          # real-Git stacked ancestry scenario
 cmd/plax/guide.md             # agent-facing command reference
 docs/manual.md                # human-facing work-record and lineage documentation
 docs/plans/index.md           # phase table entry for plan 22
@@ -37,23 +38,23 @@ body is free-form prose.
 ```go
 // Record is the parsed representation of an instance work record.
 type Record struct {
-    Instance   string
-    Parent     string
-    BaseCommit string
-    Intent     string
-    Contract   []string
-    Body       string
-    Verdict    string
+    Instance   string   `json:"instance"`
+    Parent     string   `json:"parent,omitempty"`
+    BaseCommit string   `json:"base_commit,omitempty"`
+    Intent     string   `json:"intent"`
+    Contract   []string `json:"contract,omitempty"`
+    Body       string   `json:"body,omitempty"`
+    Verdict    string   `json:"verdict,omitempty"`
 }
 
 // CreateInput supplies the operator-authored portion of a record.
 type CreateInput struct {
-    Instance   string
-    Parent     string
-    BaseCommit string
-    Intent     string
-    Contract   []string
-    Body       string
+    Instance   string   `json:"instance"`
+    Parent     string   `json:"parent,omitempty"`
+    BaseCommit string   `json:"base_commit,omitempty"`
+    Intent     string   `json:"intent"`
+    Contract   []string `json:"contract,omitempty"`
+    Body       string   `json:"body,omitempty"`
 }
 
 // Path returns the repository-scoped record path.
@@ -74,10 +75,12 @@ The exact wire representation is:
 ```
 instance: i1
 parent: i0
-base_commit: 0123456789abcdef...
+base_commit: 0123456789abcdef0123456789abcdef01234567
 intent: add retry coverage
-contract: tests, typecheck
+contract: tests
+contract: typecheck
 ---
+## intent
 The child task was assigned from i0's billing work.
 
 ## log
@@ -97,12 +100,16 @@ Rules:
 - `intent` is operator-authored text. It is not invalid merely because an AI
   operator supplied it; self-authored intent is still useful as a statement
   of the requested task.
-- `contract` is an opaque, ordered list of declared acceptance statements in
-  this phase. It is recorded and projected, but is not silently treated as
-  executable verification checks; see the scope boundary below.
+- `contract` is a repeated header, one entry per ordered acceptance statement.
+  A contract entry may contain commas without escaping. It is recorded and
+  projected, but is not silently treated as executable verification checks;
+  see the scope boundary below.
 - Headers are single-line and use `key: value`. Prose belongs below the
-  separator. Newlines in `intent` are represented in the body, not escaped
-  into a header.
+  separator. The `intent` header is the first non-empty line of the supplied
+  intent; the complete multiline intent is copied below `## intent` in the
+  body. Newlines are never escaped into a header.
+- `base_commit` is always the complete 40-hex-character Git commit ID, not a
+  display abbreviation.
 - `Append` writes only after the record exists and never rewrites prior bytes.
 - Record paths are `.plax/records/<name>.md`; instance names are validated by
   the existing instance-name rules before path construction.
@@ -189,7 +196,9 @@ plax log i1 -- "Found the failing retry path"
 
 1. Resolve and validate i1.
 2. Open its record without truncation.
-3. Acquire an exclusive lock for the append.
+3. Acquire an OS-level `flock` on a sibling lock file for the append. The lock
+   must coordinate separate `plax log` processes, not only goroutines in one
+   process.
 4. Append an RFC3339 timestamp and the supplied text.
 5. Flush and close; return the record path on stdout only if requested by
    the command's output mode.
@@ -297,6 +306,11 @@ plax record [--json] <name>
   `.plax/records`, not a worktree.
 - `TestRecord_CreateAndRead_RoundTripsHeadersAndBody` — required and
   optional fields round-trip without losing prose.
+- `TestRecord_Create_MultilineIntentUsesHeaderSummaryAndBody` — the first
+  non-empty line is the header summary and the complete intent remains in the
+  body.
+- `TestRecord_Read_RepeatedContractHeadersPreserveCommas` — contract entries
+  remain distinct and commas require no escaping.
 - `TestRecord_Create_RefusesExistingRecord` — create is non-destructive.
 - `TestRecord_Create_IsAtomicOnFailure` — failed creation does not leave a
   parseable partial record.
@@ -309,7 +323,7 @@ plax record [--json] <name>
   starts at the requested parent `HEAD`.
 - `TestWorktree_CreateFromCommit_RejectsMissingCommit` — no fallback occurs.
 
-### CLI and integration tests
+### CLI tests (`cmd/plax/main_test.go`)
 
 - `TestUp_WithIntent_CreatesRootRecord` — root `up` creates the instance and
   record, with intent on disk.
@@ -330,10 +344,16 @@ plax record [--json] <name>
   contract, log, and verdict fields.
 - `TestDown_PreservesRecord` — instance teardown does not remove its record.
 
-The integration scenario should create `i0`, commit a change, create `i1`
-from `i0`, commit another change, and verify the Git ancestry is
+### End-to-end tests (`cmd/plax/e2e_test.go`)
+
+The real-Git scenario belongs in the existing end-to-end test file and follows
+the repository convention of calling `t.Skip` when
+`PLAX_TEST_POSTGRES_URL` is unset. It should create `i0`, commit a change,
+create `i1` from `i0`, commit another change, and verify the Git ancestry is
 `main -> i0 -> i1`. It should also verify that `i1` remains tied to its
-captured commit when `i0` advances later.
+captured commit when `i0` advances later. The test exercises real worktrees,
+registry state, and teardown; Docker/Postgres are required because it calls
+the actual `up` lifecycle.
 
 ## Acceptance criteria
 
@@ -364,8 +384,11 @@ captured commit when `i0` advances later.
 No new external Go modules are required.
 
 - Standard library: `encoding/json`, `errors`, `fmt`, `os`, `path/filepath`,
-  `strings`, and `time` for record I/O and projection; `sync` or `syscall`
-  only if the chosen append-lock implementation requires it.
+  `strings`, and `time` for record I/O and projection.
+- Existing module: `golang.org/x/sys v0.47.0`, using `unix.Flock` for
+  cross-process append serialization on the supported Unix platforms. A
+  process-local `sync.Mutex` is insufficient because separate `plax log`
+  invocations must not interleave writes.
 - Existing module: `github.com/alecthomas/kong v1.16.0` for CLI parsing.
 - Existing internal packages: `pkg/registry`, `pkg/worktree`, and the
   repository-root discovery helpers in `cmd/plax`.
