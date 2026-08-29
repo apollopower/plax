@@ -154,7 +154,8 @@ if seed.applied_migrations is configured:
     before := live applied identifiers for every declared logical database
     run seed.migrate once
     after := live applied identifiers for every declared logical database
-    count := number of identifiers in after - before, per database and total
+    count[db] := number of identifiers in after[db] - before[db], per database
+    total := sum(count[db] for every declared database)
     print the deterministic total (and per-database detail when >1)
 else:
     print migration success without a count
@@ -165,6 +166,11 @@ claim a count that was not measured. Whether the databases have already been
 migrated does not change the command's success contract; rollback drops the
 clones. A configured migration table that cannot be queried is a provisioning
 failure, not permission to fall back to parsing stdout.
+
+The total is a sum of per-database applications, not a union of migration
+identifiers. If migration `001` is applied to both the primary and test
+databases, it contributes two to the total because two database changes were
+made. Per-database counts make that interpretation visible.
 
 ### Failure and rollback
 

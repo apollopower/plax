@@ -43,8 +43,15 @@ type Record struct {
     BaseCommit string   `json:"base_commit,omitempty"`
     Intent     string   `json:"intent"`
     Contract   []string `json:"contract,omitempty"`
-    Body       string   `json:"body,omitempty"`
-    Verdict    *Verdict `json:"verdict,omitempty"`
+    Body       string     `json:"body,omitempty"`
+    Log        []LogEntry `json:"log,omitempty"`
+    Verdict    *Verdict   `json:"verdict,omitempty"`
+}
+
+// LogEntry is one append-only historical note.
+type LogEntry struct {
+    At   time.Time `json:"at"`
+    Text string    `json:"text"`
 }
 
 // Verdict is the executor's terminal declaration about the work record.
@@ -89,10 +96,11 @@ contract: tests
 contract: typecheck
 ---
 ## intent
+add retry coverage
 The child task was assigned from i0's billing work.
 
 ## log
-2026-08-29T12:00:00Z
+at: 2026-08-29T12:00:00Z
 Found the retry path; adding a regression test.
 
 ## verdict
@@ -128,11 +136,12 @@ Body sections have a fixed grammar for parsing and JSON projection:
 
 - Exactly one `## intent` section contains the complete intent prose.
 - Zero or more `## log` sections contain `at: <RFC3339>` followed by prose.
-- Zero or one terminal `## verdict` section contains `status: pass|fail`, an
-  optional `contract: pass|fail`, an `at: <RFC3339>` line, and prose summary.
+- Zero or one `## verdict` section contains `status: pass|fail`, an optional
+  `contract: pass|fail`, an `at: <RFC3339>` line, and prose summary.
 - Unknown `##` sections and duplicate verdict sections are parse errors.
-- A verdict is terminal. `plax log` after a verdict remains allowed for
-  historical notes, but `plax verdict` cannot append a second verdict.
+- A verdict is author-once, not file-terminal. `plax log` after a verdict
+  remains allowed for historical notes, but `plax verdict` cannot append a
+  second verdict. Log sections may appear before or after the verdict.
 
 ### `pkg/registry`
 
@@ -214,11 +223,13 @@ independent graphs.
 ```
 plax log i1 -- "Found the failing retry path"
 
-1. Resolve and validate i1.
-2. Open its record without truncation.
-3. Acquire an OS-level `flock` on a sibling lock file for the append. The lock
+1. Resolve i1 by validating its instance name and locating
+   `.plax/records/i1.md`; registry membership is not required, so logging
+   remains possible after `down`.
+2. Acquire an OS-level `flock` on a sibling lock file for the append. The lock
    must coordinate separate `plax log` processes, not only goroutines in one
    process.
+3. Open its record without truncation.
 4. Append an RFC3339 timestamp and the supplied text.
 5. Flush and close; return the record path on stdout only if requested by
    the command's output mode.
@@ -231,9 +242,11 @@ plax log i1 -- "Found the failing retry path"
 ```
 plax record i1
 
-1. Parse the record and preserve the original text for default output.
-2. Print the complete record to stdout; diagnostics go to stderr.
-3. With --json, emit the parsed headers, contract list, body, log entries,
+1. Acquire a shared OS-level `flock` on the sibling lock file before reading;
+   readers do not observe a concurrent partial append.
+2. Parse the record and preserve the original text for default output.
+3. Print the complete record to stdout; diagnostics go to stderr.
+4. With --json, emit the parsed headers, contract list, body, log entries,
    and verdict as one JSON object.
 ```
 
@@ -245,12 +258,15 @@ can compose around the same representation.
 ```
 plax verdict i1 --status pass --contract pass -- "Tests and typecheck pass"
 
-1. Read and parse i1's record.
-2. Reject the operation if a verdict already exists.
-3. Validate status and contract values (`pass` or `fail`).
-4. Append one terminal `## verdict` section with the current RFC3339 time and
+1. Locate `.plax/records/i1.md` directly; registry membership is not required,
+   so this remains usable after `down`.
+2. Acquire the same OS-level `flock` used by `log` before reading or checking
+   for an existing verdict.
+3. Parse the record and reject the operation if a verdict already exists.
+4. Validate status and contract values (`pass` or `fail`).
+5. Append one author-once `## verdict` section with the current RFC3339 time and
    optional summary prose.
-5. Flush and close under the same OS-level `flock` used by `log`.
+6. Flush and close under the held lock.
    ⚠ This records the operator's declaration; it does not claim that Plax
    independently validated the task contract.
 ```
@@ -261,6 +277,14 @@ Records survive `down`, `suspend`, and `resume`. `down` removes the worktree
 and currently deletes the plax branch, but does not remove `.plax/records`.
 The record's `base_commit` remains historical evidence of a child stack base;
 it is not sufficient to recreate a parent branch after Git garbage collection.
+`plax log`, `plax verdict`, and `plax record` resolve directly from the record
+path rather than the registry, so they continue to work after `down`.
+
+The sibling lock file is persistent metadata at `.plax/records/<name>.lock`;
+it is created with the record directory and is never removed after an
+operation. Writers take an exclusive flock and readers take a shared flock,
+so `record` always parses a complete append. Lock-file cleanup is part of
+explicit record deletion, which is not provided by this phase.
 
 ### Contract boundary
 
@@ -300,6 +324,8 @@ plax log <name> -- <text>
 
 - Appends text to an existing record.
 - Missing records are an error; `log` never creates a record implicitly.
+- Record lookup uses the record file, not registry membership, so logging a
+  preserved record after `down` remains supported.
 - Diagnostics go to stderr; no record content is emitted unless a future
   explicit output mode is added.
 
@@ -312,6 +338,9 @@ plax record [--json] <name>
 - Default: complete record text to stdout.
 - `--json`: parsed projection to stdout.
 - Missing records and malformed records return non-zero.
+
+`record` also resolves directly from the record file and therefore remains
+available after `down`.
 
 ### `plax verdict`
 
@@ -340,12 +369,12 @@ plax verdict [--status pass|fail] [--contract pass|fail] <name> -- [summary]
 | Record already exists | Reject → creates do not collide; preserve the existing record |
 | Record directory cannot be created | Fail `up` → roll back the instance |
 | Record write fails during `up` | Fail `up` → roll back worktree, resources, and registry entry |
-| Append target missing | Fail → `log` never creates an implicit record |
+| Append target missing | Fail → `log` never creates a record implicitly |
 | Append cannot complete | Fail → report the write error; never report success |
 | Verdict status or contract value is not `pass` or `fail` | Reject → do not append a verdict |
-| Verdict already exists | Reject → preserve the terminal first verdict; use `log` for later notes |
+| Verdict already exists | Reject → preserve the author-once first verdict; use `log` for later notes |
 | Record malformed | `record` fails with path and parse error; preserve the file for inspection |
-| Parent is down and its branch was deleted | Reject new child creation → use `resume` or recreate an explicit base |
+| Parent is down and its branch was deleted | Reject new child creation → use `resume` or recreate an explicit base; existing child records remain readable |
 | Parent advances after child creation | No automatic mutation → child retains captured `base_commit` |
 | `contract` contains unknown prose | Store it unchanged → arbitrary contracts are not executed in this phase |
 
@@ -363,13 +392,17 @@ plax verdict [--status pass|fail] [--contract pass|fail] <name> -- [summary]
 - `TestRecord_Read_RepeatedContractHeadersPreserveCommas` — contract entries
   remain distinct and commas require no escaping.
 - `TestRecord_ParseSections_RejectsUnknownOrDuplicateVerdict` — body grammar
-  is unambiguous and permits at most one terminal verdict.
+  is unambiguous and permits at most one author-once verdict while allowing
+  log entries after it.
 - `TestRecord_Create_RefusesExistingRecord` — create is non-destructive.
 - `TestRecord_Create_IsAtomicOnFailure` — failed creation does not leave a
   parseable partial record.
 - `TestRecord_Append_PreservesExistingBytes` — append never rewrites the
   original record.
 - `TestRecord_Append_ConcurrentWriters` — exclusive appends remain parseable.
+- `TestRecord_Read_UsesSharedLock` — reads do not observe a partial append.
+- `TestRecord_LockFilePersists` — the sibling lock file remains after an
+  operation.
 - `TestRecord_Read_RejectsMissingRequiredHeaders` — malformed input fails
   clearly.
 - `TestWorktree_CreateFromCommit_BasesBranchAtExactCommit` — child branch
@@ -392,11 +425,15 @@ plax verdict [--status pass|fail] [--contract pass|fail] <name> -- [summary]
   resources created by `up`.
 - `TestLog_AppendsToExistingRecord` — `plax log` adds timestamped prose.
 - `TestLog_MissingRecord_Fails` — no implicit record creation.
-- `TestVerdict_AppendsStructuredTerminalVerdict` — status, contract status,
+- `TestLog_AfterDown_UsesPreservedRecord` — logging works without registry
+  membership after teardown.
+- `TestVerdict_AppendsStructuredVerdict` — status, contract status,
   timestamp, and summary are authored in the verdict section.
-- `TestVerdict_RejectsSecondVerdict` — the first terminal outcome is preserved.
+- `TestVerdict_RejectsSecondVerdict` — the first author-once outcome is preserved.
 - `TestVerdict_DoesNotClaimVerifyResults` — task verdict authoring remains
   separate from fixed environment verification.
+- `TestVerdict_AfterDown_UsesPreservedRecord` — verdict authoring works after
+  the instance registry entry is removed.
 - `TestRecord_DefaultPrintsOriginalText` — stdout is the complete file.
 - `TestRecord_JSON_ProjectsParsedRecord` — JSON contains lineage, intent,
   contract, log, and verdict fields.
@@ -429,7 +466,8 @@ the actual `up` lifecycle.
 - `plax record <name>` prints the complete text record, and `--json` emits a
   stable structured projection.
 - `plax verdict <name> --status pass|fail` appends exactly one structured,
-  terminal verdict and rejects subsequent verdicts.
+  author-once verdict and rejects subsequent verdicts while allowing later
+  historical log entries.
 - Missing, malformed, duplicate, or failed records produce non-zero exits
   and actionable diagnostics.
 - Existing untracked `plax up <name>` behavior remains available with a
