@@ -324,7 +324,7 @@ func Up(ctx context.Context, deps *Deps, name string, opts UpOptions) (err error
 			}
 		}
 
-		if _, err := RunCommand(ctx, worktreePath, allocated, deps.Blueprint.Seed.Migrate); err != nil {
+		if _, err := RunCommand(ctx, worktreePath, deps.Blueprint.Seed.Workdir, allocated, deps.Blueprint.Seed.Migrate); err != nil {
 			return fmt.Errorf("migrate: %w", err)
 		}
 

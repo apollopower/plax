@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -39,12 +40,23 @@ func (w *tailWriter) String() string {
 	return string(w.buf)
 }
 
-// RunCommand executes command through the user's shell in worktreePath with
-// the instance environment. It returns captured output on success and
-// includes command output in errors on failure.
-func RunCommand(ctx context.Context, worktreePath string, ports map[string]int, command string) (CommandResult, error) {
+// RunCommand executes command through the user's shell in the instance
+// worktree (workdir relative to worktreePath, matching seed.workdir
+// semantics) with the instance environment. It returns captured output on
+// success and includes command output in errors on failure.
+func RunCommand(ctx context.Context, worktreePath string, workdir string, ports map[string]int, command string) (CommandResult, error) {
 	if strings.TrimSpace(command) == "" {
 		return CommandResult{}, fmt.Errorf("instance command: empty command")
+	}
+
+	// A blueprint without env.template has no derived .env at all. Fail
+	// with the real cause instead of the generic "was the instance created
+	// with 'plax up'?" message from LoadInstanceEnv.
+	if _, err := os.Stat(filepath.Join(worktreePath, ".env")); err != nil {
+		if os.IsNotExist(err) {
+			return CommandResult{}, fmt.Errorf("instance command: no derived .env at %s — the blueprint's env.template is required to derive an instance environment", worktreePath)
+		}
+		return CommandResult{}, fmt.Errorf("instance command: stat .env: %w", err)
 	}
 
 	envList, err := env.LoadInstanceEnv(worktreePath, ports)
@@ -52,8 +64,19 @@ func RunCommand(ctx context.Context, worktreePath string, ports map[string]int, 
 		return CommandResult{}, err
 	}
 
+	// A host DATABASE_URL must not redirect an instance command to a
+	// non-instance database: keep the variable only when the derived .env
+	// actually defines it. The base path pins it for the same reason.
+	derived, err := env.ParseFile(filepath.Join(worktreePath, ".env"))
+	if err != nil {
+		return CommandResult{}, err
+	}
+	if _, ok := derived["DATABASE_URL"]; !ok {
+		envList = stripEnv(envList, "DATABASE_URL")
+	}
+
 	cmd := exec.Command("sh", "-c", command)
-	cmd.Dir = worktreePath
+	cmd.Dir = filepath.Join(worktreePath, workdir)
 	cmd.Env = envList
 
 	// Own process group so cancellation can kill the whole tree. Killing
@@ -87,4 +110,16 @@ func RunCommand(ctx context.Context, worktreePath string, ports map[string]int, 
 		<-done
 		return CommandResult{}, ctx.Err()
 	}
+}
+
+// stripEnv removes every KEY= entry from env.
+func stripEnv(env []string, key string) []string {
+	prefix := key + "="
+	out := env[:0]
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
 }

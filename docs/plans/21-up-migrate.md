@@ -37,18 +37,31 @@ type CommandResult struct {
     Output string
 }
 
-// RunCommand executes command through the user's shell in worktreePath with
-// the instance environment. It returns captured output on success and
-// includes command output in errors on failure.
-func RunCommand(ctx context.Context, worktreePath string, ports map[string]int, command string) (CommandResult, error)
+// RunCommand executes command through the user's shell in the instance
+// worktree (workdir relative to worktreePath, matching seed.workdir
+// semantics) with the instance environment. It returns captured output on
+// success and includes command output in errors on failure.
+func RunCommand(ctx context.Context, worktreePath string, workdir string, ports map[string]int, command string) (CommandResult, error)
 ```
 
 `RunCommand` uses `env.LoadInstanceEnv` to merge the host environment with
-the instance's derived `.env` and allocated ports. It sets `Cmd.Dir` to the
-instance worktree and runs `sh -c command`, matching the blueprint's existing
-seed command model. The result captures combined output so a migration tool's
-own summary can be shown on failure, but output is not parsed for an applied
-count.
+the instance's derived `.env` and allocated ports. It sets `Cmd.Dir` to
+`worktreePath/seed.workdir` — the base path and process spawn both honor
+`seed.workdir`, and migration tooling may live in a subdirectory — and runs
+`sh -c command`, matching the blueprint's existing seed command model. The
+result captures combined output so a migration tool's own summary can be
+shown on failure, but output is not parsed for an applied count.
+
+Two environment guards, both learned from the base path (plan 06 F3):
+
+- A host `DATABASE_URL` must not redirect an instance command to a
+  non-instance database: when the derived `.env` does not define
+  `DATABASE_URL`, the variable is stripped from the command environment.
+  The migration then fails loudly if the repository's tooling needs it,
+  rather than silently targeting the wrong database.
+- A blueprint without `env.template` has no derived `.env`; the migration
+  step fails with a message naming `env.template` as the cause, never the
+  misleading "was the instance created with 'plax up'?" text.
 
 ```go
 // UpOptions controls optional provisioning steps.
@@ -91,16 +104,20 @@ set and documentation must show one canonical form.
 ### Instance command execution
 
 ```
-RunCommand(ctx, worktreePath, ports, command)
+RunCommand(ctx, worktreePath, workdir, ports, command)
 
 1. Reject an empty command before starting a process.
-2. Load worktree `.env` and merge it over the host environment.
-3. Layer allocated port variables over the merged environment.
-4. Create `sh -c command` with `Cmd.Dir = worktreePath`.
-5. Connect stdout and stderr to the caller's stderr for visible `up` output
+2. Fail clearly when the worktree has no derived `.env` (blueprint without
+   `env.template`), naming the template as the cause.
+3. Load worktree `.env` and merge it over the host environment.
+4. Strip `DATABASE_URL` from the merged environment when the derived `.env`
+   does not define it, so a stray host value cannot redirect the command.
+5. Layer allocated port variables over the merged environment.
+6. Create `sh -c command` with `Cmd.Dir = worktreePath/seed.workdir`.
+7. Connect stdout and stderr to the caller's stderr for visible `up` output
    while also collecting bounded output for diagnostics.
-6. Run with ctx so cancellation terminates the command.
-7. Return a wrapped error containing the command output on non-zero exit.
+8. Run with ctx so cancellation terminates the command.
+9. Return a wrapped error containing the command output on non-zero exit.
    ⚠ Never run this helper with the base manager's repository root or base
    DSN; doing so can migrate the base instead of the instance.
 ```
@@ -121,8 +138,8 @@ up i1
    a. Print `applying migrations...` to stderr.
    b. If configured, snapshot applied migrations for the primary instance
       databases using the live-set API.
-   c. Run `seed.migrate` exactly once in the instance worktree with the
-      instance's derived environment.
+   c. Run `seed.migrate` exactly once in the instance worktree's
+      `seed.workdir` with the instance's derived environment.
    d. If configured, read the live sets again and report the count of newly
       applied identifiers. Otherwise report successful completion without a
       fabricated count.
@@ -245,9 +262,11 @@ zero count was measured when `applied_migrations` is absent.
 | Unknown `--skip` step | Reject before side effects → list valid names |
 | Empty `--skip` item | Reject before side effects → identify the empty step |
 | Empty `seed.migrate` | Blueprint validation already rejects it → `up` does not bypass validation |
+| No derived `.env` (no `env.template`) | Fail migration phase naming the missing template → rollback clones and all resources |
 | Instance `.env` missing or malformed | Fail migration phase → rollback clones and all resources |
+| Host exports `DATABASE_URL`, derived `.env` does not | Strip the host value from the migration environment → the command fails loudly if it needs one, never targets a non-instance database |
 | Migration command exits non-zero | Include command output → rollback and return non-zero |
-| Migration command canceled | Return context error → rollback using the uncanceled cleanup context |
+| Migration command canceled | Return context error → kill the whole process group so orphans cannot block rollback; rollback uses the uncanceled cleanup context |
 | Live migration count read fails | Fail rather than fabricate count → rollback |
 | Migration command succeeds with zero new identifiers | Report measured `0 applied` → continue |
 | `applied_migrations` is absent | Run migration → report completion without a count |
@@ -263,9 +282,20 @@ zero count was measured when `applied_migrations` is absent.
 
 - `TestRunCommand_UsesInstanceEnvAndWorktree` — command sees derived `.env`,
   allocated ports, and instance working directory rather than base values.
+- `TestRunCommand_HonorsWorkdirSubdirectory` — `seed.workdir` is joined
+  onto the worktree path, matching base and process-spawn semantics.
 - `TestRunCommand_StreamsOutputAndIncludesFailureOutput` — output is visible
   and non-zero exit errors retain useful diagnostics.
-- `TestRunCommand_CancellationStopsProcess` — context cancellation propagates.
+- `TestRunCommand_CancellationStopsProcess` — context cancellation kills the
+  whole process group, so a forking migration cannot block `Wait` on pipes
+  held by orphaned children.
+- `TestRunCommand_StripsHostDATABASE_URL_WhenNotDerived` — a host
+  `DATABASE_URL` never reaches the command when the derived `.env` does not
+  define it.
+- `TestRunCommand_KeepsDerivedDATABASE_URL` — the derived value wins over
+  the host value.
+- `TestRunCommand_MissingEnv_FailsWithClearMessage` — a blueprint without
+  `env.template` fails naming the template, not with a generic message.
 - `TestParseSkip_AcceptsCommaSeparatedNames` — valid names become a set.
 - `TestParseSkip_RejectsUnknownName` — typo fails validation.
 - `TestParseSkip_RejectsEmptyName` — malformed comma lists fail.
@@ -280,6 +310,11 @@ zero count was measured when `applied_migrations` is absent.
   clone and before container/process start.
 - `TestInstance_Up_MigrationRunsOnceForMultipleDatabases` — one command sees
   all derived database URLs.
+- `TestInstance_Up_MigrationRunsInSeedWorkdir` — the command's working
+  directory is `worktreePath/seed.workdir`.
+- `TestInstance_Up_MigrationCountReported_WhenConfigured` — the before/after
+  live-set reads and the measured count report are exercised through `Up`
+  with a stateful fake.
 - `TestInstance_Up_MigrationFailureRollsBack` — failed migration removes
   clones, worktree, network, ports, mailbox, and leaves no registry record.
 - `TestInstance_Up_SkipMigrateDoesNotRunCommand` — skipped migration reaches

@@ -47,6 +47,9 @@ type fakeBM struct {
 	cloneFunc func(ctx context.Context, targetDB string) error
 	dropErr   error
 
+	// appliedFunc, when set, supplies live applied-migration reads.
+	appliedFunc func(ctx context.Context, dbName string) ([]string, error)
+
 	mu      sync.Mutex
 	cloned  []string
 	dropped []string
@@ -93,7 +96,10 @@ func (f *fakeBM) InstanceDBExists(_ context.Context, _ string) (bool, error) {
 	return true, nil
 }
 
-func (f *fakeBM) AppliedMigrations(context.Context, string) ([]string, error) {
+func (f *fakeBM) AppliedMigrations(ctx context.Context, dbName string) ([]string, error) {
+	if f.appliedFunc != nil {
+		return f.appliedFunc(ctx, dbName)
+	}
 	return nil, nil
 }
 
@@ -262,6 +268,9 @@ func initRepo(t *testing.T) string {
 	return dir
 }
 
+// testBlueprint returns a blueprint whose migrate command is the real,
+// harmless `sh -c true`: since plan 21 every Up exercises the migrate
+// step by default, and `true` keeps the default path green.
 func testBlueprint() *blueprint.Blueprint {
 	return &blueprint.Blueprint{
 		Version:   1,

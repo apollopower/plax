@@ -2,7 +2,9 @@ package instance
 
 import (
 	"context"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -70,8 +72,8 @@ func TestMigrationCount_UnconfiguredHasNoFabricatedCount(t *testing.T) {
 }
 
 // worktreeFile returns the absolute path of a file inside an instance worktree.
-func worktreeFile(deps *Deps, name, file string) string {
-	return filepath.Join(deps.RepoRoot, worktree.WorktreeRelPath(name), file)
+func worktreeFile(deps *Deps, name string, elems ...string) string {
+	return filepath.Join(append([]string{deps.RepoRoot, worktree.WorktreeRelPath(name)}, elems...)...)
 }
 
 func TestInstance_Up_MigratesBeforeWorkloads(t *testing.T) {
@@ -220,4 +222,94 @@ func TestInstance_Up_UnknownSkipHasNoSideEffects(t *testing.T) {
 	if len(bm.clonedDBs()) > 0 || len(drv.createdNets) > 0 {
 		t.Errorf("side effects despite invalid skip: cloned=%v nets=%v", bm.clonedDBs(), drv.createdNets)
 	}
+}
+
+func TestInstance_Up_MigrationCountReported_WhenConfigured(t *testing.T) {
+	bp := testBlueprint()
+	bp.Seed.AppliedMigrations = &blueprint.AppliedMigrations{Table: "migrations", Column: "name"}
+	bp.Seed.Migrate = "true"
+
+	deps, bm, _ := testDeps(t, bp)
+	calls := 0
+	bm.appliedFunc = func(ctx context.Context, dbName string) ([]string, error) {
+		calls++
+		if calls == 1 {
+			return []string{"001"}, nil
+		}
+		return []string{"001", "002"}, nil
+	}
+	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
+
+	stderr := captureStderr(t, func() error {
+		return Up(context.Background(), deps, "i1", UpOptions{})
+	})
+	if !strings.Contains(stderr, "migrations: 1 applied") {
+		t.Errorf("up output missing measured count:\n%s", stderr)
+	}
+	if calls != 2 {
+		t.Errorf("applied-migration reads = %d, want 2 (before + after)", calls)
+	}
+}
+
+func TestInstance_Up_MigrationRunsInSeedWorkdir(t *testing.T) {
+	bp := testBlueprint()
+	bp.Seed.Workdir = "app"
+	bp.Seed.Migrate = "pwd > migrated-from.out"
+
+	deps, _, _ := testDeps(t, bp)
+	// The worktree is a git checkout, so the subdir must be committed to
+	// exist there.
+	appDir := filepath.Join(deps.RepoRoot, "app")
+	if err := os.MkdirAll(appDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "placeholder"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "add", "app"},
+		{"git", "commit", "-m", "add app dir"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = deps.RepoRoot
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", args, out)
+		}
+	}
+	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
+
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	data, err := os.ReadFile(worktreeFile(deps, "i1", "app", "migrated-from.out"))
+	if err != nil {
+		t.Fatalf("read migrated-from.out: %v", err)
+	}
+	want := filepath.Join(deps.RepoRoot, worktree.WorktreeRelPath("i1"), "app")
+	if strings.TrimSpace(string(data)) != want {
+		t.Errorf("migrate ran in %q, want %q", strings.TrimSpace(string(data)), want)
+	}
+}
+
+// captureStderr runs fn with os.Stderr piped and returns what was written.
+func captureStderr(t *testing.T, fn func() error) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	runErr := fn()
+	_ = w.Close()
+	os.Stderr = old
+	data, readErr := io.ReadAll(r)
+	_ = r.Close()
+	if runErr != nil {
+		t.Fatalf("captured call: %v", runErr)
+	}
+	if readErr != nil {
+		t.Fatalf("read stderr: %v", readErr)
+	}
+	return string(data)
 }
