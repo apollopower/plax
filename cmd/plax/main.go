@@ -26,6 +26,7 @@ import (
 	"github.com/apollopower/plax/pkg/instance"
 	"github.com/apollopower/plax/pkg/mailbox"
 	"github.com/apollopower/plax/pkg/portpool"
+	"github.com/apollopower/plax/pkg/record"
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/stamp"
 	"github.com/apollopower/plax/pkg/status"
@@ -73,6 +74,9 @@ type CLI struct {
 	Verify   VerifyCmd   `cmd:"" help:"Run verification checks against an existing instance and update its health state"`
 	Send     SendCmd     `cmd:"" help:"Send a message to an instance's mailbox"`
 	Recv     RecvCmd     `cmd:"" help:"Read and remove messages from an instance's mailbox"`
+	Log      LogCmd      `cmd:"" help:"Append a timestamped note to an instance's work record"`
+	Record   RecordCmd   `cmd:"" help:"Print an instance's work record"`
+	Verdict  VerdictCmd  `cmd:"" help:"Author the terminal verdict on an instance's work record"`
 	Upgrade  UpgradeCmd  `cmd:"" help:"Update plax to the latest release (honors the install method)"`
 }
 
@@ -117,11 +121,13 @@ type BaseStatusCmd struct {
 }
 
 type UpCmd struct {
-	Name  string   `arg:"" help:"Instance name (e.g. i1)"`
-	Root  string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
-	PgURL string   `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
-	Ref   string   `name:"ref" short:"R" optional:"" help:"Branch, PR number, tag, or commit SHA to branch from (default: current HEAD)"`
-	Skip  []string `name:"skip" optional:"" help:"Steps to skip: migrate, verify (comma-separated or repeated)"`
+	Name   string   `arg:"" help:"Instance name (e.g. i1)"`
+	Root   string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
+	PgURL  string   `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
+	Ref    string   `name:"ref" short:"R" optional:"" help:"Branch, PR number, tag, or commit SHA to branch from (default: current HEAD)"`
+	Intent string   `name:"intent" type:"path" optional:"" help:"Intent file: the task statement stored in the instance's work record"`
+	Parent string   `name:"parent" optional:"" help:"Existing instance whose exact worktree HEAD becomes the child's branch base"`
+	Skip   []string `name:"skip" optional:"" help:"Steps to skip: migrate, verify (comma-separated or repeated)"`
 }
 
 type DownCmd struct {
@@ -203,6 +209,26 @@ type UpgradeCmd struct {
 	Force bool `name:"force" help:"Proceed even when the current version is a dev build"`
 }
 
+type LogCmd struct {
+	Name string   `arg:"" help:"Instance name"`
+	Text []string `arg:"" optional:"" passthrough:"" help:"Note text (use -- to separate from flags)"`
+	Root string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
+}
+
+type RecordCmd struct {
+	Name string `arg:"" help:"Instance name"`
+	Root string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
+	JSON bool   `name:"json" help:"Output the parsed record as JSON"`
+}
+
+type VerdictCmd struct {
+	Name     string   `arg:"" help:"Instance name"`
+	Root     string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
+	Status   string   `name:"status" help:"Task outcome: pass or fail (required)"`
+	Contract string   `name:"contract" optional:"" help:"Contract outcome: pass or fail (required when the record declares a contract)"`
+	Summary  []string `arg:"" optional:"" passthrough:"" help:"Summary prose (use -- to separate from flags)"`
+}
+
 func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli,
@@ -255,6 +281,12 @@ func main() {
 		ctx.FatalIfErrorf(runSend(cli.Send))
 	case "recv <name>":
 		ctx.FatalIfErrorf(runRecv(cli.Recv))
+	case "log <name>", "log <name> <text>":
+		ctx.FatalIfErrorf(runLog(cli.Log))
+	case "record <name>":
+		ctx.FatalIfErrorf(runRecord(cli.Record))
+	case "verdict <name>", "verdict <name> <summary>":
+		ctx.FatalIfErrorf(runVerdict(cli.Verdict))
 	case "upgrade":
 		ctx.FatalIfErrorf(runUpgrade(cli.Upgrade))
 	default:
@@ -638,6 +670,14 @@ func runUp(cmd UpCmd) error {
 		return err
 	}
 
+	// Tracked-record setup happens before any side effect: --intent must
+	// name a readable, non-empty file, and --parent must name a registered
+	// instance whose worktree is a usable exact base.
+	rec, err := buildRecordInput(root, cmd)
+	if err != nil {
+		return err
+	}
+
 	resolvedRef, err := worktree.ResolveRef(root, cmd.Ref)
 	if err != nil {
 		return err
@@ -655,8 +695,102 @@ func runUp(cmd UpCmd) error {
 
 	deps.SourceRef = cmd.Ref
 	deps.ResolvedRef = resolvedRef
+	if rec != nil && rec.BaseCommit != "" {
+		// A stacked child records the parent's exact HEAD as its base.
+		deps.ResolvedRef = rec.BaseCommit
+	}
 
-	return instance.Up(ctx, deps.Deps, cmd.Name, instance.UpOptions{Skip: skip})
+	return instance.Up(ctx, deps.Deps, cmd.Name, instance.UpOptions{Skip: skip, Record: rec})
+}
+
+// buildRecordInput validates the --intent/--parent combination before any
+// up side effect and returns the record to create, or nil for an untracked
+// instance.
+func buildRecordInput(root string, cmd UpCmd) (*record.CreateInput, error) {
+	if cmd.Parent != "" && cmd.Ref != "" {
+		return nil, fmt.Errorf("up: --parent and --ref are mutually exclusive — the parent selects the Git base, --ref selects an independent external base")
+	}
+	if cmd.Intent == "" && cmd.Parent == "" {
+		fmt.Fprintln(os.Stderr, "warning: no work record will be created — pass --intent <file> to track this instance")
+		return nil, nil
+	}
+	if cmd.Parent != "" && cmd.Intent == "" {
+		return nil, fmt.Errorf("up: --parent requires --intent <file> — the child record needs its own intent")
+	}
+
+	intent, err := readIntentFile(cmd.Intent)
+	if err != nil {
+		return nil, err
+	}
+	rec := &record.CreateInput{Instance: cmd.Name, Intent: intent}
+	if cmd.Parent == "" {
+		return rec, nil
+	}
+
+	parentCommit, err := resolveParent(root, cmd.Parent)
+	if err != nil {
+		return nil, err
+	}
+	rec.Parent = cmd.Parent
+	rec.BaseCommit = parentCommit
+	return rec, nil
+}
+
+// readIntentFile reads an --intent file, rejecting a missing, unreadable,
+// or empty intent before any up side effect.
+func readIntentFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("up: reading intent file: %w", err)
+	}
+	if strings.TrimSpace(string(data)) == "" {
+		return "", fmt.Errorf("up: intent file %s is empty", path)
+	}
+	return string(data), nil
+}
+
+// resolveParent validates that the named instance is a usable parent for a
+// stacked child and returns its exact worktree HEAD commit. The registry
+// lock is released before returning so the caller's own registry open does
+// not deadlock.
+func resolveParent(root, parent string) (string, error) {
+	reg, err := openRegistry(root)
+	if err != nil {
+		return "", err
+	}
+	defer reg.Close()
+
+	rec, found := reg.GetInstance(parent)
+	if !found {
+		return "", fmt.Errorf("up: parent instance %q not found in the registry — --parent must name a registered instance", parent)
+	}
+
+	// The child's record stores parent lineage, so the parent must itself
+	// be tracked; its lineage cannot be recorded honestly otherwise.
+	if _, err := record.Read(root, parent); err != nil {
+		return "", fmt.Errorf("up: parent %q has no work record — run 'plax up --intent <file> %s' to track it first", parent, parent)
+	}
+
+	if rec.WorktreePath == "" {
+		return "", fmt.Errorf("up: parent %q has no worktree path — resume or recreate it before stacking", parent)
+	}
+	if info, err := os.Stat(rec.WorktreePath); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("up: parent %q has no accessible worktree (%s) — resume or recreate it before stacking", parent, rec.WorktreePath)
+	}
+
+	dirty, err := worktree.IsDirty(rec.WorktreePath)
+	if err != nil {
+		return "", fmt.Errorf("up: checking parent %q worktree: %w", parent, err)
+	}
+	if dirty {
+		return "", fmt.Errorf("up: parent %q has uncommitted changes — stacked ancestry needs an exact commit snapshot; commit or stash them first", parent)
+	}
+
+	_, commit, err := worktree.WorktreeHead(rec.WorktreePath)
+	if err != nil {
+		return "", fmt.Errorf("up: reading parent %q HEAD: %w — a stacked child must branch from the parent's exact commit", parent, err)
+	}
+	return commit, nil
 }
 
 func runDown(cmd DownCmd) error {
@@ -1652,6 +1786,95 @@ func runRecv(cmd RecvCmd) error {
 	}
 
 	return nil
+}
+
+// runLog appends a timestamped prose note to an instance's work record.
+// Records resolve from .plax/records/<name>.md, not the registry, so
+// logging a preserved record after `down` remains supported.
+func runLog(cmd LogCmd) error {
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("log: %w", ErrNoRoot)
+	}
+
+	parts := cmd.Text
+	for len(parts) > 0 && parts[0] == "--" {
+		parts = parts[1:]
+	}
+	text := strings.Join(parts, " ")
+	if text == "" {
+		return fmt.Errorf("log: note text is required — usage: plax log <name> -- <text>")
+	}
+
+	return record.Append(root, cmd.Name, text, time.Now())
+}
+
+// runRecord prints an instance's work record: the complete original text to
+// stdout by default, or the parsed projection with --json.
+func runRecord(cmd RecordCmd) error {
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("record: %w", ErrNoRoot)
+	}
+
+	if cmd.JSON {
+		rec, err := record.Read(root, cmd.Name)
+		if err != nil {
+			return err
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(rec)
+	}
+
+	// Default output is the original text, not a reconstruction — but it is
+	// only printed after the record parses, so a malformed record fails
+	// with a path and parse error instead of silently passing through.
+	if _, err := record.Read(root, cmd.Name); err != nil {
+		return err
+	}
+	text, err := record.ReadText(root, cmd.Name)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Print(text)
+	return err
+}
+
+// runVerdict authors the single terminal verdict on an instance's work
+// record. The verdict records the operator's declaration; it never claims
+// plax's verify battery independently validated the task.
+func runVerdict(cmd VerdictCmd) error {
+	root, found, err := discoverRoot(cmd.Root)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return fmt.Errorf("verdict: %w", ErrNoRoot)
+	}
+
+	if cmd.Status == "" {
+		return fmt.Errorf("verdict: --status is required (pass or fail)")
+	}
+	if cmd.Status != "pass" && cmd.Status != "fail" {
+		return fmt.Errorf("verdict: --status must be %q or %q, got %q", "pass", "fail", cmd.Status)
+	}
+	if cmd.Contract != "" && cmd.Contract != "pass" && cmd.Contract != "fail" {
+		return fmt.Errorf("verdict: --contract must be %q or %q, got %q", "pass", "fail", cmd.Contract)
+	}
+
+	parts := cmd.Summary
+	for len(parts) > 0 && parts[0] == "--" {
+		parts = parts[1:]
+	}
+	v := record.Verdict{Status: cmd.Status, Contract: cmd.Contract, Summary: strings.Join(parts, " ")}
+	return record.WriteVerdict(root, cmd.Name, v, time.Now())
 }
 
 func printReportStderr(r *status.Report) {

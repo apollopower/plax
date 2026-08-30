@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -70,6 +71,19 @@ func Create(repoRoot, name, sourceRef string) (string, error) {
 
 	return absPath, nil
 }
+
+// CreateFromCommit creates a plax branch and worktree from an exact commit
+// SHA. It rejects anything that is not a full 40-hex SHA so a stacked
+// child can never silently fall back to a branch or to repository HEAD.
+func CreateFromCommit(repoRoot, name, commit string) (string, error) {
+	if !fullSHARx.MatchString(commit) {
+		return "", fmt.Errorf("worktree: %q is not a full commit SHA (want 40 hex characters)", commit)
+	}
+	return Create(repoRoot, name, commit)
+}
+
+// fullSHARx matches a complete, unabbreviated Git commit ID.
+var fullSHARx = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // ResolveRef resolves a user-supplied ref string to a git ref that can be
 // passed to `git branch <name> <ref>`.

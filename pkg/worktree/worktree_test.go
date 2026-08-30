@@ -451,6 +451,107 @@ func readFileOrEmpty(t *testing.T, path string) string {
 	return string(data)
 }
 
+func TestWorktree_CreateFromCommit_BasesBranchAtExactCommit(t *testing.T) {
+	repo := initRepo(t)
+	if _, err := Create(repo, "parent", ""); err != nil {
+		t.Fatalf("Create parent: %v", err)
+	}
+	// Advance the parent worktree so its HEAD differs from the repo root's.
+	cmd := exec.Command("git", "commit", "--allow-empty", "-m", "parent work")
+	cmd.Dir = filepath.Join(repo, ".plax", "worktrees", "parent")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("commit in parent worktree: %s", out)
+	}
+	parentCommit := revParse(t, filepath.Join(repo, ".plax", "worktrees", "parent"), "HEAD")
+	if parentCommit == revParse(t, repo, "HEAD") {
+		t.Fatal("fixture setup failed: parent HEAD should differ from repo HEAD")
+	}
+
+	wtPath, err := CreateFromCommit(repo, "i1", parentCommit)
+	if err != nil {
+		t.Fatalf("CreateFromCommit: %v", err)
+	}
+	_, wtCommit, err := WorktreeHead(wtPath)
+	if err != nil {
+		t.Fatalf("WorktreeHead: %v", err)
+	}
+	if wtCommit != parentCommit {
+		t.Errorf("child worktree at %s, want parent HEAD (%s)", wtCommit, parentCommit)
+	}
+	if got := revParse(t, repo, "plax/i1"); got != parentCommit {
+		t.Errorf("child branch plax/i1 at %s, want %s", got, parentCommit)
+	}
+}
+
+func TestWorktree_CreateFromCommit_RejectsMissingCommit(t *testing.T) {
+	repo := initRepo(t)
+	// A well-formed SHA that exists nowhere in the repository: no fallback
+	// to HEAD, no branch, no worktree.
+	missing := strings.Repeat("0", 40)
+	_, err := CreateFromCommit(repo, "i1", missing)
+	if err == nil {
+		t.Fatal("CreateFromCommit with a missing commit should fail")
+	}
+	if BranchExists(repo, "i1") {
+		t.Error("missing commit must not create the branch")
+	}
+	if _, err := os.Stat(filepath.Join(repo, WorktreeRelPath("i1"))); !os.IsNotExist(err) {
+		t.Error("missing commit must not create the worktree")
+	}
+}
+
+func TestWorktree_CreateFromCommit_RejectsNonSHA(t *testing.T) {
+	repo := initRepo(t)
+	for _, ref := range []string{"main", "HEAD", "abc1234"} {
+		if _, err := CreateFromCommit(repo, "i1", ref); err == nil {
+			t.Errorf("CreateFromCommit(%q) should reject a non-SHA ref", ref)
+		}
+	}
+	if BranchExists(repo, "i1") {
+		t.Error("non-SHA input must not create the branch")
+	}
+}
+
+func TestWorktree_IsDirty_FiltersDerivedEnvOnly(t *testing.T) {
+	repo := initRepo(t)
+	wtPath, err := Create(repo, "i1", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	dirty, err := IsDirty(wtPath)
+	if err != nil {
+		t.Fatalf("IsDirty: %v", err)
+	}
+	if dirty {
+		t.Error("fresh worktree should be clean")
+	}
+
+	// The derived .env is plax's own output and must not count as dirt.
+	if err := os.WriteFile(filepath.Join(wtPath, ".env"), []byte("PORT=1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dirty, err = IsDirty(wtPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirty {
+		t.Error("modified .env should be filtered as a plax-managed artifact")
+	}
+
+	// A modified tracked file is operator work and must count.
+	if err := os.WriteFile(filepath.Join(wtPath, ".env.example"), []byte("PORT=9999\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dirty, err = IsDirty(wtPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dirty {
+		t.Error("modified tracked file should be reported dirty")
+	}
+}
+
 func TestWorktree_AddExclude_AppendsPattern(t *testing.T) {
 	repo := initRepo(t)
 	wtPath, err := Create(repo, "i1", "")

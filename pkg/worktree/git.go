@@ -3,6 +3,7 @@ package worktree
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -26,6 +27,31 @@ func gitHeadAt(dir string) (ref, commit string, err error) {
 	}
 	commit = strings.TrimSpace(string(commitOut))
 	return ref, commit, nil
+}
+
+// IsDirty reports whether the worktree has uncommitted changes beyond
+// plax-managed artifacts. Only the derived .env is filtered: plax writes it
+// on every up/rederive, so a modified or untracked .env is plax's own
+// output, not operator work — it must not make a parent unusable as an
+// exact base for a stacked child.
+func IsDirty(worktreePath string) (bool, error) {
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = worktreePath
+	out, err := cmd.Output()
+	if err != nil {
+		return false, fmt.Errorf("worktree: status: %w", err)
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if line == "" {
+			continue
+		}
+		// Porcelain lines are two status chars, a space, then the path.
+		if len(line) > 3 && filepath.Base(line[3:]) == ".env" {
+			continue
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 func HeadRef(repoRoot string) (ref, commit string, err error) {
