@@ -61,7 +61,10 @@ func TestRunCommand_CancellationStopsProcess(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, err := RunCommand(ctx, dir, nil, "sleep 30")
+		// A multi-command script forces sh to spawn sleep as a child rather
+		// than exec-optimizing it away, so the whole process group must be
+		// killed for Wait to return.
+		_, err := RunCommand(ctx, dir, nil, "sleep 30; exit 0")
 		done <- err
 	}()
 

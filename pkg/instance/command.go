@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 
 	"github.com/apollopower/plax/pkg/derive/env"
 )
@@ -51,23 +52,39 @@ func RunCommand(ctx context.Context, worktreePath string, ports map[string]int, 
 		return CommandResult{}, err
 	}
 
-	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = worktreePath
 	cmd.Env = envList
+
+	// Own process group so cancellation can kill the whole tree. Killing
+	// only sh would leave its children holding the output pipes open and
+	// block Wait on EOF.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	tail := &tailWriter{}
 	cmd.Stdout = io.MultiWriter(os.Stderr, tail)
 	cmd.Stderr = io.MultiWriter(os.Stderr, tail)
 
-	if err := cmd.Run(); err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return CommandResult{}, ctxErr
+	if err := cmd.Start(); err != nil {
+		return CommandResult{}, fmt.Errorf("instance command: start: %w", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			return CommandResult{Output: tail.String()}, nil
 		}
 		out := strings.TrimSpace(tail.String())
 		if out == "" {
 			return CommandResult{}, err
 		}
 		return CommandResult{}, fmt.Errorf("%s: %w", out, err)
+	case <-ctx.Done():
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+		return CommandResult{}, ctx.Err()
 	}
-	return CommandResult{Output: tail.String()}, nil
 }
