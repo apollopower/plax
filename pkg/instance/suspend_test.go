@@ -17,7 +17,7 @@ import (
 func TestInstance_SuspendSuccess(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	rec, _ := deps.Registry.GetInstance("i1")
@@ -49,7 +49,7 @@ func TestInstance_SuspendSuccess(t *testing.T) {
 func TestInstance_SuspendAlreadySuspended(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	if err := Suspend(context.Background(), deps, "i1"); err != nil {
@@ -77,7 +77,7 @@ func TestInstance_SuspendNotFound(t *testing.T) {
 func TestInstance_SuspendNilDocker(t *testing.T) {
 	deps, _, drv := testDeps(t, testBlueprint())
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
@@ -101,7 +101,7 @@ func TestInstance_SuspendNilDocker(t *testing.T) {
 func TestInstance_ResumeSuccess(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	firstRec, _ := deps.Registry.GetInstance("i1")
@@ -148,7 +148,7 @@ func TestInstance_ResumeSuccess(t *testing.T) {
 func TestInstance_ResumeNotSuspended(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	defer func() { _ = Down(context.Background(), deps, "i1") }()
@@ -162,7 +162,7 @@ func TestInstance_ResumeNotSuspended(t *testing.T) {
 func TestInstance_ResumePortTaken(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
@@ -209,7 +209,7 @@ func TestInstance_UpRecordsBaseRefAndToolVersions(t *testing.T) {
 
 	deps, _, _ := testDeps(t, testBlueprint())
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	defer func() { _ = Down(context.Background(), deps, "i1") }()

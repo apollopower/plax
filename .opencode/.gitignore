@@ -1,0 +1,4 @@
+# opencode-managed tooling artifacts (plugin deps resolved locally)
+node_modules/
+package.json
+package-lock.json

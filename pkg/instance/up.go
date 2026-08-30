@@ -27,10 +27,107 @@ import (
 // image exiting immediately — without pretending to be a readiness check.
 const settleDelay = 300 * time.Millisecond
 
+// validSkipSteps are the provisioning steps --skip may name. Defined
+// centrally so callers cannot add arbitrary names through the CLI.
+var validSkipSteps = map[string]bool{
+	"migrate": true,
+	"verify":  true,
+}
+
+// UpOptions controls optional provisioning steps.
+type UpOptions struct {
+	Skip map[string]bool
+}
+
+// ParseSkip validates and normalizes --skip step names into a set. Both
+// comma-separated and repeated forms resolve to the same set; unknown or
+// empty names are rejected so a typo cannot silently run a skipped step.
+func ParseSkip(names []string) (map[string]bool, error) {
+	set := map[string]bool{}
+	for _, item := range names {
+		for _, step := range strings.Split(item, ",") {
+			step = strings.TrimSpace(step)
+			if step == "" {
+				return nil, fmt.Errorf("--skip: empty step name")
+			}
+			if !validSkipSteps[step] {
+				return nil, fmt.Errorf("--skip: unknown step %q (valid steps: migrate, verify)", step)
+			}
+			set[step] = true
+		}
+	}
+	return set, nil
+}
+
+// validateSkip rejects unknown step names in a pre-parsed skip set.
+func validateSkip(skip map[string]bool) error {
+	for step := range skip {
+		if !validSkipSteps[step] {
+			return fmt.Errorf("--skip: unknown step %q (valid steps: migrate, verify)", step)
+		}
+	}
+	return nil
+}
+
+// countApplied returns how many identifiers in after are absent from before.
+func countApplied(before, after []string) int {
+	seen := map[string]bool{}
+	for _, id := range before {
+		seen[id] = true
+	}
+	n := 0
+	for _, id := range after {
+		if !seen[id] {
+			n++
+		}
+	}
+	return n
+}
+
+// migrationCounts returns, per database, the number of migration
+// identifiers applied between the before and after live-set reads.
+func migrationCounts(before, after map[string][]string) map[string]int {
+	counts := map[string]int{}
+	for db, applied := range after {
+		counts[db] = countApplied(before[db], applied)
+	}
+	return counts
+}
+
+// migrateReport renders the migration step outcome. A nil counts map means
+// count metadata is unavailable; no count is fabricated.
+func migrateReport(counts map[string]int) string {
+	if counts == nil {
+		return "complete (applied count unavailable)"
+	}
+	total := 0
+	for _, n := range counts {
+		total += n
+	}
+	if len(counts) <= 1 {
+		return fmt.Sprintf("%d applied", total)
+	}
+	names := make([]string, 0, len(counts))
+	for name := range counts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d applied (", total)
+	for i, name := range names {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%s: %d", name, counts[name])
+	}
+	b.WriteString(")")
+	return b.String()
+}
+
 // Up creates a full instance: branch, worktree, network, ports, .env,
 // database, containers, processes, registry entry. Rolls back all side
 // effects on failure.
-func Up(ctx context.Context, deps *Deps, name string) (err error) {
+func Up(ctx context.Context, deps *Deps, name string, opts UpOptions) (err error) {
 	if err := validateName(name); err != nil {
 		return err
 	}
@@ -40,6 +137,12 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	// fatal: derivation appends holes missing from the template.
 	if errs := blueprint.ValidateStructural(deps.Blueprint); len(errs) > 0 {
 		return fmt.Errorf("invalid blueprint: %w", errors.Join(errs...))
+	}
+
+	// Skip names must validate before any side effect: a typo must not
+	// silently run a skipped step.
+	if err := validateSkip(opts.Skip); err != nil {
+		return err
 	}
 
 	// Check instance does not already exist.
@@ -197,6 +300,48 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 			}
 		}
 	})
+
+	// Step 5.5: Migrate the instance databases. The command runs exactly
+	// once in the instance worktree with the derived environment, after the
+	// clones and before workloads. BaseManager.runMigrate is not suitable
+	// here: it targets the base workdir and DSN, missing every derived
+	// instance variable.
+	if !opts.Skip["migrate"] {
+		fmt.Fprintf(os.Stderr, "applying migrations...\n")
+
+		// The count is a measured live-set difference, never a parse of
+		// command stdout. A configured tracking table that cannot be queried
+		// is a provisioning failure, not permission to fabricate a count.
+		var before map[string][]string
+		if deps.Blueprint.Seed.AppliedMigrations != nil {
+			before = map[string][]string{}
+			for _, db := range clonedDBs {
+				applied, err := deps.BM.AppliedMigrations(ctx, db)
+				if err != nil {
+					return fmt.Errorf("migrate: reading applied migrations for %s: %w", db, err)
+				}
+				before[db] = applied
+			}
+		}
+
+		if _, err := RunCommand(ctx, worktreePath, deps.Blueprint.Seed.Workdir, allocated, deps.Blueprint.Seed.Migrate); err != nil {
+			return fmt.Errorf("migrate: %w", err)
+		}
+
+		if deps.Blueprint.Seed.AppliedMigrations != nil {
+			after := map[string][]string{}
+			for _, db := range clonedDBs {
+				applied, err := deps.BM.AppliedMigrations(ctx, db)
+				if err != nil {
+					return fmt.Errorf("migrate: re-reading applied migrations for %s: %w", db, err)
+				}
+				after[db] = applied
+			}
+			fmt.Fprintf(os.Stderr, "migrations: %s\n", migrateReport(migrationCounts(before, after)))
+		} else {
+			fmt.Fprintf(os.Stderr, "migrations: complete (applied count unavailable)\n")
+		}
+	}
 
 	// Step 6: Compute provenance and start workloads.
 	toolchainHash := hashFile(filepath.Join(deps.RepoRoot, deps.Blueprint.Toolchain))
@@ -445,6 +590,13 @@ func Up(ctx context.Context, deps *Deps, name string) (err error) {
 	fmt.Fprintf(os.Stderr, "  scratch:   .plax/worktrees/%s/scratch/\n", name)
 
 	// Step 8.5: Runtime verification — failure keeps the instance up.
+	// Skipping it suppresses the explicit verification phase only; the
+	// settle check above already ran.
+	if opts.Skip["verify"] {
+		fmt.Fprintf(os.Stderr, "verification skipped (--skip verify)\n")
+		success = true
+		return nil
+	}
 	results, verr := verify.RunVerify(ctx, &verify.Deps{
 		Blueprint: deps.Blueprint,
 		Registry:  deps.Registry,

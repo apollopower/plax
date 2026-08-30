@@ -117,10 +117,11 @@ type BaseStatusCmd struct {
 }
 
 type UpCmd struct {
-	Name  string `arg:"" help:"Instance name (e.g. i1)"`
-	Root  string `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
-	PgURL string `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
-	Ref   string `name:"ref" short:"R" optional:"" help:"Branch, PR number, tag, or commit SHA to branch from (default: current HEAD)"`
+	Name  string   `arg:"" help:"Instance name (e.g. i1)"`
+	Root  string   `name:"root" short:"r" type:"path" default:"." help:"Repo root directory (auto-discovered from cwd)"`
+	PgURL string   `name:"pg-url" type:"string" optional:"" help:"Postgres connection DSN (overrides blueprint env)"`
+	Ref   string   `name:"ref" short:"R" optional:"" help:"Branch, PR number, tag, or commit SHA to branch from (default: current HEAD)"`
+	Skip  []string `name:"skip" optional:"" help:"Steps to skip: migrate, verify (comma-separated or repeated)"`
 }
 
 type DownCmd struct {
@@ -625,6 +626,13 @@ func runUp(cmd UpCmd) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Skip names validate before any side effect, including opening the
+	// registry or connecting to Postgres and Docker.
+	skip, err := instance.ParseSkip(cmd.Skip)
+	if err != nil {
+		return err
+	}
+
 	root, _, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
@@ -648,7 +656,7 @@ func runUp(cmd UpCmd) error {
 	deps.SourceRef = cmd.Ref
 	deps.ResolvedRef = resolvedRef
 
-	return instance.Up(ctx, deps.Deps, cmd.Name)
+	return instance.Up(ctx, deps.Deps, cmd.Name, instance.UpOptions{Skip: skip})
 }
 
 func runDown(cmd DownCmd) error {

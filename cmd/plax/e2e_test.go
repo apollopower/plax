@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -313,7 +314,7 @@ func e2ePrereqs(t *testing.T) string {
 	if pgURL == "" {
 		t.Skip("skipping: PLAX_TEST_POSTGRES_URL not set")
 	}
-	for _, tool := range []string{"git", "python3"} {
+	for _, tool := range []string{"git", "python3", "psql"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("skipping: %s not available", tool)
 		}
@@ -748,6 +749,270 @@ func initFixtureRepoWithBranch(t *testing.T) string {
 	}
 
 	return dir
+}
+
+// TestEndToEnd_UpMigrations verifies that plain `plax up` applies pending
+// migrations to the instance databases (and not the base), that
+// `--skip migrate` leaves the instance on the cloned base schema, and that
+// a failing migration rolls back with no registered instance.
+func TestEndToEnd_UpMigrations(t *testing.T) {
+	pgURL := e2ePrereqs(t)
+	bin := buildPlax(t)
+	repo := initFixtureRepoWithMigrations(t)
+
+	suffix := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(t.Name(), "/", "_"), "#", "_"))
+	t.Setenv("PLAX_BASE_NAME", "plax_e2e_"+suffix)
+
+	_, stderr, err := runPlax(bin, repo, "base", "reset", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("base reset: %v\nstderr: %s", err, stderr)
+	}
+	t.Cleanup(func() { dropBaseDB(t, pgURL) })
+
+	for _, name := range []string{"i1", "i2", "i3"} {
+		n := name
+		t.Cleanup(func() { _, _, _ = runPlax(bin, repo, "down", n, "--pg-url", pgURL) })
+	}
+
+	// Commit a migration absent from the base, then up applies it to the
+	// instance only.
+	commitFixtureMigration(t, repo, "002_items_size.sql", "ALTER TABLE items ADD COLUMN size integer;\n")
+
+	_, stderr, err = runPlax(bin, repo, "up", "i1", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("up i1: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stderr, "applying migrations...") {
+		t.Errorf("up output missing migration step:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "migrations: 1 applied") {
+		t.Errorf("up output missing measured migration count:\n%s", stderr)
+	}
+	if !columnExists(t, pgURL, "plax_i1", "size") {
+		t.Fatal("plax_i1 should have the size column")
+	}
+	if columnExistsInLockedDB(t, pgURL, baseName(), "size") {
+		t.Error("base must not receive instance migrations")
+	}
+
+	// --skip migrate: instance stays on the cloned base schema.
+	_, stderr, err = runPlax(bin, repo, "up", "i2", "--skip", "migrate", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("up i2 --skip migrate: %v\nstderr: %s", err, stderr)
+	}
+	if strings.Contains(stderr, "applying migrations") {
+		t.Errorf("--skip migrate still ran migrations:\n%s", stderr)
+	}
+	if columnExists(t, pgURL, "plax_i2", "size") {
+		t.Error("plax_i2 should not have the size column")
+	}
+
+	// A failing migration fails up, rolls back, and registers nothing.
+	commitFixtureMigration(t, repo, "003_broken.sql", "ALTER TABLE items ADD COLUMN;\n")
+	_, stderr, err = runPlax(bin, repo, "up", "i3", "--pg-url", pgURL)
+	if err == nil {
+		t.Fatal("up i3 with a broken migration should fail")
+	}
+	if !strings.Contains(stderr, "migrate") || !strings.Contains(stderr, "syntax error") {
+		t.Errorf("stderr should name the failing migration step:\n%s", stderr)
+	}
+	if worktree.BranchExists(repo, "i3") {
+		t.Error("failed migration left branch plax/i3")
+	}
+	if dbExists(t, pgURL, "plax_i3") {
+		t.Error("failed migration left database plax_i3")
+	}
+	if dockerNetworkExists(t, "plax-i3-net") {
+		t.Error("failed migration left network plax-i3-net")
+	}
+	reg := openRegistryFile(t, repo)
+	if _, found := reg.Instances["i3"]; found {
+		t.Error("failed migration left a registry entry for i3")
+	}
+
+	if _, _, err := runPlax(bin, repo, "down", "i1", "--pg-url", pgURL); err != nil {
+		t.Fatalf("down i1: %v", err)
+	}
+	if _, _, err := runPlax(bin, repo, "down", "i2", "--pg-url", pgURL); err != nil {
+		t.Fatalf("down i2: %v", err)
+	}
+}
+
+// baseName returns the current PLAX_BASE_NAME or the default.
+func baseName() string {
+	if prefix := os.Getenv("PLAX_BASE_NAME"); prefix != "" {
+		return prefix
+	}
+	return "plax_base"
+}
+
+// columnExists reports whether db has a column named column in the public
+// schema. information_schema is scoped to the connected database, so the
+// connection targets db itself.
+func columnExists(t *testing.T, pgURL, db, column string) bool {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	u, err := url.Parse(pgURL)
+	if err != nil {
+		t.Fatalf("parse pgURL: %v", err)
+	}
+	u.Path = "/" + db
+	conn, err := pgx.Connect(ctx, u.String())
+	if err != nil {
+		t.Fatalf("connect to %s: %v", db, err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+
+	var got string
+	err = conn.QueryRow(ctx,
+		`SELECT column_name FROM information_schema.columns
+		 WHERE table_schema='public' AND table_name='items' AND column_name=$1`,
+		column).Scan(&got)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false
+	}
+	if err != nil {
+		t.Fatalf("query information_schema: %v", err)
+	}
+	return true
+}
+
+// columnExistsInLockedDB is columnExists for a database that refuses
+// connections while locked (the base). The lock is briefly lifted for the
+// read and restored, mirroring the base manager's readProvenance window.
+func columnExistsInLockedDB(t *testing.T, pgURL, db, column string) bool {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, err := pgx.Connect(ctx, pgURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer func() { _ = conn.Close(context.Background()) }()
+
+	unlock := fmt.Sprintf("ALTER DATABASE %s WITH ALLOW_CONNECTIONS true", db)
+	relock := fmt.Sprintf("ALTER DATABASE %s WITH ALLOW_CONNECTIONS false", db)
+	if _, err := conn.Exec(ctx, unlock); err != nil {
+		t.Fatalf("unlock %s: %v", db, err)
+	}
+	defer func() { _, _ = conn.Exec(context.Background(), relock) }()
+
+	u, err := url.Parse(pgURL)
+	if err != nil {
+		t.Fatalf("parse pgURL: %v", err)
+	}
+	u.Path = "/" + db
+	qconn, err := pgx.Connect(ctx, u.String())
+	if err != nil {
+		t.Fatalf("connect to %s: %v", db, err)
+	}
+	defer func() { _ = qconn.Close(context.Background()) }()
+
+	var got string
+	err = qconn.QueryRow(ctx,
+		`SELECT column_name FROM information_schema.columns
+		 WHERE table_schema='public' AND table_name='items' AND column_name=$1`,
+		column).Scan(&got)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false
+	}
+	if err != nil {
+		t.Fatalf("query information_schema: %v", err)
+	}
+	return true
+}
+
+// initFixtureRepoWithMigrations returns a repo whose migrations directory
+// holds one tracked migration and whose seed.migrate applies pending .sql
+// files to $DATABASE_URL, recording each in a migrations table.
+func initFixtureRepoWithMigrations(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+
+	files := map[string]string{
+		"plax.json": `{
+  "version": 1,
+  "name": "e2e",
+  "port_pool": {"start": 26400, "end": 26500},
+  "toolchain": ".tool-versions",
+  "seed": {
+    "migrate": "for f in migrations/*.sql; do name=$(basename \"$f\"); applied=$(psql \"$DATABASE_URL\" -tA -c \"SELECT 1 FROM migrations WHERE name='$name'\" 2>/dev/null); if [ \"$applied\" != \"1\" ]; then psql \"$DATABASE_URL\" -q -v ON_ERROR_STOP=1 -f \"$f\" || exit 1; psql \"$DATABASE_URL\" -q -c \"INSERT INTO migrations (name) VALUES ('$name')\" || exit 1; fi; done",
+    "command": "true",
+    "workdir": ".",
+    "applied_migrations": {"table": "migrations", "column": "name"}
+  },
+  "services": {
+    "db": {"isolation": "logical", "type": "postgres", "image": "postgres:16"},
+    "redis": {"isolation": "dedicated", "image": "redis:7-alpine", "ports": {"6379": {"var": "REDIS_PORT"}}}
+  },
+  "processes": [
+    {"name": "web", "isolation": "native", "command": "python3 -m http.server {{PORT}} --bind 127.0.0.1", "workdir": ".", "port_var": "PORT"}
+  ],
+  "env": {
+    "template": ".env.example",
+    "holes": {
+      "PORT": "{{PORT}}",
+      "REDIS_URL": "redis://localhost:{{REDIS_PORT}}/0",
+      "DATABASE_URL": "postgres://postgres:postgres@localhost:5432/{{DB_NAME}}"
+    }
+  }
+}
+`,
+		".env.example": `PORT=3000
+REDIS_URL=redis://localhost:6379/0
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/e2e_dev
+API_KEY=placeholder
+`,
+		".env":               "API_KEY=\"sk-test # withhash\"\n",
+		".tool-versions":     "golang 1.26\n",
+		"docker-compose.yml": "services: {}\n",
+		"migrations/001_init.sql": `CREATE TABLE migrations (name text PRIMARY KEY);
+CREATE TABLE items (id serial PRIMARY KEY, name text NOT NULL);
+`,
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "migrations"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, args := range [][]string{
+		{"git", "init"},
+		{"git", "config", "user.email", "e2e@test.com"},
+		{"git", "config", "user.name", "E2E"},
+		{"git", "add", "."},
+		{"git", "commit", "-m", "fixture"},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", args, out)
+		}
+	}
+	return dir
+}
+
+// commitFixtureMigration writes a migration file into the fixture repo's
+// migrations directory and commits it.
+func commitFixtureMigration(t *testing.T, repo, name, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(repo, "migrations", name), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "add", "migrations/"+name)
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %s", out)
+	}
+	cmd = exec.Command("git", "commit", "-m", "add "+name)
+	cmd.Dir = repo
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %s", out)
+	}
 }
 
 func dropBaseDB(t *testing.T, pgURL string) {
