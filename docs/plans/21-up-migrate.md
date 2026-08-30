@@ -301,25 +301,25 @@ that no instance remains registered.
 
 ## Acceptance criteria
 
-- Plain `plax up i1` runs `seed.migrate` exactly once after all instance
+- [x] Plain `plax up i1` runs `seed.migrate` exactly once after all instance
   databases are cloned and before any workload starts.
-- The migration command runs in the instance worktree with its derived
+- [x] The migration command runs in the instance worktree with its derived
   environment and all derived database URLs; the base database is untouched.
-- A migration failure returns non-zero, includes useful command output,
+- [x] A migration failure returns non-zero, includes useful command output,
   removes all resources created by `up`, and leaves no healthy registry entry.
-- `plax up --skip migrate i1` does not run the migration command and leaves
+- [x] `plax up --skip migrate i1` does not run the migration command and leaves
   the instance on the cloned base schema.
-- `plax up --skip verify i1` omits the explicit verification phase while
+- [x] `plax up --skip verify i1` omits the explicit verification phase while
   retaining the immediate workload settle check and clearly reports the
   skipped verification.
-- `--skip` accepts the documented names, rejects unknown or empty names
+- [x] `--skip` accepts the documented names, rejects unknown or empty names
   before side effects, and has deterministic behavior for repeated names.
-- When `seed.applied_migrations` is configured, output reports the measured
+- [x] When `seed.applied_migrations` is configured, output reports the measured
   number of newly applied identifiers; when absent, output does not invent a
   count or parse framework-specific stdout.
-- Multiple logical databases receive one migration command invocation, with
+- [x] Multiple logical databases receive one migration command invocation, with
   count detail measured per database when metadata permits.
-- Guide, manual, plan index, and the 2026-08-26 triage snapshot document the
+- [x] Guide, manual, plan index, and the 2026-08-26 triage snapshot document the
   changed default and skip behavior.
 
 ## Dependencies

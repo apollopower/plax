@@ -141,7 +141,7 @@ usage.
 |---|---|
 | `plax init` | Scaffold a `plax.json` skeleton from `docker-compose.yml` and `.env.example` (stdout) |
 | `plax base create/seed/reset/refresh/status` | Manage the base database (see above) |
-| `plax up <name>` | Create and start an instance (the whole lifecycle) |
+| `plax up <name>` | Create and start an instance: branch, worktree, network, ports, env, cloned databases, migrations, containers, processes (`--skip migrate,verify`) |
 | `plax down <name>` | Destroy an instance: processes, containers, DB, network, worktree, branch, registry entry, mailbox |
 | `plax ls` | List instances with state, live health, unread mail, ports |
 | `plax attach <name>` | Open an interactive shell in the instance's environment |
@@ -167,7 +167,12 @@ Every instance is in exactly one state, recorded in the registry:
   not bound while suspended — anything on the machine can take them.
 
 `plax up` creates a running instance and verifies what it started before
-reporting success. `plax down` removes everything, tolerating missing
+reporting success. After the databases are cloned it applies pending
+migrations in the instance worktree with the instance's derived environment,
+so a new instance never boots on a stale schema. When the blueprint
+configures `seed.applied_migrations`, the step reports the measured number
+of newly applied identifiers; otherwise it reports completion without a
+count. `plax down` removes everything, tolerating missing
 resources (a stopped Docker daemon or dead Postgres will not prevent
 teardown of everything else). `plax up` rolls back all side effects in
 reverse order if any step fails.
@@ -183,14 +188,23 @@ free the port and retry, or `down` and `up` to reallocate.
 ```sh
 plax up <name>            # from current HEAD
 plax up --ref <ref> <name>  # from a branch, PR, tag, or commit
+plax up --skip migrate,verify <name>  # skip provisioning steps
 ```
 
 `--ref` accepts a branch name, `pr/42`, a bare integer (treated as a PR
 number), or a commit SHA. `plax up` branches `plax/<name>`, creates the
-worktree, network, ports, derived `.env`, cloned database(s), containers,
-and processes, then verifies. The summary prints the worktree path,
-branch, database name, ports, logs dir, and scratch dir — capture it, it
-is everything needed to work inside the instance.
+worktree, network, ports, derived `.env`, cloned database(s), applies
+pending migrations, starts containers and processes, then verifies. The
+summary prints the worktree path, branch, database name, ports, logs dir,
+and scratch dir — capture it, it is everything needed to work inside the
+instance.
+
+`--skip` accepts exactly `migrate` and `verify`, comma-separated or as
+repeated flags; unknown or empty names fail before any side effect.
+`--skip migrate` leaves the instance on the cloned base schema. `--skip
+verify` retains the immediate settle check (a workload exiting right after
+start still fails `up`) but omits the later verification phase and says so
+on stderr.
 
 ### Inspect
 
@@ -248,7 +262,7 @@ Reading `status` never writes the registry. Remediation by dimension:
 | Dimension | Fix |
 |---|---|
 | code | `git pull`/merge the base into the instance branch |
-| schema | re-migrate the instance DB (`plax exec <name> -- <migrate cmd>`) |
+| schema | re-migrate the instance DB (`plax exec <name> -- <migrate cmd>`); fresh instances are pre-migrated by `plax up` |
 | data | `plax down` + `plax up` after `plax base refresh` |
 | host | `plax down` + `plax up` to rebuild with current tool versions |
 | config | `plax rederive` for env-only changes; `down` + `up` otherwise |

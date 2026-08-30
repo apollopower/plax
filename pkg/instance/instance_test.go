@@ -268,7 +268,7 @@ func testBlueprint() *blueprint.Blueprint {
 		Name:      "test",
 		PortPool:  blueprint.PortPool{Start: 25000, End: 25100},
 		Toolchain: ".tool-versions",
-		Seed:      blueprint.SeedConfig{Migrate: "m", Command: "c", Workdir: "."},
+		Seed:      blueprint.SeedConfig{Migrate: "true", Command: "c", Workdir: "."},
 		Services: map[string]blueprint.ServiceDef{
 			"db":    {Isolation: blueprint.IsolationLogical, Type: "postgres"},
 			"redis": {Isolation: blueprint.IsolationDedicated, Image: "redis:7", Ports: map[string]blueprint.PortDef{"6379": {Var: "REDIS_PORT"}}},
@@ -350,7 +350,7 @@ func TestInstance_UpSuccess(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
@@ -421,7 +421,7 @@ func TestInstance_Up_ScratchCreatedAndExcluded(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
@@ -459,7 +459,7 @@ func TestInstance_Up_ScratchCreatedAndExcluded(t *testing.T) {
 func TestInstance_Down_RemovesScratch(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	rec, _ := deps.Registry.GetInstance("i1")
@@ -492,10 +492,10 @@ func TestInstance_UpDuplicateName(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("first Up: %v", err)
 	}
-	if err := Up(context.Background(), deps, "i1"); err == nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err == nil {
 		t.Fatal("second Up should fail")
 	}
 }
@@ -503,7 +503,7 @@ func TestInstance_UpDuplicateName(t *testing.T) {
 func TestInstance_UpHyphenNameRejected(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
-	err := Up(context.Background(), deps, "foo-bar")
+	err := Up(context.Background(), deps, "foo-bar", UpOptions{})
 	if err == nil || !strings.Contains(err.Error(), "^[a-z][a-z0-9_]*$") {
 		t.Fatalf("Up(foo-bar) = %v, want charset error", err)
 	}
@@ -518,7 +518,7 @@ func TestInstance_UpInvalidBlueprintNoSideEffects(t *testing.T) {
 
 	deps, bm, drv := testDeps(t, bp)
 
-	err := Up(context.Background(), deps, "i1")
+	err := Up(context.Background(), deps, "i1", UpOptions{})
 	if err == nil || !strings.Contains(err.Error(), "duplicate process") {
 		t.Fatalf("Up = %v, want duplicate process error", err)
 	}
@@ -535,7 +535,7 @@ func TestInstance_UpRollbackOnCloneFailure(t *testing.T) {
 		return errors.New("boom")
 	}
 
-	err := Up(context.Background(), deps, "i1")
+	err := Up(context.Background(), deps, "i1", UpOptions{})
 	if err == nil || !strings.Contains(err.Error(), "cloning database") {
 		t.Fatalf("Up = %v, want clone failure", err)
 	}
@@ -555,7 +555,7 @@ func TestInstance_UpRollbackOnImmediateExit(t *testing.T) {
 
 	deps, _, drv := testDeps(t, bp)
 
-	err := Up(context.Background(), deps, "i1")
+	err := Up(context.Background(), deps, "i1", UpOptions{})
 	if err == nil || !strings.Contains(err.Error(), "exited immediately") {
 		t.Fatalf("Up = %v, want immediate-exit error", err)
 	}
@@ -591,7 +591,7 @@ func TestInstance_UpEnvCheckFailure_RollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := Up(context.Background(), deps, "i1")
+	err := Up(context.Background(), deps, "i1", UpOptions{})
 	if err == nil {
 		t.Fatal("Up should fail with env check error")
 	}
@@ -617,7 +617,7 @@ func TestInstance_Up_DoesNotBlockOnTCPReadiness(t *testing.T) {
 	// is deferred to the live ls/status/verify probes. (Plan 16.)
 	drv.skipBindListeners = true
 
-	err := Up(context.Background(), deps, "i1")
+	err := Up(context.Background(), deps, "i1", UpOptions{})
 	if err != nil {
 		t.Fatalf("Up should succeed without TCP readiness probe, got: %v", err)
 	}
@@ -657,7 +657,7 @@ func TestInstance_UpRollbackOnCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- Up(ctx, deps, "i1")
+		done <- Up(ctx, deps, "i1", UpOptions{})
 	}()
 
 	<-cloneEntered
@@ -690,7 +690,7 @@ func TestInstance_UpConcurrentPartialFailure(t *testing.T) {
 
 	drv.runErrFor = map[string]error{"redis2": errors.New("injected failure")}
 
-	err := Up(context.Background(), deps, "i1")
+	err := Up(context.Background(), deps, "i1", UpOptions{})
 	if err == nil || !strings.Contains(err.Error(), "injected failure") {
 		t.Fatalf("Up = %v, want injected failure error", err)
 	}
@@ -709,7 +709,7 @@ func TestInstance_UpConcurrentPartialFailure(t *testing.T) {
 func TestInstance_DownSuccess(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	rec, _ := deps.Registry.GetInstance("i1")
@@ -734,7 +734,7 @@ func TestInstance_DownSuccess(t *testing.T) {
 func TestInstance_DownStopFailureStillRemoves(t *testing.T) {
 	deps, _, drv := testDeps(t, testBlueprint())
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
@@ -765,7 +765,7 @@ func TestInstance_DownMissingWorktreeBranchDeleted(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
@@ -794,7 +794,7 @@ func TestInstance_DownMissingWorktreeBranchDeleted(t *testing.T) {
 func TestInstance_DownNilBackendsStillCleans(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 	rec, _ := deps.Registry.GetInstance("i1")
@@ -835,7 +835,7 @@ func TestInstance_UpMultipleDatabases(t *testing.T) {
 	deps, bm, _ := testDeps(t, bp)
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
@@ -887,7 +887,7 @@ func TestInstance_DownMultipleDatabases(t *testing.T) {
 	deps, bm, _ := testDeps(t, bp)
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
@@ -948,7 +948,7 @@ func TestInstance_UpBackwardCompatible(t *testing.T) {
 	deps, bm, _ := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
@@ -987,7 +987,7 @@ func TestInstance_UpWithRef(t *testing.T) {
 	deps.SourceRef = otherRef
 	deps.ResolvedRef = otherRef
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up with ref: %v", err)
 	}
 
@@ -1033,7 +1033,7 @@ func TestInstance_UpWithoutRef(t *testing.T) {
 	deps, bm, drv := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 
@@ -1060,7 +1060,7 @@ func TestInstance_DownStalePGIDNotSignaled(t *testing.T) {
 	deps, _, _ := testDeps(t, testBlueprint())
 	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
 
-	if err := Up(context.Background(), deps, "i1"); err != nil {
+	if err := Up(context.Background(), deps, "i1", UpOptions{}); err != nil {
 		t.Fatalf("Up: %v", err)
 	}
 

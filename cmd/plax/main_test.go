@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alecthomas/kong"
 	"github.com/apollopower/plax/pkg/upgrade"
 )
 
@@ -125,5 +126,39 @@ func TestUpgrade_UpgradeMode_DevBuild_Force_Proceeds(t *testing.T) {
 	err := runUpgrade(UpgradeCmd{Force: true})
 	if err == nil || !strings.Contains(err.Error(), "no archive for") {
 		t.Fatalf("runUpgrade(force) = %v, want no-archive error", err)
+	}
+}
+
+// TestUp_KongParsesSkip verifies both --skip forms (comma-separated and
+// repeated) reach the Up command struct for the canonical parse set.
+func TestUp_KongParsesSkip(t *testing.T) {
+	var cli CLI
+	k, err := kong.New(&cli)
+	if err != nil {
+		t.Fatalf("kong.New: %v", err)
+	}
+	if _, err := k.Parse([]string{"up", "--skip", "migrate,verify", "--skip", "verify", "i1"}); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// Kong splits comma-separated slice values; repeated flags accumulate.
+	// Both forms resolve to the same set in ParseSkip.
+	if len(cli.Up.Skip) != 3 || cli.Up.Skip[0] != "migrate" || cli.Up.Skip[1] != "verify" || cli.Up.Skip[2] != "verify" {
+		t.Errorf("Skip = %v, want [migrate verify verify]", cli.Up.Skip)
+	}
+}
+
+func TestUp_UnknownSkipStep_FailsBeforeSideEffects(t *testing.T) {
+	err := runUp(UpCmd{Name: "i1", Skip: []string{"migrate,bogus"}})
+	if err == nil || !strings.Contains(err.Error(), "bogus") {
+		t.Fatalf("runUp = %v, want unknown-step error", err)
+	}
+	if !strings.Contains(err.Error(), "migrate, verify") {
+		t.Errorf("error should list valid steps: %v", err)
+	}
+}
+
+func TestUp_EmptySkipStep_FailsBeforeSideEffects(t *testing.T) {
+	if err := runUp(UpCmd{Name: "i1", Skip: []string{"migrate,"}}); err == nil {
+		t.Fatal("runUp with an empty skip step should fail")
 	}
 }

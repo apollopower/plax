@@ -553,11 +553,36 @@ This does everything:
 3. Allocates ports from the pool
 4. Derives `.env` from template + your `.env` + hole values
 5. Clones `plax_base` to `plax_myfeature`
-6. Starts dedicated containers (Redis, Gotenberg, etc.)
-7. Starts native processes (app, workers)
-8. Records everything in the registry
+6. Applies pending migrations in the worktree with the instance's derived
+   environment — the base's applied set is not assumed current, so the
+   instance never boots on a stale schema
+7. Starts dedicated containers (Redis, Gotenberg, etc.)
+8. Starts native processes (app, workers)
+9. Records everything in the registry
 
 If any step fails, all side effects are rolled back in reverse order.
+
+### 6.1.1 Skipping steps
+
+```sh
+plax up --skip migrate myfeature   # skip the migration step
+plax up --skip verify myfeature    # skip the explicit verification phase
+plax up --skip migrate,verify myfeature
+```
+
+`--skip` accepts exactly `migrate` and `verify`, comma-separated or as
+repeated flags; unknown or empty names fail before any side effect.
+
+- `--skip migrate` leaves the instance on the cloned base schema — use it
+  when the base is known current and migrations are slow.
+- `--skip verify` still runs the immediate settle check (a workload that
+  exits right after start fails `up`); it only omits the later verification
+  phase and says so on stderr.
+
+When the blueprint configures `seed.applied_migrations`, the migration step
+reports the measured number of newly applied identifiers (per database when
+more than one); without it, the step reports completion without a count —
+plax never parses a migration tool's stdout.
 
 ### 6.2 List
 
