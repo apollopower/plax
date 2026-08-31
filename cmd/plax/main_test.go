@@ -582,6 +582,28 @@ func TestUp_IntentFileWithSectionMarker_RejectedBeforeSideEffects(t *testing.T) 
 	}
 }
 
+func TestUp_ParentWithMalformedRecord_Fails(t *testing.T) {
+	repo := initUpRepo(t)
+	registerParent(t, repo)
+	// Corrupt the parent's record: the child must not be created, and the
+	// diagnostic must say the record is unreadable, not untracked.
+	if err := os.WriteFile(record.Path(repo, "i0"), []byte("garbage\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	intent := writeIntentFile(t, repo, "intent.md", "child task\n")
+
+	_, err := buildRecordInput(repo, UpCmd{Name: "i1", Root: repo, Parent: "i0", Intent: intent})
+	if err == nil || !strings.Contains(err.Error(), "unreadable") {
+		t.Fatalf("buildRecordInput = %v, want unreadable-record diagnostic", err)
+	}
+	if strings.Contains(err.Error(), "no work record") {
+		t.Errorf("error must not mislabel a corrupted record as untracked: %v", err)
+	}
+	if worktree.BranchExists(repo, "i1") {
+		t.Error("malformed parent must not create a branch or worktree")
+	}
+}
+
 func TestUp_ParentAndRefMutuallyExclusive(t *testing.T) {
 	repo := initRecordRepo(t)
 	intent := writeIntentFile(t, repo, "intent.md", "task\n")

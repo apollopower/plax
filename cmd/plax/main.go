@@ -771,9 +771,15 @@ func resolveParent(root, parent string) (string, error) {
 	}
 
 	// The child's record stores parent lineage, so the parent must itself
-	// be tracked; its lineage cannot be recorded honestly otherwise.
-	if _, err := record.Read(root, parent); err != nil {
+	// be tracked; its lineage cannot be recorded honestly otherwise. A
+	// missing record and a corrupted one are different failures: the first
+	// is an untracked parent, the second needs repair, not re-creation.
+	if _, err := os.Stat(record.Path(root, parent)); err != nil {
 		return "", fmt.Errorf("up: parent %q has no work record — run 'plax up --intent <file> %s' to track it first", parent, parent)
+	}
+	if _, err := record.Read(root, parent); err != nil {
+		return "", fmt.Errorf("up: parent %q's work record is unreadable — fix or delete %s: %w",
+			parent, record.Path(root, parent), err)
 	}
 
 	if rec.WorktreePath == "" {

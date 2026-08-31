@@ -409,6 +409,31 @@ func TestRecord_Prose_RejectsSectionMarkerLines(t *testing.T) {
 	}
 }
 
+func TestRecord_Append_RejectsMalformedRecord(t *testing.T) {
+	repo := initRepo(t)
+	if err := Create(repo, CreateInput{Instance: "i1", Intent: "task"}); err != nil {
+		t.Fatal(err)
+	}
+	path := Path(repo, "i1")
+
+	// An unknown section makes the record unparseable; appending must not
+	// silently extend a file the tool's own readers reject.
+	if err := os.WriteFile(path, []byte("instance: i1\nintent: task\n---\n## intent\ntask\n## notes\nx\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Append(repo, "i1", "note", time.Now()); err == nil || !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("Append on malformed record = %v, want malformed rejection", err)
+	}
+
+	// A mismatched instance header must be rejected the same way.
+	if err := os.WriteFile(path, []byte("instance: i2\nintent: task\n---\n## intent\ntask\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Append(repo, "i1", "note", time.Now()); err == nil {
+		t.Fatal("Append on a record with a mismatched instance header should fail")
+	}
+}
+
 // TestRecord_WireFormat_LocksTheOnDiskGrammar pins the exact rendered text
 // against the documented wire representation.
 func TestRecord_WireFormat_LocksTheOnDiskGrammar(t *testing.T) {

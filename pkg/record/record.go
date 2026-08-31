@@ -212,6 +212,17 @@ func Append(repoRoot, name, text string, now time.Time) error {
 	}
 	defer lk.close()
 
+	// Never write what the tool's own readers reject: a corrupted record or
+	// a mismatched instance header must block the append, not silently
+	// extend a file that can no longer be parsed.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("record: reading %s: %w", path, err)
+	}
+	if _, err := parseRecord(data, name); err != nil {
+		return fmt.Errorf("record: %s is malformed — fix or delete it before appending: %w", path, err)
+	}
+
 	entry := "\n## log\nat: " + now.Format(time.RFC3339) + "\n" + text + "\n"
 	return appendBytes(path, entry)
 }
