@@ -379,6 +379,36 @@ func TestRecord_Create_RejectsParentWithoutBaseCommit(t *testing.T) {
 	}
 }
 
+func TestRecord_Prose_RejectsSectionMarkerLines(t *testing.T) {
+	repo := initRepo(t)
+	// A markdown heading in authored prose would be read as a new record
+	// section; the record must be rejected at authoring time so the tool
+	// never writes a record its own readers cannot parse.
+	if err := Create(repo, CreateInput{Instance: "i1", Intent: "task\n## Requirements\none"}); err == nil {
+		t.Error("Create with a '## ' line in the intent should fail")
+	}
+	if err := Create(repo, CreateInput{Instance: "i1", Intent: "task", Body: "## notes"}); err == nil {
+		t.Error("Create with a '## ' line in the body should fail")
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".plax", "records")); !os.IsNotExist(err) {
+		t.Error("rejected prose must not create the records directory")
+	}
+
+	// Single-hash headings and level-1 headings are unambiguous prose.
+	if err := Create(repo, CreateInput{Instance: "i1", Intent: "# Task\n##not a heading\n### also fine"}); err != nil {
+		t.Fatalf("non-colliding prose rejected: %v", err)
+	}
+	if err := Append(repo, "i1", "note with ## embedded", time.Now()); err != nil {
+		t.Fatalf("Append with non-colliding text: %v", err)
+	}
+	if err := Append(repo, "i1", "## log-like line", time.Now()); err == nil {
+		t.Error("Append with a '## ' line should fail")
+	}
+	if err := WriteVerdict(repo, "i1", Verdict{Status: "pass", Summary: "## summary"}, time.Now()); err == nil {
+		t.Error("WriteVerdict with a '## ' line in the summary should fail")
+	}
+}
+
 // TestRecord_WireFormat_LocksTheOnDiskGrammar pins the exact rendered text
 // against the documented wire representation.
 func TestRecord_WireFormat_LocksTheOnDiskGrammar(t *testing.T) {

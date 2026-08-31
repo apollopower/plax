@@ -355,6 +355,10 @@ plax verdict i1 --status pass --contract pass -- "Tests and typecheck pass"
   `plax verify` runs the fixed environment, service, process, and database
   checks. Authoring a verdict is the operator's declaration; it does not
   claim plax independently validated the task.
+- Authored prose (intent files, log notes, verdict summaries) must not
+  contain lines starting with `## ` — that prefix is reserved for record
+  sections. `plax up` rejects such intent files before any side effect, and
+  `plax log`/`plax verdict` reject such text.
 - `plax log`, `plax record`, and `plax verdict` resolve the record by path,
   not registry membership, so they keep working after `down`.
 

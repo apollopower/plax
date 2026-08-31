@@ -832,6 +832,11 @@ Semantics:
   verify` remains the fixed environment, service, process, and database
   battery; a verdict is the operator's declaration and does not claim plax
   validated the task.
+- Authored prose — intent files, log notes, verdict summaries — must not
+  contain lines starting with `## `: that prefix is reserved for record
+  sections, and a record the tool's own readers cannot parse is worse than
+  a failed create. `plax up` rejects such intent files before any side
+  effect; `plax log` and `plax verdict` reject such text.
 
 ## 7. Mailbox
 

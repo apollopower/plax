@@ -493,6 +493,95 @@ func TestUp_WithParentAndIntent_CreatesStackedChild(t *testing.T) {
 	}
 }
 
+// registerParent creates a registered, tracked parent instance with a real
+// worktree in the repo and returns the worktree path.
+func registerParent(t *testing.T, repo string) string {
+	t.Helper()
+	wtPath, err := worktree.Create(repo, "i0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := record.Create(repo, record.CreateInput{Instance: "i0", Intent: "parent task"}); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := registry.Open(filepath.Join(repo, ".plax", "registry.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.AddInstance("i0", registry.InstanceRecord{
+		Branch:       worktree.BranchName("i0"),
+		WorktreePath: wtPath,
+		CreatedAt:    time.Now(),
+		State:        registry.StateRunning,
+		Ports:        map[string]int{},
+		ContainerIDs: map[string]string{},
+		PIDs:         map[string]int{},
+		PIDStarts:    map[string]int64{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	reg.Close()
+	return wtPath
+}
+
+func TestUp_ParentResolution_ReturnsExactWorktreeHead(t *testing.T) {
+	repo := initUpRepo(t)
+	wtPath := registerParent(t, repo)
+	c0 := commitInWorktree(t, wtPath, "work.txt", "parent work\n")
+	intent := writeIntentFile(t, repo, "intent.md", "child task\n")
+
+	rec, err := buildRecordInput(repo, UpCmd{Name: "i1", Root: repo, Parent: "i0", Intent: intent})
+	if err != nil {
+		t.Fatalf("buildRecordInput: %v", err)
+	}
+	if rec == nil {
+		t.Fatal("record input missing")
+	}
+	if rec.Parent != "i0" {
+		t.Errorf("record parent = %q, want i0", rec.Parent)
+	}
+	if rec.BaseCommit != c0 {
+		t.Errorf("record base_commit = %q, want the parent worktree HEAD %q", rec.BaseCommit, c0)
+	}
+	if rec.Intent != "child task\n" {
+		t.Errorf("record intent = %q, want the intent file content", rec.Intent)
+	}
+}
+
+func TestUp_ParentResolution_RejectsDirtyParent(t *testing.T) {
+	repo := initUpRepo(t)
+	wtPath := registerParent(t, repo)
+	// Operator work — a modified tracked file — makes the parent unusable
+	// as an exact base; only the plax-derived root .env is tolerated.
+	if err := os.WriteFile(filepath.Join(wtPath, ".env.example"), []byte("PORT=9999\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	intent := writeIntentFile(t, repo, "intent.md", "child task\n")
+
+	_, err := buildRecordInput(repo, UpCmd{Name: "i1", Root: repo, Parent: "i0", Intent: intent})
+	if err == nil || !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("buildRecordInput = %v, want dirty-parent rejection", err)
+	}
+}
+
+func TestUp_IntentFileWithSectionMarker_RejectedBeforeSideEffects(t *testing.T) {
+	repo := initRecordRepo(t)
+	// A markdown heading in the intent would be read as a record section;
+	// up must reject it before any side effect instead of writing a record
+	// its own readers cannot parse.
+	intent := writeIntentFile(t, repo, "intent.md", "task\n## Requirements\none\n")
+	err := runUp(UpCmd{Name: "i1", Root: repo, Intent: intent})
+	if err == nil || !strings.Contains(err.Error(), "## ") {
+		t.Fatalf("runUp = %v, want section-marker rejection", err)
+	}
+	if worktree.BranchExists(repo, "i1") {
+		t.Error("rejected intent must not create a branch or worktree")
+	}
+}
+
 func TestUp_ParentAndRefMutuallyExclusive(t *testing.T) {
 	repo := initRecordRepo(t)
 	intent := writeIntentFile(t, repo, "intent.md", "task\n")

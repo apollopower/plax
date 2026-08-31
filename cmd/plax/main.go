@@ -737,7 +737,9 @@ func buildRecordInput(root string, cmd UpCmd) (*record.CreateInput, error) {
 }
 
 // readIntentFile reads an --intent file, rejecting a missing, unreadable,
-// or empty intent before any up side effect.
+// or empty intent before any up side effect. Prose that would collide with
+// the record grammar is also rejected here, so a bad intent never starts
+// the expensive up phases.
 func readIntentFile(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -746,13 +748,16 @@ func readIntentFile(path string) (string, error) {
 	if strings.TrimSpace(string(data)) == "" {
 		return "", fmt.Errorf("up: intent file %s is empty", path)
 	}
+	if err := record.ValidateProse("intent file "+path, string(data)); err != nil {
+		return "", fmt.Errorf("up: %w", err)
+	}
 	return string(data), nil
 }
 
 // resolveParent validates that the named instance is a usable parent for a
 // stacked child and returns its exact worktree HEAD commit. The registry
-// lock is released before returning so the caller's own registry open does
-// not deadlock.
+// lock is released on return because runUp re-opens the registry moments
+// later via buildDeps, and two exclusive opens would block each other.
 func resolveParent(root, parent string) (string, error) {
 	reg, err := openRegistry(root)
 	if err != nil {
@@ -1833,12 +1838,9 @@ func runRecord(cmd RecordCmd) error {
 		return enc.Encode(rec)
 	}
 
-	// Default output is the original text, not a reconstruction — but it is
-	// only printed after the record parses, so a malformed record fails
-	// with a path and parse error instead of silently passing through.
-	if _, err := record.Read(root, cmd.Name); err != nil {
-		return err
-	}
+	// Default output is the original text, not a reconstruction. ReadText
+	// validates the parse in the same locked read, so a malformed record
+	// fails with a path and parse error instead of silently passing through.
 	text, err := record.ReadText(root, cmd.Name)
 	if err != nil {
 		return err

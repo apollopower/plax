@@ -536,7 +536,25 @@ func TestWorktree_IsDirty_FiltersDerivedEnvOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if dirty {
-		t.Error("modified .env should be filtered as a plax-managed artifact")
+		t.Error("modified root .env should be filtered as a plax-managed artifact")
+	}
+
+	// A nested .env is operator work, not the derived root .env.
+	if err := os.MkdirAll(filepath.Join(wtPath, "config"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wtPath, "config", ".env"), []byte("TOKEN=1\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dirty, err = IsDirty(wtPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dirty {
+		t.Error("nested .env should be reported dirty — only the worktree-root .env is plax-managed")
+	}
+	if err := os.Remove(filepath.Join(wtPath, "config", ".env")); err != nil {
+		t.Fatal(err)
 	}
 
 	// A modified tracked file is operator work and must count.

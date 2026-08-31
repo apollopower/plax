@@ -73,6 +73,21 @@ func Path(repoRoot, name string) string {
 	return filepath.Join(repoRoot, ".plax", "records", name+".md")
 }
 
+// ValidateProse rejects authored prose that would collide with the record
+// section grammar: a line starting with "## " would be read as a new
+// section, making the record unparseable by the tool's own readers. The
+// CLI calls it before any up side effect; the record writers call it too so
+// the invariant holds for every caller.
+func ValidateProse(kind, prose string) error {
+	for _, ln := range strings.Split(prose, "\n") {
+		if strings.HasPrefix(ln, "## ") {
+			return fmt.Errorf("record: %s contains a line starting with %q (%q), which the record grammar reads as a section — reword it (single %q or bold text)",
+				kind, "## ", ln, "#")
+		}
+	}
+	return nil
+}
+
 // Create writes a new record atomically and fails if the record already
 // exists. The intent header is the first non-empty line of the supplied
 // intent; the complete intent is copied below `## intent` in the body.
@@ -83,6 +98,12 @@ func Create(repoRoot string, input CreateInput) error {
 	intent := strings.TrimSpace(input.Intent)
 	if intent == "" {
 		return errors.New("record: intent is required")
+	}
+	if err := ValidateProse("intent", intent); err != nil {
+		return err
+	}
+	if err := ValidateProse("body", input.Body); err != nil {
+		return err
 	}
 	if (input.Parent == "") != (input.BaseCommit == "") {
 		return errors.New("record: 'parent' and 'base_commit' must be set together")
@@ -178,6 +199,9 @@ func Append(repoRoot, name, text string, now time.Time) error {
 	if text == "" {
 		return errors.New("record: log text is required")
 	}
+	if err := ValidateProse("log text", text); err != nil {
+		return err
+	}
 	path := Path(repoRoot, name)
 	if !fileExists(path) {
 		return fmt.Errorf("record: no record for instance %q — 'plax log' never creates a record", name)
@@ -204,6 +228,9 @@ func WriteVerdict(repoRoot, name string, v Verdict, now time.Time) error {
 	}
 	if v.Contract != "" && v.Contract != "pass" && v.Contract != "fail" {
 		return fmt.Errorf("record: verdict contract must be %q or %q, got %q", "pass", "fail", v.Contract)
+	}
+	if err := ValidateProse("verdict summary", v.Summary); err != nil {
+		return err
 	}
 	path := Path(repoRoot, name)
 	if !fileExists(path) {
@@ -271,8 +298,9 @@ func Read(repoRoot, name string) (Record, error) {
 	return rec, nil
 }
 
-// ReadText returns the complete record text under a shared lock, preserving
-// the original bytes for default output.
+// ReadText returns the complete record text under a shared lock after
+// validating that it parses, so default output is the original bytes and a
+// malformed record still fails with a path and parse error.
 func ReadText(repoRoot, name string) (string, error) {
 	if err := validateName(name); err != nil {
 		return "", err
@@ -290,6 +318,9 @@ func ReadText(repoRoot, name string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("record: reading %s: %w", path, err)
+	}
+	if _, err := parseRecord(data, name); err != nil {
+		return "", fmt.Errorf("record: parsing %s: %w", path, err)
 	}
 	return string(data), nil
 }
