@@ -377,17 +377,18 @@ func defaultProcesses() []ProcessDef {
 }
 
 // knownMigrationFrameworks maps package.json dependency names to the
-// table/column their migration tracker records applied migrations in. Only
-// frameworks whose recorded identifier matches migration file basenames are
-// listed — plax compares the live applied set against the files on disk.
+// table/column their migration tracker records applied migrations in.
+// Only frameworks whose recorded identifier equals the migration file
+// basename without its extension are listed: live schema drift compares
+// the raw applied set against extension-stripped file basenames
+// (pkg/status), and the DB side is not normalized. knex and sequelize
+// record names with extensions, and typeorm records class names —
+// inferring those would scaffold config that reports permanent drift.
 var knownMigrationFrameworks = []struct {
 	dep   string
 	table string
 	col   string
 }{
-	{"knex", "knex_migrations", "name"},
-	{"typeorm", "migrations", "name"},
-	{"sequelize", "SequelizeMeta", "name"},
 	{"node-pg-migrate", "pgmigrations", "name"},
 }
 

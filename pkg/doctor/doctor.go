@@ -106,7 +106,7 @@ func runBlueprintVsRepo(r *Report, deps *Deps) {
 	if deps.Blueprint.Seed.Migrate != "" && deps.Blueprint.Seed.AppliedMigrations == nil {
 		r.Checks = append(r.Checks, Check{
 			Area: area, Level: Warn,
-			Message: "seed.applied_migrations is not declared — the migrate step reports no count and schema drift falls back to the clone-time comparison; add {\"table\": \"...\", \"column\": \"...\"} to plax.json to enable live tracking",
+			Message: "seed.applied_migrations is not declared — the migrate step reports no count and schema drift falls back to the clone-time comparison; add {\"table\": \"...\", \"column\": \"...\"} to plax.json to enable live tracking (frameworks that record class names or version numbers, e.g. prisma or go-migrate, cannot be tracked)",
 		})
 	}
 

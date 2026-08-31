@@ -230,7 +230,7 @@ func TestBlueprint_InitInfersAppliedMigrationsFromDependency(t *testing.T) {
 	root := t.TempDir()
 	writeInitFixture(t, root, `{
   "name": "app",
-  "dependencies": {"knex": "^3.0.0"}
+  "dependencies": {"node-pg-migrate": "^7.0.0"}
 }`)
 
 	bp, warnings, err := InitFromRepo(root)
@@ -241,8 +241,8 @@ func TestBlueprint_InitInfersAppliedMigrationsFromDependency(t *testing.T) {
 	if am == nil {
 		t.Fatal("expected applied_migrations to be inferred")
 	}
-	if am.Table != "knex_migrations" || am.Column != "name" {
-		t.Errorf("got %s/%s, want knex_migrations/name", am.Table, am.Column)
+	if am.Table != "pgmigrations" || am.Column != "name" {
+		t.Errorf("got %s/%s, want pgmigrations/name", am.Table, am.Column)
 	}
 	if !strings.Contains(strings.Join(warnings, "\n"), "verify the table and column names") {
 		t.Errorf("expected a verify warning, got %v", warnings)
@@ -275,6 +275,21 @@ func TestBlueprint_InitNoFrameworkNoInference(t *testing.T) {
 		"no known framework": `{
   "name": "app",
   "dependencies": {"next": "^15.0.0", "react": "^19.0.0"}
+}`,
+		// knex/typeorm/sequelize record identifiers that do not match
+		// extension-stripped file basenames — inferring them would scaffold
+		// config that reports permanent drift.
+		"knex not inferred": `{
+  "name": "app",
+  "dependencies": {"knex": "^3.0.0"}
+}`,
+		"typeorm not inferred": `{
+  "name": "app",
+  "dependencies": {"typeorm": "^0.3.0"}
+}`,
+		"sequelize not inferred": `{
+  "name": "app",
+  "dependencies": {"sequelize": "^6.0.0"}
 }`,
 		"unparseable package.json": `{ not json`,
 	} {

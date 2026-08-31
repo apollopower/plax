@@ -401,6 +401,26 @@ func liveSchemaAM() *blueprint.AppliedMigrations {
 	return &blueprint.AppliedMigrations{Table: "pgmigrations", Column: "name"}
 }
 
+// TestStatus_SchemaLive_ExtensionSuffixedAppliedDrift locks in that the DB
+// side of the live comparison is not extension-normalized: a framework that
+// records filenames with extensions (knex, sequelize) reports permanent
+// drift, which is why init does not infer those frameworks.
+func TestStatus_SchemaLive_ExtensionSuffixedAppliedDrift(t *testing.T) {
+	repoRoot, base := makeSchemaRepo(t, []string{"0001_init.sql", "0002_add_users.sql"})
+	wtPath := schemaRepoWorktree(t, repoRoot, []string{"0001_init.sql", "0002_add_users.sql"})
+
+	bm := &fakeBM{applied: []string{"0001_init.sql", "0002_add_users.sql"}}
+	d := schemaDriftResult(t, repoRoot, base, bm, liveSchemaAM(), nil, wtPath)
+	if d.Level != Drift {
+		t.Fatalf("level = %s, want drift: %s", d.Level, d.Detail)
+	}
+	for _, want := range []string{"database has 2 migrations", "0001_init.sql"} {
+		if !strings.Contains(d.Detail, want) {
+			t.Errorf("detail %q missing %q", d.Detail, want)
+		}
+	}
+}
+
 func TestStatus_SchemaLive_MatchesWorktreeHead(t *testing.T) {
 	repoRoot, base := makeSchemaRepo(t, []string{"0001_init.sql", "0002_add_users.sql"})
 	wtPath := schemaRepoWorktree(t, repoRoot, []string{"0001_init.sql", "0002_add_users.sql"})

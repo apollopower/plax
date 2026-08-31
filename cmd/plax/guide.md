@@ -53,9 +53,12 @@ Key fields:
     migration-tracking table. When set, schema drift compares the
     migrations actually applied to the instance DB against the files on
     disk; when unset, plax compares a clone-time migration-file hash.
-    `plax init` infers this when package.json names a known migration
-    framework (knex, typeorm, sequelize, node-pg-migrate) — verify the
-    emitted table and column names.
+    `plax init` infers this when package.json names node-pg-migrate
+    (`pgmigrations`/`name`). Frameworks whose recorded identifiers do
+    not equal migration file basenames — knex and sequelize record
+    names with extensions, typeorm records class names — cannot be
+    tracked; add the field by hand only when your framework's records
+    match the file basenames.
 - `services` — map of service name to definition. Per service:
   - `isolation` — `logical`, `dedicated`, `shared`, `external`, or `native`
   - `type` — driver type (only `postgres` exists today; required for

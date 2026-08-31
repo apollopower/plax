@@ -276,10 +276,12 @@ plax init > plax.json
 This parses `docker-compose.yml` and `.env.example`, then emits a skeleton:
 every service present, `dedicated` isolation by default, every env variable
 present with its example value, every compose port mapped to a variable.
-When `package.json` names a known migration framework (knex, typeorm,
-sequelize, node-pg-migrate), init also emits `seed.applied_migrations` with
-that framework's tracking table and column — verify the names, and add the
-field by hand for any other framework (see §4.3).
+When `package.json` names node-pg-migrate, init also emits
+`seed.applied_migrations` (`pgmigrations`/`name`) — verify the names. Other
+frameworks are not inferred: the comparison requires the recorded
+identifier to equal the migration file basename without its extension
+(knex and sequelize record names with extensions, typeorm records class
+names), so add the field by hand only when that holds (see §4.3).
 
 The skeleton is intentionally incomplete. You must fill in:
 
