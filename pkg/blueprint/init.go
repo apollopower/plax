@@ -1,6 +1,7 @@
 package blueprint
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -68,6 +69,13 @@ func InitFromRepo(root string) (*Blueprint, []string, error) {
 	}
 
 	bp.Env.Holes = detectHoles(envVars, bp.Services, portVarMap)
+
+	if am, fw := inferAppliedMigrations(root); am != nil {
+		bp.Seed.AppliedMigrations = am
+		warnings = append(warnings, fmt.Sprintf(
+			"init: seed.applied_migrations inferred for %s (%s/%s) — verify the table and column names",
+			fw, am.Table, am.Column))
+	}
 
 	bp.Name = filepath.Base(root)
 
@@ -366,4 +374,46 @@ func defaultProcesses() []ProcessDef {
 			DependsOn: []string{"app"},
 		},
 	}
+}
+
+// knownMigrationFrameworks maps package.json dependency names to the
+// table/column their migration tracker records applied migrations in.
+// Only frameworks whose recorded identifier equals the migration file
+// basename without its extension are listed: live schema drift compares
+// the raw applied set against extension-stripped file basenames
+// (pkg/status), and the DB side is not normalized. knex and sequelize
+// record names with extensions, and typeorm records class names —
+// inferring those would scaffold config that reports permanent drift.
+var knownMigrationFrameworks = []struct {
+	dep   string
+	table string
+	col   string
+}{
+	{"node-pg-migrate", "pgmigrations", "name"},
+}
+
+// inferAppliedMigrations returns the applied_migrations config for the first
+// known migration framework found in package.json, or nil when none is
+// present (including a missing or unparseable package.json).
+func inferAppliedMigrations(root string) (*AppliedMigrations, string) {
+	data, err := os.ReadFile(filepath.Join(root, "package.json"))
+	if err != nil {
+		return nil, ""
+	}
+	var pkg struct {
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil {
+		return nil, ""
+	}
+	for _, fw := range knownMigrationFrameworks {
+		if _, ok := pkg.Dependencies[fw.dep]; ok {
+			return &AppliedMigrations{Table: fw.table, Column: fw.col}, fw.dep
+		}
+		if _, ok := pkg.DevDependencies[fw.dep]; ok {
+			return &AppliedMigrations{Table: fw.table, Column: fw.col}, fw.dep
+		}
+	}
+	return nil, ""
 }

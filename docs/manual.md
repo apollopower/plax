@@ -276,6 +276,12 @@ plax init > plax.json
 This parses `docker-compose.yml` and `.env.example`, then emits a skeleton:
 every service present, `dedicated` isolation by default, every env variable
 present with its example value, every compose port mapped to a variable.
+When `package.json` names node-pg-migrate, init also emits
+`seed.applied_migrations` (`pgmigrations`/`name`) — verify the names. Other
+frameworks are not inferred: the comparison requires the recorded
+identifier to equal the migration file basename without its extension
+(knex and sequelize record names with extensions, typeorm records class
+names), so add the field by hand only when that holds (see §4.3).
 
 The skeleton is intentionally incomplete. You must fill in:
 
@@ -873,7 +879,9 @@ Four areas:
 
 - **blueprint-vs-repo** — does the blueprint parse and validate? Are all
   declared services in the compose file? Have blueprint inputs (compose,
-  env template, toolchain) changed since last `plax up`?
+  env template, toolchain) changed since last `plax up`? When a blueprint
+  declares a migrate step but no `seed.applied_migrations`, a warning
+  notes that migrate counts and live schema-drift comparison are off.
 - **blueprint-vs-registry** — do all live instances have their worktree,
   branch, database, and containers? Are any allocated ports held by
   unknown instances or undeclared services?
