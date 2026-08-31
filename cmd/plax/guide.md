@@ -53,6 +53,9 @@ Key fields:
     migration-tracking table. When set, schema drift compares the
     migrations actually applied to the instance DB against the files on
     disk; when unset, plax compares a clone-time migration-file hash.
+    `plax init` infers this when package.json names a known migration
+    framework (knex, typeorm, sequelize, node-pg-migrate) — verify the
+    emitted table and column names.
 - `services` — map of service name to definition. Per service:
   - `isolation` — `logical`, `dedicated`, `shared`, `external`, or `native`
   - `type` — driver type (only `postgres` exists today; required for
@@ -395,7 +398,9 @@ Semantics:
 
 - **blueprint-vs-repo** — does the blueprint parse and validate? Do
   declared services exist in the compose file? Have blueprint inputs
-  changed since the last `up`?
+  changed since the last `up`? Is `seed.applied_migrations` declared for
+  a blueprint with a migrate step (warns when missing — live schema
+  drift and migrate counts are off)?
 - **blueprint-vs-registry** — do live instances have their worktree,
   branch, database, and containers? Are allocated ports held by unknown
   instances or undeclared services?

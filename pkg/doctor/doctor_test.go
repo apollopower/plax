@@ -170,6 +170,55 @@ func TestDoctor_ComposeServiceNotInBlueprint(t *testing.T) {
 	}
 }
 
+func TestDoctor_AppliedMigrationsMissing_Warns(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+	_ = dir
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	found := false
+	for _, c := range report.Checks {
+		if c.Level == Warn && strings.Contains(c.Message, "applied_migrations") &&
+			strings.Contains(c.Message, "live tracking") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("should warn that applied_migrations is undeclared")
+	}
+}
+
+func TestDoctor_AppliedMigrationsDeclared_NoWarn(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+	_ = dir
+	bp.Seed.AppliedMigrations = &blueprint.AppliedMigrations{Table: "pgmigrations", Column: "name"}
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	for _, c := range report.Checks {
+		if strings.Contains(c.Message, "applied_migrations") {
+			t.Errorf("unexpected applied_migrations check: [%s] %s", c.Level, c.Message)
+		}
+	}
+}
+
+func TestDoctor_NoMigrateCommand_NoAppliedMigrationsWarn(t *testing.T) {
+	dir, bp, reg := initDoctorRepo(t)
+	_ = dir
+	bp.Seed.Migrate = ""
+
+	deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+	report := Run(context.Background(), deps)
+
+	for _, c := range report.Checks {
+		if strings.Contains(c.Message, "applied_migrations") {
+			t.Errorf("unexpected applied_migrations check without a migrate step: [%s] %s", c.Level, c.Message)
+		}
+	}
+}
+
 func TestDoctor_BaseUnlocked(t *testing.T) {
 	dir, bp, reg := initDoctorRepo(t)
 	_ = dir

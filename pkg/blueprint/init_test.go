@@ -225,3 +225,90 @@ func TestBlueprint_InitSampleRepoPassesValidation(t *testing.T) {
 		t.Errorf("expected no validation errors, got: %v", errs)
 	}
 }
+
+func TestBlueprint_InitInfersAppliedMigrationsFromDependency(t *testing.T) {
+	root := t.TempDir()
+	writeInitFixture(t, root, `{
+  "name": "app",
+  "dependencies": {"knex": "^3.0.0"}
+}`)
+
+	bp, warnings, err := InitFromRepo(root)
+	if err != nil {
+		t.Fatalf("InitFromRepo: %v", err)
+	}
+	am := bp.Seed.AppliedMigrations
+	if am == nil {
+		t.Fatal("expected applied_migrations to be inferred")
+	}
+	if am.Table != "knex_migrations" || am.Column != "name" {
+		t.Errorf("got %s/%s, want knex_migrations/name", am.Table, am.Column)
+	}
+	if !strings.Contains(strings.Join(warnings, "\n"), "verify the table and column names") {
+		t.Errorf("expected a verify warning, got %v", warnings)
+	}
+}
+
+func TestBlueprint_InitInfersAppliedMigrationsFromDevDependency(t *testing.T) {
+	root := t.TempDir()
+	writeInitFixture(t, root, `{
+  "name": "app",
+  "devDependencies": {"node-pg-migrate": "^7.0.0"}
+}`)
+
+	bp, _, err := InitFromRepo(root)
+	if err != nil {
+		t.Fatalf("InitFromRepo: %v", err)
+	}
+	am := bp.Seed.AppliedMigrations
+	if am == nil {
+		t.Fatal("expected applied_migrations to be inferred")
+	}
+	if am.Table != "pgmigrations" || am.Column != "name" {
+		t.Errorf("got %s/%s, want pgmigrations/name", am.Table, am.Column)
+	}
+}
+
+func TestBlueprint_InitNoFrameworkNoInference(t *testing.T) {
+	for name, pkgJSON := range map[string]string{
+		"no package.json": "",
+		"no known framework": `{
+  "name": "app",
+  "dependencies": {"next": "^15.0.0", "react": "^19.0.0"}
+}`,
+		"unparseable package.json": `{ not json`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeInitFixture(t, root, pkgJSON)
+
+			bp, warnings, err := InitFromRepo(root)
+			if err != nil {
+				t.Fatalf("InitFromRepo: %v", err)
+			}
+			if bp.Seed.AppliedMigrations != nil {
+				t.Errorf("expected no applied_migrations, got %+v", bp.Seed.AppliedMigrations)
+			}
+			if strings.Contains(strings.Join(warnings, "\n"), "applied_migrations") {
+				t.Errorf("unexpected applied_migrations warning: %v", warnings)
+			}
+		})
+	}
+}
+
+// writeInitFixture writes the minimal files InitFromRepo needs: a compose
+// file, an env example, and an optional package.json.
+func writeInitFixture(t *testing.T, root, pkgJSON string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(root, "docker-compose.yml"), []byte("services:\n  db:\n    image: postgres:16\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".env.example"), []byte("DATABASE_URL=postgres://localhost:5432/dev\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if pkgJSON != "" {
+		if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(pkgJSON), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
