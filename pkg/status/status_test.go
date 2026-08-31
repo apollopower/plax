@@ -421,6 +421,22 @@ func TestStatus_SchemaLive_ExtensionSuffixedAppliedDrift(t *testing.T) {
 	}
 }
 
+// TestStatus_SchemaLive_InferredNodePgMigrateConfigOk proves the exact
+// config plax init infers for a node-pg-migrate repo (pgmigrations/name)
+// reports OK when the applied identifiers are extension-stripped basenames
+// — the composition the inference feature exists to produce.
+func TestStatus_SchemaLive_InferredNodePgMigrateConfigOk(t *testing.T) {
+	repoRoot, base := makeSchemaRepo(t, []string{"0001_init.sql", "0002_add_users.sql"})
+	wtPath := schemaRepoWorktree(t, repoRoot, []string{"0001_init.sql", "0002_add_users.sql"})
+
+	bm := &fakeBM{applied: []string{"0001_init", "0002_add_users"}}
+	am := &blueprint.AppliedMigrations{Table: "pgmigrations", Column: "name"}
+	d := schemaDriftResult(t, repoRoot, base, bm, am, nil, wtPath)
+	if d.Level != OK {
+		t.Fatalf("level = %s, want ok: %s", d.Level, d.Detail)
+	}
+}
+
 func TestStatus_SchemaLive_MatchesWorktreeHead(t *testing.T) {
 	repoRoot, base := makeSchemaRepo(t, []string{"0001_init.sql", "0002_add_users.sql"})
 	wtPath := schemaRepoWorktree(t, repoRoot, []string{"0001_init.sql", "0002_add_users.sql"})
