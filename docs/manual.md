@@ -545,6 +545,22 @@ plax up --ref 42 myfeature       # bare integer also treated as PR number
 plax up --ref abc1234 myfeature
 ```
 
+Track the instance with a work record by supplying an intent file:
+
+```sh
+plax up --intent task.md myfeature
+plax up --parent parentname --intent child.md childname   # stacked child
+```
+
+`--intent <file>` records the task statement in `.plax/records/<name>.md`
+(see [Work records](#610-work-records)). `--parent <instance>` stacks a
+child: the child branch starts at the parent's exact current worktree
+HEAD, and the record captures the parent and `base_commit`. The parent
+must be a registered instance with its own record and a clean worktree.
+`--parent` and `--ref` are mutually exclusive — each selects a different
+Git base. Without `--intent` or `--parent`, `plax up` warns that no work
+record will be created and behaves as before.
+
 The base must exist before the first `up` (see [The base](#5-the-base)).
 This does everything:
 
@@ -559,6 +575,7 @@ This does everything:
 7. Starts dedicated containers (Redis, Gotenberg, etc.)
 8. Starts native processes (app, workers)
 9. Records everything in the registry
+10. Creates the work record when `--intent` was given
 
 If any step fails, all side effects are rolled back in reverse order.
 
@@ -743,6 +760,84 @@ an instance guarantees. Plax does not run `ANALYZE` on clones; a fresh clone
 inherits the base's statistics. Diagnose plan-dependent, volume-dependent,
 or statistics-dependent queries against production, not the instance.
 
+### 6.10 Work records
+
+Every instance can carry a durable, append-only work record at
+`.plax/records/<name>.md`: the task it was asked to do, notes from along
+the way, and the terminal verdict. Records are plain text — greppable,
+diffable, and useful with ordinary UNIX tools:
+
+```
+instance: i1
+parent: i0
+base_commit: 0123456789abcdef0123456789abcdef01234567
+intent: add retry coverage
+contract: tests
+contract: typecheck
+---
+## intent
+add retry coverage
+The child task was assigned from i0's billing work.
+
+## log
+at: 2026-08-29T12:00:00Z
+Found the retry path; adding a regression test.
+
+## verdict
+status: pass
+contract: pass
+at: 2026-08-29T12:01:00Z
+Tests and typecheck pass.
+```
+
+Headers precede the `---` separator; the body below it has a fixed grammar:
+exactly one `## intent` section with the complete intent prose, zero or
+more `## log` sections (each an RFC3339 timestamp plus prose), and zero or
+one `## verdict` section. Unknown sections and a second verdict are parse
+errors — `plax record` fails loudly and leaves the file for inspection.
+
+```sh
+plax up --intent task.md myfeature                          # tracked root
+plax up --parent parentname --intent child.md childname     # stacked child
+plax log myfeature -- "Found the failing retry path"
+plax record myfeature                                       # full text
+plax record --json myfeature                                # parsed projection
+plax verdict myfeature --status pass --contract pass -- "Tests and typecheck pass"
+```
+
+Semantics:
+
+- `--intent <file>` is the task statement, authored by the operator — a
+  human or an external agent. It is required for a tracked record; without
+  it, `plax up` warns that no record will be created.
+- `--parent <instance>` records lineage and Git ancestry together: the
+  child branch starts at the parent's exact worktree HEAD (captured as
+  `base_commit`), and the relationship is a snapshot — later commits on
+  the parent never move the child. Rebase or recreate deliberately. A
+  parent must be registered, tracked, and clean; `--parent` never falls
+  back to the repository HEAD and cannot be combined with `--ref`.
+- `plax log` appends a timestamped note. It never creates a record
+  implicitly and never rewrites prior content; a sibling lock file
+  serializes writers across separate plax processes.
+- `plax record` prints the complete record text, or with `--json` the
+  parsed headers, contract list, body, log entries, and verdict.
+- `plax verdict` writes exactly one terminal verdict. `--status pass|fail`
+  is required; `--contract pass|fail` is required when the record declares
+  a contract; trailing prose becomes the summary. A second verdict is
+  rejected — later historical notes go through `plax log`.
+- Records survive `down`, `suspend`, and `resume`. The lock file and the
+  record are never removed by lifecycle commands; explicit record deletion
+  is not provided.
+- The `contract` list is stored and surfaced but never executed. `plax
+  verify` remains the fixed environment, service, process, and database
+  battery; a verdict is the operator's declaration and does not claim plax
+  validated the task.
+- Authored prose — intent files, log notes, verdict summaries — must not
+  contain lines starting with `## `: that prefix is reserved for record
+  sections, and a record the tool's own readers cannot parse is worse than
+  a failed create. `plax up` rejects such intent files before any side
+  effect; `plax log` and `plax verdict` reject such text.
+
 ## 7. Mailbox
 
 Instances can send each other messages. The mailbox is a directory:
@@ -800,7 +895,7 @@ plax ls | awk '$2 == "suspended" { print $1 }' | xargs -n1 plax down
 ```
 
 Commands that support `--json`: `ls`, `status`, `verify`, `doctor`, `send`,
-`recv`, `base status`.
+`recv`, `record`, `base status`.
 
 ## 10. Files and directories
 
@@ -809,6 +904,7 @@ Plax stores its state inside the repo under `.plax/`:
 ```
 .plax/
   registry.json          instance records, blueprint stamp
+  records/<name>.md      work records (sibling <name>.lock serializes appends)
   worktrees/<name>/      git worktrees (each with a scratch/ directory)
   logs/<name>/           process logs (app.log, workers.log, ...)
   mail/<name>/           mailbox directories

@@ -1015,6 +1015,161 @@ func commitFixtureMigration(t *testing.T, repo, name, content string) {
 	}
 }
 
+// TestEndToEnd_StackedAncestry exercises the plan-22 lineage scenario with
+// real Git: i0 is created with a tracked record, work is committed in i0,
+// i1 is stacked on i0's exact HEAD, and a later commit on i0 does not move
+// i1. It also verifies records survive teardown.
+func TestEndToEnd_StackedAncestry(t *testing.T) {
+	pgURL := e2ePrereqs(t)
+	bin := buildPlax(t)
+	repo := initFixtureRepo(t)
+
+	suffix := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(t.Name(), "/", "_"), "#", "_"))
+	t.Setenv("PLAX_BASE_NAME", "plax_e2e_"+suffix)
+
+	_, stderr, err := runPlax(bin, repo, "base", "reset", "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("base reset: %v\nstderr: %s", err, stderr)
+	}
+	t.Cleanup(func() { dropBaseDB(t, pgURL) })
+
+	intent0 := filepath.Join(repo, "intent0.md")
+	intent1 := filepath.Join(repo, "intent1.md")
+	if err := os.WriteFile(intent0, []byte("root task\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(intent1, []byte("child task\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"i0", "i1"} {
+		n := name
+		t.Cleanup(func() { _, _, _ = runPlax(bin, repo, "down", n, "--pg-url", pgURL) })
+	}
+
+	// Root instance with a tracked record.
+	_, stderr, err = runPlax(bin, repo, "up", "i0", "--intent", intent0, "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("up i0 --intent: %v\nstderr: %s", err, stderr)
+	}
+	reg := openRegistryFile(t, repo)
+	rec0 := reg.Instances["i0"]
+	reg.Close()
+
+	// Commit work inside i0's worktree; the derived .env stays modified,
+	// which IsDirty must tolerate as a plax-managed artifact.
+	commitE2EFile(t, rec0.WorktreePath, "work.txt", "i0 work\n")
+	c0 := revParseE2E(t, rec0.WorktreePath, "HEAD")
+
+	// Child instance stacked on i0's exact HEAD.
+	_, stderr, err = runPlax(bin, repo, "up", "i1", "--parent", "i0", "--intent", intent1, "--pg-url", pgURL)
+	if err != nil {
+		t.Fatalf("up i1 --parent i0: %v\nstderr: %s", err, stderr)
+	}
+
+	// The child record captures parent and base_commit.
+	rec1Data, err := os.ReadFile(filepath.Join(repo, ".plax", "records", "i1.md"))
+	if err != nil {
+		t.Fatalf("read i1 record: %v", err)
+	}
+	if !strings.Contains(string(rec1Data), "parent: i0") {
+		t.Errorf("child record missing parent lineage:\n%s", rec1Data)
+	}
+	if !strings.Contains(string(rec1Data), "base_commit: "+c0) {
+		t.Errorf("child record missing captured base_commit:\n%s", rec1Data)
+	}
+
+	// i1's branch and worktree sit at the captured commit.
+	reg = openRegistryFile(t, repo)
+	rec1 := reg.Instances["i1"]
+	reg.Close()
+	if got := revParseE2E(t, repo, worktree.BranchName("i1")); got != c0 {
+		t.Errorf("branch %s at %s, want captured commit %s", worktree.BranchName("i1"), got, c0)
+	}
+	_, wtCommit, err := worktree.WorktreeHead(rec1.WorktreePath)
+	if err != nil {
+		t.Fatalf("WorktreeHead: %v", err)
+	}
+	if wtCommit != c0 {
+		t.Errorf("i1 worktree at %s, want %s", wtCommit, c0)
+	}
+
+	// Commit work inside i1.
+	commitE2EFile(t, rec1.WorktreePath, "work.txt", "i1 work\n")
+	c1 := revParseE2E(t, rec1.WorktreePath, "HEAD")
+
+	// Ancestry is main -> i0 -> i1.
+	mainHead := revParseE2E(t, repo, "HEAD")
+	for _, pair := range [][2]string{{mainHead, c1}, {c0, c1}} {
+		if !isE2EAncestor(t, repo, pair[0], pair[1]) {
+			t.Errorf("%s should be an ancestor of %s", pair[0], pair[1])
+		}
+	}
+	if isE2EAncestor(t, repo, c1, c0) {
+		t.Error("i1's commit must not be an ancestor of i0")
+	}
+
+	// i0 advances later; i1 stays tied to its captured commit.
+	commitE2EFile(t, rec0.WorktreePath, "work.txt", "i0 later work\n")
+	c2 := revParseE2E(t, rec0.WorktreePath, "HEAD")
+	if got := revParseE2E(t, repo, worktree.BranchName("i1")); got != c1 {
+		t.Errorf("i1 moved after i0 advanced: branch at %s, want %s", got, c1)
+	}
+	if isE2EAncestor(t, repo, c2, worktree.BranchName("i1")) {
+		t.Error("a later i0 commit must not be an ancestor of i1 — the stack is a snapshot")
+	}
+
+	// Teardown preserves both records.
+	if _, _, err := runPlax(bin, repo, "down", "i0", "--pg-url", pgURL); err != nil {
+		t.Fatalf("down i0: %v", err)
+	}
+	if _, _, err := runPlax(bin, repo, "down", "i1", "--pg-url", pgURL); err != nil {
+		t.Fatalf("down i1: %v", err)
+	}
+	for _, name := range []string{"i0", "i1"} {
+		if _, err := os.Stat(filepath.Join(repo, ".plax", "records", name+".md")); err != nil {
+			t.Errorf("record %s lost during down: %v", name, err)
+		}
+	}
+}
+
+// commitE2EFile writes a file and commits it inside a worktree.
+func commitE2EFile(t *testing.T, dir, file, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"git", "add", file},
+		{"git", "commit", "-m", "work: " + file},
+	} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", args, out)
+		}
+	}
+}
+
+func revParseE2E(t *testing.T, dir, ref string) string {
+	t.Helper()
+	cmd := exec.Command("git", "rev-parse", ref)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %s: %v", ref, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// isE2EAncestor reports whether ancestor is an ancestor of descendant.
+func isE2EAncestor(t *testing.T, repo, ancestor, descendant string) bool {
+	t.Helper()
+	cmd := exec.Command("git", "merge-base", "--is-ancestor", ancestor, descendant)
+	cmd.Dir = repo
+	return cmd.Run() == nil
+}
+
 func dropBaseDB(t *testing.T, pgURL string) {
 	t.Helper()
 	conn, err := pgx.Connect(context.Background(), pgURL)

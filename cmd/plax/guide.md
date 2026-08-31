@@ -141,7 +141,7 @@ usage.
 |---|---|
 | `plax init` | Scaffold a `plax.json` skeleton from `docker-compose.yml` and `.env.example` (stdout) |
 | `plax base create/seed/reset/refresh/status` | Manage the base database (see above) |
-| `plax up <name>` | Create and start an instance: branch, worktree, network, ports, env, cloned databases, migrations, containers, processes (`--skip migrate,verify`) |
+| `plax up <name>` | Create and start an instance: branch, worktree, network, ports, env, cloned databases, migrations, containers, processes (`--skip migrate,verify`, `--intent <file>`, `--parent <instance>`) |
 | `plax down <name>` | Destroy an instance: processes, containers, DB, network, worktree, branch, registry entry, mailbox |
 | `plax ls` | List instances with state, live health, unread mail, ports |
 | `plax attach <name>` | Open an interactive shell in the instance's environment |
@@ -150,6 +150,9 @@ usage.
 | `plax resume <name>` | Start a suspended instance again, print drift report |
 | `plax status <name>` | Six-dimension drift report (read-only) |
 | `plax verify <name>` | Run the full verification battery, update health state |
+| `plax log <name>` | Append a timestamped note to the instance's work record |
+| `plax record <name>` | Print the work record (complete text, or `--json` for the parsed projection) |
+| `plax verdict <name>` | Author the single terminal verdict on the work record (`--status`, `--contract`) |
 | `plax doctor` | Validate blueprint, registry, machine, and base health |
 | `plax rederive` | Regenerate `.env` files for all instances from the current blueprint |
 | `plax send <name>` | Write a message to an instance's mailbox |
@@ -187,7 +190,9 @@ free the port and retry, or `down` and `up` to reallocate.
 
 ```sh
 plax up <name>            # from current HEAD
+plax up --intent task.md <name>   # from current HEAD, with a work record
 plax up --ref <ref> <name>  # from a branch, PR, tag, or commit
+plax up --parent i0 --intent child.md i1  # stack i1 on i0's exact HEAD
 plax up --skip migrate,verify <name>  # skip provisioning steps
 ```
 
@@ -198,6 +203,13 @@ pending migrations, starts containers and processes, then verifies. The
 summary prints the worktree path, branch, database name, ports, logs dir,
 and scratch dir — capture it, it is everything needed to work inside the
 instance.
+
+`--intent <file>` tracks the instance with a work record (see [Work
+records](#work-records)); the file's content is the task statement.
+`--parent <instance>` additionally stacks the child on the parent's exact
+current worktree HEAD; the parent must be registered, tracked, and have a
+clean worktree, and `--parent` and `--ref` are mutually exclusive. Without
+either flag, `plax up` warns on stderr that no work record will be created.
 
 `--skip` accepts exactly `migrate` and `verify`, comma-separated or as
 repeated flags; unknown or empty names fail before any side effect.
@@ -304,6 +316,52 @@ back, leaving nothing behind. On a runtime-check failure the instance
 stays up for debugging, is marked `unhealthy`, and the exit code is 1. A
 suspended instance skips runtime checks with a note.
 
+## Work records
+
+Every instance can carry a durable, append-only work record at
+`.plax/records/<name>.md`: what the instance was asked to do, notes from
+along the way, and the terminal verdict. Records are text — greppable,
+diffable, and useful with ordinary UNIX tools. They survive `down`,
+`suspend`, and `resume`: the worktree dies on purpose, the record does not.
+
+```sh
+plax up --intent task.md i1                      # create i1 with a record
+plax up --parent i0 --intent child.md i1         # stack i1 on i0's exact HEAD
+plax log i1 -- "Found the failing retry path"
+plax record i1                                   # --json for the parsed form
+plax verdict i1 --status pass --contract pass -- "Tests and typecheck pass"
+```
+
+- `--intent <file>` is the task statement. It is operator-authored — by a
+  human or an external agent — and required for a tracked record. Without
+  `--intent` (and `--parent`), `plax up` warns that no work record will be
+  created and behaves exactly as before.
+- `--parent <instance>` stacks a child: the child branch starts at the
+  parent's exact current worktree HEAD and the record captures `parent`
+  and `base_commit`. The parent must be a registered, tracked instance
+  with a clean worktree. The stack is a snapshot, not live tracking:
+  later commits on the parent do not move the child — rebase or recreate
+  deliberately. `--parent` and `--ref` are mutually exclusive.
+- `plax log` appends a timestamped note. It never creates a record
+  implicitly and never rewrites prior content. Appends are serialized by
+  a file lock, so separate plax processes cannot interleave.
+- `plax record` prints the complete record text; `--json` emits the parsed
+  headers, contract list, body, log entries, and verdict as one object.
+- `plax verdict` writes exactly one terminal verdict: `--status pass|fail`
+  is required, `--contract pass|fail` is required when the record declares
+  a contract, and the trailing prose is the summary. A second verdict is
+  rejected — use `plax log` for later historical notes.
+- A record's `contract` list is stored and surfaced but never executed:
+  `plax verify` runs the fixed environment, service, process, and database
+  checks. Authoring a verdict is the operator's declaration; it does not
+  claim plax independently validated the task.
+- Authored prose (intent files, log notes, verdict summaries) must not
+  contain lines starting with `## ` — that prefix is reserved for record
+  sections. `plax up` rejects such intent files before any side effect, and
+  `plax log`/`plax verdict` reject such text.
+- `plax log`, `plax record`, and `plax verdict` resolve the record by path,
+  not registry membership, so they keep working after `down`.
+
 ## Mailbox
 
 Instances can pass messages to each other through a file-based mailbox at
@@ -353,7 +411,7 @@ strip a banner. Records are also safe to parse from an agent: run with
 `--json` where available and parse stdout.
 
 `--json` is supported on: `ls`, `status`, `verify`, `doctor`, `send`,
-`recv`, `base status`.
+`recv`, `record`, `base status`.
 
 ## Environment variables
 
@@ -368,6 +426,7 @@ Plax keeps all state inside the repo under `.plax/`:
 ```
 .plax/
   registry.json          instance records, blueprint stamp, ports
+  records/<name>.md      work records (sibling <name>.lock serializes appends)
   worktrees/<name>/      git worktrees (each with a scratch/ directory)
   logs/<name>/           process logs (app.log, workers.log, ...)
   mail/<name>/           mailbox directories
@@ -413,8 +472,12 @@ other tools need their own ignore entries.
    is loaded and the working directory is its worktree.
 5. **To coordinate with other instances**: `plax send`/`plax recv` —
    buffered, survives suspend. Attribute messages with `PLAX_INSTANCE`.
-6. **To finish**: `plax down <name>` tears everything down, tolerating
+6. **To record what an instance was asked to do and did**: create it with
+   `plax up --intent <file>`, add notes with `plax log`, close it out with
+   `plax verdict` (`--status pass|fail`, `--contract` when declared).
+   Records survive `down` — the worktree dies, the record does not.
+7. **To finish**: `plax down <name>` tears everything down, tolerating
    missing resources.
-7. **When the blueprint changes** (plax.json, .env.example, compose,
+8. **When the blueprint changes** (plax.json, .env.example, compose,
    toolchain): `plax rederive` for env-only changes; `plax down` + `up`
    for schema or data changes, after `plax base refresh`.

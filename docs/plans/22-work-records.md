@@ -452,31 +452,31 @@ the actual `up` lifecycle.
 
 ## Acceptance criteria
 
-- `plax up --intent task.md i0` creates `.plax/records/i0.md` atomically and
+- [x] `plax up --intent task.md i0` creates `.plax/records/i0.md` atomically and
   preserves it through `plax down i0`.
-- `plax up --parent i0 --intent child.md i1` requires an existing tracked
+- [x] `plax up --parent i0 --intent child.md i1` requires an existing tracked
   parent and creates `i1` from i0's exact current worktree `HEAD`.
-- The child record contains `parent: i0` and the captured `base_commit`.
-- An external operator running from the main repository can create a root
+- [x] The child record contains `parent: i0` and the captured `base_commit`.
+- [x] An external operator running from the main repository can create a root
   record without a synthetic parent instance.
-- `--parent` never silently falls back to repository `HEAD`, and cannot be
+- [x] `--parent` never silently falls back to repository `HEAD`, and cannot be
   combined with `--ref`.
-- `plax log <name> -- <text>` appends to an existing record without deleting
+- [x] `plax log <name> -- <text>` appends to an existing record without deleting
   or rewriting prior content.
-- `plax record <name>` prints the complete text record, and `--json` emits a
+- [x] `plax record <name>` prints the complete text record, and `--json` emits a
   stable structured projection.
-- `plax verdict <name> --status pass|fail` appends exactly one structured,
+- [x] `plax verdict <name> --status pass|fail` appends exactly one structured,
   author-once verdict and rejects subsequent verdicts while allowing later
   historical log entries.
-- Missing, malformed, duplicate, or failed records produce non-zero exits
+- [x] Missing, malformed, duplicate, or failed records produce non-zero exits
   and actionable diagnostics.
-- Existing untracked `plax up <name>` behavior remains available with a
+- [x] Existing untracked `plax up <name>` behavior remains available with a
   warning; tracked records are opt-in.
-- `contract` is stored and surfaced, but no arbitrary contract syntax is
+- [x] `contract` is stored and surfaced, but no arbitrary contract syntax is
   claimed to be executed by the existing fixed-check `verify` command.
-- `plax verify` does not automatically create or overwrite a task verdict;
+- [x] `plax verify` does not automatically create or overwrite a task verdict;
   environment health and task completion remain distinct facts.
-- Guide, manual, plan index, and the 2026-08-26 triage snapshot reference
+- [x] Guide, manual, plan index, and the 2026-08-26 triage snapshot reference
   the shipped interface.
 
 ## Dependencies

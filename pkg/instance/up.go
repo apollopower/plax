@@ -16,6 +16,7 @@ import (
 	"github.com/apollopower/plax/pkg/derive/env"
 	"github.com/apollopower/plax/pkg/mailbox"
 	"github.com/apollopower/plax/pkg/process"
+	"github.com/apollopower/plax/pkg/record"
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/toolchain"
 	"github.com/apollopower/plax/pkg/verify"
@@ -37,6 +38,12 @@ var validSkipSteps = map[string]bool{
 // UpOptions controls optional provisioning steps.
 type UpOptions struct {
 	Skip map[string]bool
+
+	// Record, when non-nil, creates the instance's work record as a
+	// required provisioning phase; failure rolls the instance back like any
+	// other phase. Its BaseCommit (when set) also selects the exact commit
+	// the child branch is created from.
+	Record *record.CreateInput
 }
 
 // ParseSkip validates and normalizes --skip step names into a set. Both
@@ -189,7 +196,13 @@ func Up(ctx context.Context, deps *Deps, name string, opts UpOptions) (err error
 	} else {
 		fmt.Fprintf(os.Stderr, "creating branch and worktree...\n")
 	}
-	worktreePath, err := worktree.Create(deps.RepoRoot, name, deps.ResolvedRef)
+	var worktreePath string
+	if opts.Record != nil && opts.Record.BaseCommit != "" {
+		// A stacked child branches from the parent's exact captured HEAD.
+		worktreePath, err = worktree.CreateFromCommit(deps.RepoRoot, name, opts.Record.BaseCommit)
+	} else {
+		worktreePath, err = worktree.Create(deps.RepoRoot, name, deps.ResolvedRef)
+	}
 	if err != nil {
 		return err
 	}
@@ -556,6 +569,20 @@ func Up(ctx context.Context, deps *Deps, name string, opts UpOptions) (err error
 			fmt.Fprintf(os.Stderr, "rollback: remove registry record: %v\n", err)
 		}
 	})
+
+	// Step 7.5: Write the work record. A tracked record is a required up
+	// phase: failure rolls the whole instance back, and rollback removes the
+	// record like any other side effect.
+	if opts.Record != nil {
+		if err := record.Create(deps.RepoRoot, *opts.Record); err != nil {
+			return fmt.Errorf("record: %w", err)
+		}
+		cleanups = append(cleanups, func() {
+			if err := os.Remove(record.Path(deps.RepoRoot, name)); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "rollback: remove record: %v\n", err)
+			}
+		})
+	}
 
 	// Print summary.
 	fmt.Fprintf(os.Stderr, "\ninstance %s up\n", name)
