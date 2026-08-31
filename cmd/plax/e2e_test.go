@@ -335,6 +335,23 @@ func e2ePrereqs(t *testing.T) string {
 	return pgURL
 }
 
+// pgBaseURL returns the scheme://[userinfo@]host:port prefix of
+// PLAX_TEST_POSTGRES_URL. Fixture DATABASE_URL holes use it so the migrate
+// step (which connects through the derived env, not through --pg-url) hits
+// the same server the test pointed plax at, wherever it lives.
+func pgBaseURL(t *testing.T) string {
+	t.Helper()
+	u, err := url.Parse(os.Getenv("PLAX_TEST_POSTGRES_URL"))
+	if err != nil {
+		t.Fatalf("parse PLAX_TEST_POSTGRES_URL: %v", err)
+	}
+	base := u.Scheme + "://" + u.Host
+	if u.User != nil {
+		base = u.Scheme + "://" + u.User.String() + "@" + u.Host
+	}
+	return base
+}
+
 func buildPlax(t *testing.T) string {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "plax")
@@ -348,9 +365,10 @@ func buildPlax(t *testing.T) string {
 func initFixtureRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
+	dbBase := pgBaseURL(t)
 
 	files := map[string]string{
-		"plax.json": `{
+		"plax.json": fmt.Sprintf(`{
   "version": 1,
   "name": "e2e",
   "port_pool": {"start": 26000, "end": 26100},
@@ -368,11 +386,11 @@ func initFixtureRepo(t *testing.T) string {
     "holes": {
       "PORT": "{{PORT}}",
       "REDIS_URL": "redis://localhost:{{REDIS_PORT}}/0",
-      "DATABASE_URL": "postgres://localhost:5432/{{DB_NAME}}"
+      "DATABASE_URL": "%s/{{DB_NAME}}"
     }
   }
 }
-`,
+`, dbBase),
 		".env.example": `PORT=3000
 REDIS_URL=redis://localhost:6379/0
 DATABASE_URL=postgres://localhost:5432/e2e_dev
@@ -390,7 +408,7 @@ API_KEY=placeholder
 	}
 
 	for _, args := range [][]string{
-		{"git", "init"},
+		{"git", "init", "-b", "main"},
 		{"git", "config", "user.email", "e2e@test.com"},
 		{"git", "config", "user.name", "E2E"},
 		{"git", "add", "."},
@@ -410,9 +428,10 @@ API_KEY=placeholder
 func initFixtureRepoWithTestDB(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
+	dbBase := pgBaseURL(t)
 
 	files := map[string]string{
-		"plax.json": `{
+		"plax.json": fmt.Sprintf(`{
   "version": 1,
   "name": "e2e",
   "port_pool": {"start": 26200, "end": 26300},
@@ -435,12 +454,12 @@ func initFixtureRepoWithTestDB(t *testing.T) string {
     "holes": {
       "PORT": "{{PORT}}",
       "REDIS_URL": "redis://localhost:{{REDIS_PORT}}/0",
-      "DATABASE_URL": "postgres://localhost:5432/{{DB_NAME}}",
-      "DATABASE_TEST_URL": "postgres://localhost:5432/{{DB_NAME_test}}"
+      "DATABASE_URL": "%s/{{DB_NAME}}",
+      "DATABASE_TEST_URL": "%s/{{DB_NAME_test}}"
     }
   }
 }
-`,
+`, dbBase, dbBase),
 		".env.example": `PORT=3000
 REDIS_URL=redis://localhost:6379/0
 DATABASE_URL=postgres://localhost:5432/e2e_dev
@@ -458,7 +477,7 @@ API_KEY=placeholder
 	}
 
 	for _, args := range [][]string{
-		{"git", "init"},
+		{"git", "init", "-b", "main"},
 		{"git", "config", "user.email", "e2e@test.com"},
 		{"git", "config", "user.name", "E2E"},
 		{"git", "add", "."},
@@ -929,9 +948,10 @@ func columnExistsInLockedDB(t *testing.T, pgURL, db, column string) bool {
 func initFixtureRepoWithMigrations(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
+	dbBase := pgBaseURL(t)
 
 	files := map[string]string{
-		"plax.json": `{
+		"plax.json": fmt.Sprintf(`{
   "version": 1,
   "name": "e2e",
   "port_pool": {"start": 26400, "end": 26500},
@@ -954,11 +974,11 @@ func initFixtureRepoWithMigrations(t *testing.T) string {
     "holes": {
       "PORT": "{{PORT}}",
       "REDIS_URL": "redis://localhost:{{REDIS_PORT}}/0",
-      "DATABASE_URL": "postgres://postgres:postgres@localhost:5432/{{DB_NAME}}"
+      "DATABASE_URL": "%s/{{DB_NAME}}"
     }
   }
 }
-`,
+`, dbBase),
 		".env.example": `PORT=3000
 REDIS_URL=redis://localhost:6379/0
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/e2e_dev
@@ -981,7 +1001,7 @@ CREATE TABLE items (id serial PRIMARY KEY, name text NOT NULL);
 	}
 
 	for _, args := range [][]string{
-		{"git", "init"},
+		{"git", "init", "-b", "main"},
 		{"git", "config", "user.email", "e2e@test.com"},
 		{"git", "config", "user.name", "E2E"},
 		{"git", "add", "."},

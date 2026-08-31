@@ -49,3 +49,40 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: latest
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PLAX_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          check-latest: true
+
+      - name: Install psql
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      # The full suite, with PLAX_TEST_POSTGRES_URL set: e2e tests build the
+      # real binary and exercise git, Docker, and Postgres; derive/postgres
+      # integration tests run against the same server, serialized on the
+      # shared advisory lock (pkg/testutil).
+      - name: go test (with Postgres)
+        run: go test -race -count=1 ./...
