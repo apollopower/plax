@@ -73,6 +73,8 @@ func waitContext(ctx context.Context, delay time.Duration) error {
 // The parent deadline wins, so constituent/nested calls cannot restart a phase.
 func phase(ctx context.Context, limit time.Duration, op string) (context.Context, func(*error)) {
 	ctx, cancel := context.WithTimeout(ctx, limit)
+	deadline, _ := ctx.Deadline()
+	budget := max(0, time.Until(deadline)).Round(time.Millisecond)
 	return ctx, func(err *error) {
 		defer cancel()
 		if *err == nil {
@@ -88,7 +90,7 @@ func phase(ctx context.Context, limit time.Duration, op string) (context.Context
 		if errors.Is(*err, context.Canceled) {
 			*err = fmt.Errorf("%s: canceled: %w", op, *err)
 		} else if errors.Is(*err, context.DeadlineExceeded) {
-			*err = fmt.Errorf("%s: timed out (phase limit %s): %w", op, limit, *err)
+			*err = fmt.Errorf("%s: timed out (phase budget %s): %w", op, budget, *err)
 		} else {
 			*err = fmt.Errorf("%s: %w", op, *err)
 		}

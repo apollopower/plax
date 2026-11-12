@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -305,7 +306,58 @@ func TestInstance_Down_DatabaseTimeoutContinuesTeardown(t *testing.T) {
 }
 
 func TestInstance_Down_TimeoutDoesNotCancelLaterDrops(t *testing.T) {
-	downTimeoutScenario(t, false)
+	bp := testBlueprint()
+	svc := bp.Services["db"]
+	svc.Databases = []blueprint.DatabaseDef{{Name: "test", From: "base"}}
+	bp.Services["db"] = svc
+	deps, bm, drv := testDeps(t, bp)
+	t.Cleanup(func() { cleanupInstance(t, deps, "i1") })
+	if err := Up(context.Background(), deps, "i1", UpOptions{Skip: map[string]bool{"verify": true}}); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := deps.Registry.GetInstance("i1")
+	names := registry.DBNamesFromRecord(rec)
+	if len(names) != 2 {
+		t.Fatalf("got databases %v, want two", names)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var failedDB string
+	bm.dropFunc = func(dbCtx context.Context, name string) error {
+		bm.mu.Lock()
+		defer bm.mu.Unlock()
+		bm.dropped = append(bm.dropped, name)
+		if dbCtx != ctx || dbCtx.Err() != nil {
+			t.Errorf("drop %s did not receive the original live parent context", name)
+		}
+		if _, ok := dbCtx.Deadline(); ok {
+			t.Errorf("drop %s received a teardown/rollback deadline instead of the original parent", name)
+		}
+		if len(bm.dropped) == 1 {
+			failedDB = name
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+	stderr := captureStderr(t, func() error {
+		if err := Down(ctx, deps, "i1"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Down = %v, want first drop's deadline", err)
+		}
+		return nil
+	})
+	got := bm.droppedDBs()
+	slices.Sort(got)
+	slices.Sort(names)
+	if !slices.Equal(got, names) {
+		t.Fatalf("drops = %v, want each database once, with no rollback retry: %v", got, names)
+	}
+	if !strings.Contains(stderr, "residual/unconfirmed databases: "+failedDB+";") {
+		t.Fatalf("residual summary should name only the timed-out database: %s", stderr)
+	}
+	assertNoResidue(t, deps, "i1")
+	if len(drv.removedNets) != 1 {
+		t.Fatal("timeout prevented network teardown")
+	}
 }
 
 func TestInstance_Down_CancellationContinuesTeardown(t *testing.T) {

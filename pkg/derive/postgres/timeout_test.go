@@ -122,6 +122,55 @@ func TestPostgres_PhaseHonorsParent(t *testing.T) {
 	}
 }
 
+func TestPostgres_PhaseReportsEffectiveBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		parent time.Duration
+		limit  time.Duration
+		budget time.Duration
+	}{
+		{name: "phase limit", limit: 20 * time.Millisecond, budget: 20 * time.Millisecond},
+		{name: "earlier caller deadline", parent: 20 * time.Millisecond, limit: time.Minute, budget: 20 * time.Millisecond},
+		{name: "expired caller deadline", parent: -time.Second, limit: time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := context.Background()
+			if tc.parent != 0 {
+				var cancel context.CancelFunc
+				parent, cancel = context.WithTimeout(parent, tc.parent)
+				defer cancel()
+			}
+			start := time.Now()
+			ctx, finish := phase(parent, tc.limit, "drop owned")
+			end := time.Now()
+			deadline, _ := ctx.Deadline()
+			minBudget := max(0, deadline.Sub(end)).Round(time.Millisecond)
+			maxBudget := max(0, deadline.Sub(start)).Round(time.Millisecond)
+			<-ctx.Done()
+			err := ctx.Err()
+			finish(&err)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("lost deadline identity: %v", err)
+			}
+			text, ok := strings.CutPrefix(err.Error(), "drop owned: timed out (phase budget ")
+			if !ok {
+				t.Fatalf("missing effective budget: %v", err)
+			}
+			label, _, ok := strings.Cut(text, "):")
+			if !ok {
+				t.Fatalf("missing budget delimiter: %v", err)
+			}
+			budget, parseErr := time.ParseDuration(label)
+			if parseErr != nil {
+				t.Fatal(parseErr)
+			}
+			if budget < minBudget || budget > maxBudget || budget > tc.budget {
+				t.Fatalf("reported budget %s outside entry-time range [%s, %s] or allowance %s: %v", budget, minBudget, maxBudget, tc.budget, err)
+			}
+		})
+	}
+}
+
 func TestPostgres_PhaseCancellationWithCleanupTimeout(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	cancel()
