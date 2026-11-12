@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -107,8 +108,7 @@ func RunCommand(ctx context.Context, worktreePath string, workdir string, ports 
 		return CommandResult{}, fmt.Errorf("%s: %w", out, err)
 	case <-ctx.Done():
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		<-done
-		return CommandResult{}, ctx.Err()
+		return CommandResult{}, errors.Join(ctx.Err(), <-done)
 	}
 }
 
