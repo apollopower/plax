@@ -76,6 +76,10 @@ func TestRunCommand_CancellationStopsProcess(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("err = %v, want context.Canceled", err)
 		}
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Errorf("err = %v, want wrapped command exit error", err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunCommand did not return after cancel")
 	}
