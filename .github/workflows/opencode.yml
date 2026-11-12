@@ -23,9 +23,10 @@ jobs:
       - uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_CONFIG_CONTENT: '{"agents":{"title":{"model":"opencode/deepseek-v4.1-flash"}}}'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          model: opencode/deepseek-v4-flash
+          model: opencode/deepseek-v4.1-flash
           use_github_token: true
           prompt: |
             Review this pull request:
@@ -57,7 +58,8 @@ jobs:
         uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          OPENCODE_CONFIG_CONTENT: '{"agents":{"title":{"model":"opencode/deepseek-v4.1-flash"}}}'
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          model: opencode/deepseek-v4-flash
+          model: opencode/deepseek-v4.1-flash
           use_github_token: true

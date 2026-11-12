@@ -297,8 +297,8 @@ func TestRecord_Read_UsesSharedLock(t *testing.T) {
 		done <- err
 	}()
 	select {
-	case <-done:
-		t.Fatal("Read completed while the exclusive lock was held")
+	case err := <-done:
+		t.Fatalf("Read completed while the exclusive lock was held: %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
 	lk.close()
