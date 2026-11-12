@@ -12,13 +12,14 @@ Agreed policy:
 |---|---|
 | Initial Postgres connection | 10 seconds |
 | Database-only operation/phase | 60 seconds shared across its database calls |
-| Each database cleanup attempt | 10 seconds, independent of the failed/canceled operation |
+| Each database rollback/recovery attempt | 10 seconds, independent of the failed/canceled operation |
+| Forward database drop during `down` | 60 seconds per database; not a rollback attempt |
 | External migration/seed command | No automatic timeout; SIGINT/SIGTERM stops its process group |
 | Whole CLI command | No overall deadline |
 | Configuration | Fixed defaults; no new flag, environment variable, or blueprint field |
 | Refresh swap | Retry database-in-use errors only; other failures are not deferred swaps |
 | `down` | Continue teardown after database timeout/interruption, but return non-zero |
-| Signals during `down` | First signal cancels DB work and continues non-DB teardown; second signal forces termination |
+| Signals during `down` | First SIGINT/SIGTERM cancels DB work; after acknowledgement, a further signal forces termination |
 
 The integration details below are proposals for this plan's review. This plan
 does not fix shared-test-server starvation (#83), add infrastructure to CI,
@@ -31,7 +32,7 @@ pkg/derive/postgres/
   timeout.go                  # fixed policy, private duration injection, error wrapping
   timeout_test.go             # phase budgets, parent cancellation, real stalled TCP connection
   basemanager.go              # phase boundaries, bounded recovery, swap error classification
-  basemanager_test.go         # database locks, cleanup, swap retries, healthy-path regressions
+  basemanager_test.go         # database locks, cleanup, swap retries, clone timing, regressions
   command_test.go             # base migration/seed process-group interruption
   provenance.go               # bound standalone provenance calls; preserve parent phase deadlines
 pkg/instance/
@@ -111,6 +112,15 @@ the BaseManager's operation policy, and cancellation skips unstarted DB drops.
 Its unit fakes inject operation errors/cancellation; Postgres package tests
 verify the real operation deadlines separately.
 
+The 10s budget is exclusively for rollback/recovery such as failed-provisioning
+drops and relocking. Normal `down` is a forward teardown operation: it gives
+each database a fresh 60s operation budget, with no automatic retry or detached
+10s retry after a timeout. N unresponsive databases can therefore consume up to
+N × 60s of database work, plus the initial connection and non-DB teardown.
+This is not an overall command limit; a handled first signal stops the current
+DB call and skips all remaining drops. Do not silently shorten successful
+forward drops to the rollback budget.
+
 The private CLI signal helper has this signature:
 
 ```go
@@ -153,6 +163,27 @@ This optional, non-serialized field carries a backend initialization
 failure to the report builder; nil means no initialization error was supplied.
 The CLI sets it only when `BM` is nil because initialization failed. Do not
 fabricate a connected backend or infer a timeout by parsing an error string.
+
+The JSON exclusion is defensive, not a sanitization mechanism: these dependency
+structs are not currently serialized. Wrap connection failures before they
+reach `BMErr` or a CLI diagnostic, retaining the original error for inspection
+but never interpolating its raw text into messages:
+
+```go
+type connectionError struct {
+    cause error // original cause for Unwrap; never rendered directly
+}
+```
+
+Its `Unwrap() error` returns `cause`; `Error() string` uses an allowlisted
+connection-failure description (timeout, cancellation, authentication failure,
+or generic connection failure, with a PostgreSQL SQLSTATE when available).
+Outer wrappers supply the operation and managed database name, not the DSN.
+Cover both initial and later per-database connection failures, including lazy
+connections that fail during pool acquisition/query rather than pool creation.
+Do not rely on stripping only the URL userinfo: pgx parse errors may echo a DSN, including
+percent-encoded passwords or credential-bearing query parameters. Report
+builders format this safe wrapper, never bypass it by printing the unwrapped cause.
 
 Doctor includes the cause in its existing failed Postgres check and marks
 operation deadline/cancellation errors in database checks as failures rather
@@ -329,6 +360,30 @@ preserve existing JSON shapes and put detailed causes into their existing
 message/detail fields. A status report containing unknown dimensions is not a
 successful database check, even though the report command may exit 0.
 
+### `Down` database/non-database context split
+
+```text
+1. At entry to instance.Down, retain the original ctx as dbCtx and derive
+   teardownCtx := context.WithoutCancel(ctx), before any teardown begins.
+2. Pass dbCtx only to BaseManager DB drops. Check dbCtx.Err() before each
+   drop; parent cancellation records all unstarted DBs as residual and stops
+   that loop. A per-operation timeout does not cancel dbCtx, so later DBs
+   still receive their own forward-operation budgets.
+3. Pass teardownCtx to every Docker StopService, RemoveService, and RemoveNetwork
+   call, including the container steps before the DB loop. Never pass dbCtx
+   to Docker cleanup or detach the DB calls from it.
+4. Native process termination retains its existing finite grace period;
+   local worktree/mailbox/registry cleanup continues as before. Join dbCtx
+   cancellation with other retained failures before returning.
+   ⚠ Deriving teardownCtx only after the DB loop is too late: a signal while
+   stopping containers must not cancel their stop/remove requests.
+```
+
+`runDown` passes the cancellable signal context to both backend initialization
+and `instance.Down`; the latter owns this internal two-context split. No
+public signature change or global Docker timeout is introduced. Fakes must
+inspect their supplied contexts, not merely record that cleanup was called.
+
 ### Status cancellation propagation
 
 ```text
@@ -356,23 +411,31 @@ Update the old rationale comment alongside the behavior and operational docs.
 
 ```text
 1. A private CLI downSignalContext(parent) helper owns SIGINT/SIGTERM handling.
-2. First signal: restore the default signal disposition and cancel the command
-   context. The active DB call stops; no later DB drop or retry starts.
+2. First SIGINT or first SIGTERM: restore the default disposition for both
+   signals before canceling the command context. Then acknowledge on stderr
+   that DB work is canceled and non-DB teardown continues. The active DB call
+   stops; no later DB drop or retry starts.
 3. List unconfirmed/unstarted databases and say teardown is continuing; remaining
    process/container/network/worktree/mailbox/registry cleanup uses an uncanceled
    context. If it completes without a second signal, return cancellation, exit 1.
-4. Second signal: default OS termination applies, including during cleanup.
-   Do not swallow repeated signals; forced termination can leave any resource
-   or registry write incomplete and does not run deferred cleanup reliably.
+4. A further SIGINT or SIGTERM delivered after acknowledgement uses default
+   OS termination, including during cleanup. Forced termination can leave any
+   resource or registry write incomplete and does not run deferred cleanup reliably.
 5. Release the helper's signal registration/waiting goroutine on every normal
    return as well; do not modify signal handling in pkg/instance.
    ⚠ A DB phase timeout alone does not cancel the parent: subsequent DB drops
    still get their normal budgets. Only parent cancellation skips them.
+   ⚠ Standard POSIX signals may coalesce, and a signal delivered before the
+   first is handled/defaults are restored can be lost. Do not promise lossless
+   escalation for two back-to-back signals or add a signal-counting framework.
 ```
 
-Tests send signals to a dedicated child PID, not the test runner, and wait
-for a cleanup-readiness marker before sending the second signal. Verify the
-OS signal termination rather than requiring Kong to return exit 1 on that path.
+Tests send signals to a dedicated child PID, not the test runner. Cover each
+first-signal choice (SIGINT and SIGTERM), then wait for acknowledgement emitted
+after default dispositions are restored before sending the next signal.
+Verify OS signal termination, not Kong exit 1, for this spaced-signal contract.
+The acknowledgement must not claim every rapid repeated signal is guaranteed
+to be counted, and the manual/guide must state the same delivery limitation.
 This escalation policy adds no overall Docker/git/filesystem deadline.
 
 ## CLI specification
@@ -406,8 +469,9 @@ gain it. Existing `--root` defaults and short aliases remain unchanged.
 - Cancellation is reported as cancellation, not timeout. Credentials/DSNs must
   not be introduced into diagnostics.
 - First SIGINT/SIGTERM during `down` cancels DB work and continues non-DB
-  teardown, returning exit 1 if it finishes. A second signal forces normal
-  OS termination; shell-reported status is signal-derived, not the exit-1 contract.
+  teardown, returning exit 1 if it finishes. After its acknowledgement, a further
+  SIGINT/SIGTERM forces normal OS termination; shell-reported status is
+  signal-derived. Back-to-back signals before handling may coalesce/be lost.
 
 Connection and operation limits are separate: `base status` can spend up to
 roughly 10s connecting plus 60s reading, and a failed temporary unlock may
@@ -421,6 +485,12 @@ phase too, even when slow work is legitimate; it is not a claim that target
 bases have been benchmarked to finish in 60s. Do not silently add a larger
 clone allowance or configuration. Revisit that policy with the maintainer if
 representative workload measurements show a need.
+
+Implementation acceptance includes a timed template-copy measurement on the
+generic seeded fixture specified below. Record its actual size and timings;
+a small or synthetic fixture cannot establish that all production-sized
+bases fit the limit. A fixture failure or timeout must be brought back to the
+maintainer before declaring this work complete, not hidden by increasing the limit.
 
 ## Error handling
 
@@ -442,7 +512,9 @@ representative workload measurements show a need.
 | `down` cannot connect before teardown because of timeout | Remember startup error → continue other teardown, name skipped databases, exit 1 |
 | `down` times out or is interrupted while dropping a database | Continue remaining teardown → incomplete summary and exit 1, even after registry removal |
 | First SIGINT/SIGTERM during `down` | Cancel current DB work and skip later drops → name residual DBs, continue non-DB teardown, exit 1 if it finishes |
-| Second signal while `down` continues cleanup | Default OS termination → no promise of completed cleanup or a saved registry |
+| Further SIGINT/SIGTERM after the first-signal acknowledgement | Default OS termination → no promise of completed cleanup or a saved registry |
+| Rapid signals before first-signal handling completes | POSIX delivery/coalescing may lose a repeat → no exact-count or lossless escalation guarantee |
+| Connection error contains URL/query credentials | Safe diagnostic wrapper → preserve errors.Is/As without rendering credentials in stderr or report Detail |
 | Parent cancellation during `status.Build` | Return a wrapped cancellation error → stop further DB stages; CLI exits 1 without rendering a success report |
 | Database deadline during `status.Build` | Keep Unknown dimensions with failure details → return degraded report, exit 0 |
 | Tolerant caller encounters timeout/cancellation | Explicit command-specific result above → no silent healthy verification or resumed success |
@@ -455,6 +527,7 @@ representative workload measurements show a need.
 |---|---|
 | `TestPostgres_ConnectDeadline` | A local TCP listener accepts but never responds; the real constructor/pgx returns under an injected short connection deadline |
 | `TestPostgres_ConnectCancellation` | Cancel after the listener signals acceptance; real pgx returns a wrapped cancellation error |
+| `TestPostgres_ConnectionErrorsDoNotLeakCredentials` | Initial/per-DB parse and connection failures preserve error identity, while safe diagnostics omit plaintext/encoded URL and query credentials |
 | `TestPostgres_TimeoutPolicyValidation` | Private duration injection rejects non-positive limits; public defaults remain 10s/60s/10s |
 | `TestPostgres_PhaseHonorsParent` | Earlier deadlines and canceled parents win; nested helpers cannot extend a phase |
 | `TestPostgres_PhaseBudgetShared` | Several simulated constituent calls share one budget, not a full budget each |
@@ -472,8 +545,10 @@ representative workload measurements show a need.
 | `TestInstance_Up_CleanupDurationValidation` | Private up rejects non-positive cleanup durations before side effects; exported Up retains the fixed default |
 | `TestInstance_Down_DatabaseTimeoutContinuesTeardown` | Timeout is retained while network/worktree/mailbox/registry teardown continues; return non-nil |
 | `TestInstance_Down_CancellationContinuesTeardown` | Cancel during one DB drop; no later DB drops start, all residual names are reported, non-DB cleanup continues, and cancellation is returned |
+| `TestInstance_Down_DockerContextSurvivesCancellation` | Cancel before/during container stop and during DB drop; Docker contexts stay live, an active DB context cancels, and no drop starts after cancellation |
+| `TestInstance_Down_TimeoutDoesNotCancelLaterDrops` | A fake phase deadline leaves the parent live; the next database is still attempted without a rollback-budget retry |
 | `TestCLI_Down_ConnectTimeoutStillTearsDown` | Initialization timeout is not lost when BM remains nil; skipped DB names and non-zero result remain visible |
-| `TestCLI_Down_SecondSignalForcesExit` | Child-only signal-helper harness holds cleanup after the first signal; a second SIGINT terminates the child with the default OS disposition, without requiring Postgres or Docker |
+| `TestCLI_Down_SecondSignalForcesExit` | Child-only harness covers SIGINT/SIGTERM as the first and later signal, waits for post-restoration acknowledgement, then verifies default OS termination without Postgres or Docker |
 | `TestCLI_DatabaseTimeoutCallerPolicies` | Table-driven base/up/resume/verify/status/doctor coverage for the documented timeout/degraded behavior, including JSON output validity |
 | `TestCLI_DatabaseCancellationCallerPolicies` | No tolerant caller turns cancellation into successful forward work |
 | `TestDoctor_DatabaseTimeoutIsFailure` | Deadline errors in existence/orphan/base checks are failures, not warnings or an all-resources-present claim |
@@ -481,6 +556,7 @@ representative workload measurements show a need.
 | `TestStatus_ConnectionErrorMakesDatabaseDimensionsUnknown` | Schema/data details retain the backend cause without changing report JSON shape |
 | `TestStatus_CancellationReturnsError` | Cancel the parent before Build or inside each fake DB stage; observe a wrapped context.Canceled error, nil report, and no subsequent DB calls |
 | `TestStatus_DeadlineRemainsDegradedReport` | Database deadline errors yield Unknown database dimensions and a nil Build error, not fatal cancellation |
+| `TestCLI_ConnectionDiagnosticsDoNotLeakCredentials` | stderr and status/doctor JSON details omit credential sentinels while retaining operation names and timeout/cancellation classification |
 
 Use listener/script readiness channels or marker files before canceling, not
 sleep-based assumptions about startup. Test subprocesses have independent
@@ -533,9 +609,44 @@ Do not change `LockPostgres` behavior in this plan; that belongs to #83.
 - `TestPostgres_RefreshInterruptedSwapPreservesStaging` — simulate the state
   after old-base drop but before successful rename; refresh refuses to silently
   create a competing base and reports the staged recovery state.
+- `TestPostgres_CloneFixtureTiming` — measure template-copy SQL and the full
+  `CloneBase` operation on the deterministic seeded fixture below, using the
+  production 60s operation budget rather than an injected short timeout.
 
 Retain the existing create/seed/reset/clone/refresh/provenance/applied-migration
 healthy-path suites, including staged-refresh resumption.
+
+#### Clone timing fixture and evidence
+
+This is one integration scenario, not a benchmark framework or a claim about
+production data. The existing one-row `users` fixture is too small to provide
+useful storage-copy evidence. Extend that generic schema in a test-owned base
+with 102,400 rows of deterministic 1,024-byte text payloads (100 MiB before
+table/index/database overhead), using generated values rather than product data.
+
+```text
+1. Require explicit PLAX_TEST_POSTGRES_URL, take the existing advisory lock,
+   and create uniquely named test-owned base/targets with cleanup registered.
+2. Populate the users fixture, close its connections, and lock the base.
+3. Record row count, pg_database_size(base), server version, and test-run context.
+4. Under a 60s context, time one CREATE DATABASE target TEMPLATE base call.
+   Register target recovery before executing SQL because its outcome may be uncertain.
+5. On a distinct target, time CloneBase using its unmodified production policy.
+6. Log both elapsed values and actual fixture size with t.Logf; preserve failed
+   attempts/timeouts and cleanup failures in the test output, not as skips.
+7. Drop only this test's targets/base with fresh bounded cleanup contexts.
+   ⚠ No exact speed threshold beyond successful completion under the configured
+   deadline: storage and server load differ across machines. Never increase
+   the limit silently to make a timing failure pass.
+```
+
+Include the fixture size, SQL-copy elapsed time, full clone elapsed time,
+server version, and relevant machine/storage context in the implementation
+PR's verification evidence. Run the named test explicitly with
+`-race -count=1 -v` against the configured test server. A pass is evidence for
+that synthetic size/run only; larger or differently stored bases remain a documented risk.
+This plan-only PR adds the measurement requirement, not invented results;
+its implementation acceptance item stays unchecked until measured.
 
 ### End-to-end tests and fixtures
 
@@ -578,7 +689,9 @@ server shutdowns are needed.
 - [ ] Interrupt or time out database work during `down`; verify other teardown
   continues, registry/ports are removed, residual DBs are named, and exit is 1.
 - [ ] After a first signal during `down`, verify no additional DB drops start;
-  send a second signal during held cleanup and observe default OS termination.
+  verify Docker calls receive live teardown contexts even when cancellation
+  precedes the DB loop. After acknowledgement, send another signal during held
+  cleanup and observe default OS termination for SIGINT/SIGTERM combinations.
 - [ ] Cancel `status` during each DB-facing stage; verify Build returns a wrapped
   cancellation, later DB stages do not run, and CLI exits 1; retain exit 0 with
   Unknown dimensions for a database-phase deadline without parent cancellation.
@@ -586,6 +699,13 @@ server shutdowns are needed.
   behavior without silently recording a healthy verification on timeout.
 - [ ] Confirm no new timeout flags, environment variables, blueprint fields,
   JSON report shapes, or whole-command deadlines were introduced.
+- [ ] Run `TestPostgres_CloneFixtureTiming` on the configured test server;
+  report actual fixture size, template-copy SQL elapsed time, full clone elapsed
+  time, and run context. Bring any failure/timeout back to the maintainer before
+  completing the work; do not claim this bounds every larger base.
+- [ ] Exercise connection failures containing plaintext and encoded credential
+  sentinels; verify stderr and status/doctor JSON contain none of them while
+  errors.Is/As still identify the original timeout, cancellation, or pgx cause.
 - [ ] Update manual and bundled guide with limits, script interruption,
   incomplete teardown, and staged-swap recovery; retain maintainer-owned README prose.
 - [ ] Run full local checks and Postgres/E2E suites; report actual output,
