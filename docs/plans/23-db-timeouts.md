@@ -1,0 +1,518 @@
+# Plan 23 — Database deadlines and interruption
+
+## Objective
+
+Bound Plax-owned Postgres work and failure cleanup, make migration/seed scripts reliably interruptible, and report timeouts without hiding incomplete teardown ([#82](https://github.com/apollopower/plax/issues/82)).
+
+**Status: draft for maintainer review; no implementation yet.**
+
+Agreed policy:
+
+| Boundary | Policy |
+|---|---|
+| Initial Postgres connection | 10 seconds |
+| Database-only operation/phase | 60 seconds shared across its database calls |
+| Each database cleanup attempt | 10 seconds, independent of the failed/canceled operation |
+| External migration/seed command | No automatic timeout; SIGINT/SIGTERM stops its process group |
+| Whole CLI command | No overall deadline |
+| Configuration | Fixed defaults; no new flag, environment variable, or blueprint field |
+| Refresh swap | Retry database-in-use errors only; other failures are not deferred swaps |
+| `down` | Continue teardown after database timeout/interruption, but return non-zero |
+
+The integration details below are proposals for this plan's review. This plan
+does not fix shared-test-server starvation (#83), add infrastructure to CI,
+change Rails support, or authorize a push, PR, or release.
+
+## Package layout
+
+```text
+pkg/derive/postgres/
+  timeout.go                  # fixed policy, private duration injection, error wrapping
+  timeout_test.go             # phase budgets, parent cancellation, real stalled TCP connection
+  basemanager.go              # phase boundaries, bounded recovery, swap error classification
+  basemanager_test.go         # database locks, cleanup, swap retries, healthy-path regressions
+  command_test.go             # base migration/seed process-group interruption
+  provenance.go               # bound standalone provenance calls; preserve parent phase deadlines
+pkg/instance/
+  up.go                       # register each clone's rollback immediately; bound DB cleanup
+  down.go                     # continue teardown while retaining timeout/cancellation errors
+  instance_test.go            # context-aware lifecycle fakes and teardown assertions
+  up_test.go                  # partial multi-DB failure and interrupted migration rollback
+  command.go                  # retain instance process-group cancellation; reject canceled starts
+  command_test.go             # child termination and no implicit script deadline
+pkg/doctor/
+  doctor.go                   # retain connection cause and mark timed-out DB checks failed
+  doctor_test.go              # timeout severity and connection diagnostics
+pkg/status/
+  status.go                   # retain connection cause in unknown database dimensions
+  status_test.go              # timeout/degraded-report diagnostics
+cmd/plax/
+  main.go                     # signal contexts and explicit timeout propagation at CLI callers
+  main_test.go                # degraded callers, down startup failure, exit/output contracts
+  e2e_test.go                 # real-binary SIGINT and cleanup regression scenarios
+  guide.md                    # deadlines, script interruption, incomplete-down recovery
+  guide_test.go               # bundled guide contract where assertions are needed
+docs/
+  manual.md                   # policy, failure semantics, recovery instructions
+  plans/index.md              # plan 23 inventory entry
+```
+
+No new domain package is needed. Review README command/help claims for this
+change, but do not rewrite its narrative or fold the separate README-accuracy
+task into this issue. Update factual reference text only if it is affected.
+
+## Type specifications
+
+### Private Postgres policy
+
+```go
+type timeouts struct {
+    connect   time.Duration // constructor/ping budget; default 10s
+    operation time.Duration // one database phase; default 60s
+    cleanup   time.Duration // one recovery attempt; default 10s
+}
+```
+
+Add an unexported `timeouts timeouts` field to `BaseManager`. Keep the public
+`NewBaseManager` signature unchanged; delegate to a private constructor taking
+explicit durations so package tests can use milliseconds. Reject non-positive
+durations in that constructor. Do not use mutable package globals or a
+test-only production environment variable.
+
+These are private execution settings, not persisted data; no JSON tags or
+blueprint/registry schema changes apply. Existing exported report structs and
+their JSON shapes remain unchanged.
+
+Expose only the fixed `postgres.DefaultCleanupTimeout` duration constant needed
+by lifecycle orchestration. Its default is 10 seconds. Lifecycle cleanup helpers
+take an explicit duration internally for short unit tests; normal callers use
+the constant, not a new field on `instance.Deps`.
+
+### Errors and test seams
+
+Use existing wrapped Go errors and `errors.Join`; preserve
+`errors.Is(err, context.DeadlineExceeded)` and
+`errors.Is(err, context.Canceled)`. Keep `ErrDeferredSwap` exclusively for
+exhausted database-in-use retries. No new exported error struct is required.
+
+For swap tests, a private, narrow executor interface is sufficient:
+
+```go
+type dbExecer interface {
+    Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+```
+
+The production executor is the existing pgx pool. Do not replace the complete
+pgx API with a mock layer. Lifecycle tests continue using the existing
+`instance.BaseManager` interface with per-package, mutex-guarded fake call
+recording.
+
+### Diagnostic dependencies
+
+Add this field to the existing `doctor.Deps` and `status.Deps` structs:
+
+```go
+BMErr error `json:"-"`
+```
+
+This optional, non-serialized field carries a backend initialization
+failure to the report builder; nil means no initialization error was supplied.
+The CLI sets it only when `BM` is nil because initialization failed. Do not
+fabricate a connected backend or infer a timeout by parsing an error string.
+
+Doctor includes the cause in its existing failed Postgres check and marks
+operation deadline/cancellation errors in database checks as failures rather
+than warnings. Status uses the cause in the existing unknown schema/data
+dimensions. Neither change adds a report JSON field or changes ordinary
+non-timeout warning severity.
+
+## Algorithms
+
+### Connection and phase deadlines
+
+```text
+1. CLI creates a SIGINT/SIGTERM-aware parent context before opening Postgres.
+2. NewBaseManager derives one 10s connection context for pool creation + Ping.
+3. Configure pgx connection establishment to be bounded by 10s as well,
+   including replacement connections and per-database pools.
+4. Each database-only entry point derives a 60s phase context from its parent.
+5. All constituent queries, Exec calls, pool acquisition, and row iteration
+   use that context; cancel it on every return path.
+6. Wrap errors with operation and database names; retain the original cause.
+   ⚠ An earlier caller deadline wins. Nested helpers must not restart a
+   budget or detach from parent cancellation.
+   ⚠ A connection limit is not a query timeout. Configuring ConnectTimeout
+   alone does not address an already-connected, unresponsive server.
+```
+
+Database-only entry points include `CloneBase`, `DropInstanceDB`,
+`InstanceProvenance`, `AppliedMigrations`, `InstanceDBExists`, `BaseStatus`,
+and `ListPlaxDatabases`. Standalone `CreateProvenance` and `ReadProvenance`
+calls also receive a default operation bound, honoring shorter caller budgets.
+
+`BaseStatus` shares one operation budget across base existence, provenance,
+and staged-base queries. It must no longer discard provenance errors as it
+currently does. Missing provenance remains a valid absence; an error reading
+it is not absence.
+
+### Mixed database/script operations
+
+```text
+CreateBase:
+  bounded DB setup -> migrate(parent context) -> bounded provenance/lock phase
+SeedBase:
+  bounded DB check/unlock -> seed(parent context) -> bounded row-count/provenance phase
+  -> bounded relock, including on failure
+ResetBase:
+  bounded drop phase per managed DB -> CreateBase(parent context)
+RefreshBase:
+  bounded staging checks/create -> migrate(parent context)
+  -> bounded provenance phase -> seed(parent context)
+  -> bounded row-count/lock phase -> bounded swap phase
+```
+
+If an existing staged base is ready, refresh skips staging and enters the
+bounded swap phase. If no current base exists, retain the existing create path
+only when there is no staged database requiring recovery.
+
+⚠ Never pass a database-phase context to a migration/seed script. The phase
+before the script must be canceled, and the phase after it must get a fresh
+budget. Filesystem work does not gain a hard timeout merely by receiving a
+context; this plan bounds database I/O, not every possible operating-system
+stall.
+
+Make row-count polling sleeps context-aware so cancellation does not wait for
+an unconditional sleep to finish.
+
+### Script interruption
+
+```text
+1. Check the parent context before starting the command.
+2. Start sh -c in its own process group, preserving the existing environment,
+   workdir, and DATABASE_URL safety rules for that command path.
+3. Wait using the existing goroutine + result-channel pattern.
+4. On SIGINT/SIGTERM cancellation, kill the command process group and reap it.
+5. Return a wrapped context cancellation error, naming migrate or seed.
+6. Run bounded recovery/rollback; do not report successful provisioning.
+   ⚠ Killing only sh can leave children holding output pipes, hanging Wait.
+   ⚠ Commands that deliberately leave the process group are outside this
+   guarantee; do not claim arbitrary daemon containment.
+```
+
+Apply the instance command runner's existing group-kill approach to the base
+manager's command runner, which currently uses `exec.CommandContext` on the
+shell alone. Do not couple the Postgres package to `pkg/instance`, change
+base/instance environment semantics, or add automatic script timeouts.
+
+### Bounded cleanup and uncertain outcomes
+
+```text
+For each rollback drop or lock-restoration attempt:
+1. Derive context.WithTimeout(context.WithoutCancel(parent), 10s) at the moment
+   cleanup begins, not when the provisioning operation starts.
+2. Use that one budget for all work in the attempt (for example, terminate
+   connections + drop one database). Nested helpers do not get another 10s.
+3. Cancel the cleanup context after completion.
+4. Join cleanup failures to the original database operation error, or print
+   an explicit rollback warning where lifecycle cleanup already reports to stderr.
+5. Continue later cleanup attempts even if this one fails.
+```
+
+Cover failed base creation, seed relocking, refresh staging cleanup, temporary
+unlocking for provenance, and partial clone cleanup. Restore a lock only if
+this operation changed it. Preserve both read and relock errors rather than
+overwriting the first failure with the second.
+
+⚠ Register rollback for each successful clone immediately, not after the
+multi-database clone loop. Today, a later clone failure can strand earlier
+clones because the cleanup stack is populated only after the loop finishes.
+
+⚠ A timed-out CREATE/DROP/ALTER may have completed on the server even when the
+client did not receive confirmation. Attempt targeted recovery only for a
+managed resource this operation owns; never drop a database rejected by the
+pre-existing-target check. Name uncertain outcomes and failed cleanup rather
+than claiming that timeout proves no side effect occurred.
+
+These are database cleanup limits, not a new blanket Docker/git/filesystem
+timeout policy. Commands with multiple databases can exceed a single cleanup
+budget because each resource receives an independent attempt.
+
+### Refresh swap
+
+```text
+1. Create one 60s context for the entire swap, including termination, retries,
+   backoff, drop, and rename.
+2. Retry DROP only for PostgreSQL SQLSTATE 55006 (object_in_use).
+3. Keep the existing retry schedule; each attempt shares the original deadline.
+4. Honor cancellation during backoff and check it before classifying an error.
+5. Exhausted object_in_use retries -> ErrDeferredSwap; keep base_next staged.
+6. Timeout, cancellation, connection failure, permission error, or any other
+   failure -> return that operation's error, not ErrDeferredSwap.
+7. Do not discard errors from connection termination between retries.
+   ⚠ A failed/timed-out rename after DROP does not imply the old base survived.
+   Retain staged data where possible; give recovery guidance, not blind retry advice.
+```
+
+Do not redesign the swap into a transactional/atomic replacement in this
+issue. If the current base is absent while a staged database remains, report
+an interrupted swap instead of silently creating a replacement base. Recovery
+guidance must identify the database names and explain that `plax base reset`
+discards staged state; it must not automatically perform that reset.
+
+### CLI callers and `down`
+
+```text
+1. Use signal-aware contexts for base commands, up, down, resume, verify,
+   status, and doctor wherever they initialize/use BaseManager.
+2. Do not turn timeout/cancellation into a nil backend followed by success:
+   - up/base: return the error; run any necessary rollback first.
+   - resume: abort on initialization timeout/cancellation before starting workloads.
+   - verify: return initialization timeout/cancellation without recording a healthy
+     verification; query timeouts remain failed database checks.
+   - doctor: retain the cause in diagnostics; a database timeout is a failed check.
+   - status: keep report-oriented degraded output, mark affected DB dimensions
+     unknown, and show the cause; cancellation returns non-zero.
+3. Preserve existing degraded behavior for other backend failures unless this
+   plan explicitly changes it. No generic exit-code redesign is included.
+4. For down, remember a database initialization timeout instead of silently
+   skipping it. Continue teardown of other resources.
+5. For a per-database drop timeout, remember the error, warn with the database
+   name, and continue with later teardown steps.
+6. On parent cancellation, skip further forward DB work; continue remaining
+   teardown with an uncanceled context, using bounded database cleanup where needed.
+7. Still remove the registry entry/port allocations as existing down semantics
+   require; join registry errors with retained timeout/cancellation errors.
+8. Return non-zero if database timeout or interruption occurred. Print an
+   incomplete-teardown summary instead of an unqualified success message.
+   ⚠ Registry removal means a second down cannot locate an orphaned DB.
+   Name residual DBs and direct the operator to doctor/inspection once Postgres
+   recovers; do not promise that simply rerunning down removes them.
+```
+
+The `doctor` and `status` diagnostic integration above is proposed for review:
+preserve existing JSON shapes and put detailed causes into their existing
+message/detail fields. A status report containing unknown dimensions is not a
+successful database check, even though the report command may exit 0.
+
+## CLI specification
+
+No command syntax or flags change. Existing forms remain:
+
+```text
+plax base create|seed|reset|refresh|status [--pg-url <url>] [--root <path>]
+plax up <name> [existing up options] [--pg-url <url>] [--root <path>]
+plax down <name> [--pg-url <url>] [--root <path>]
+plax resume <name> [--pg-url <url>] [--root <path>]
+plax verify <name> [--json] [--pg-url <url>] [--root <path>]
+plax status <name> [--json] [--pg-url <url>] [--root <path>]
+plax doctor [--json] [--pg-url <url>] [--root <path>]
+```
+
+`base status` additionally retains `--json`; other base subcommands do not
+gain it. Existing `--root` defaults and short aliases remain unchanged.
+
+- Healthy paths exit 0, with existing runtime-verification behavior unchanged.
+- Database timeout or interruption exits 1 for base/up/down/resume/verify;
+  doctor retains its report-based exit 1 for failed checks.
+- `base refresh` exits 2 only for exhausted database-in-use retries.
+- `status` retains degraded-report exit 0 on database timeout, with unknown
+  database dimensions and visible cause; SIGINT/SIGTERM cancellation exits 1.
+- Records/reports remain on stdout; operational progress, timeout errors,
+  cleanup warnings, and recovery advice go to stderr. Existing report fields
+  can carry failure details in JSON; never mix human chatter into JSON stdout.
+- Deadline diagnostics name the operation and target, for example:
+  `clone plax_i1: timed out after 1m0s: context deadline exceeded`.
+- Cancellation is reported as cancellation, not timeout. Credentials/DSNs must
+  not be introduced into diagnostics.
+
+Connection and operation limits are separate: `base status` can spend up to
+roughly 10s connecting plus 60s reading, and a failed temporary unlock may
+require an additional 10s relock attempt. These are not hard whole-process
+limits. Scripts can run indefinitely until interrupted, and a legitimate
+database clone longer than 60s can fail; document both limitations.
+
+## Error handling
+
+| Failure mode | Expected behavior |
+|---|---|
+| TCP accepts but never completes Postgres startup | Connection deadline → named error, exit 1, no indefinite wait |
+| Established connection stops responding | Shared database-phase deadline → preserve deadline cause and target |
+| Provenance read times out in `base status` | Propagate error → do not print an apparently complete base report |
+| Parent already canceled or has an earlier deadline | Honor parent → no new script starts or extended DB allowance |
+| External migrate/seed remains busy | No automatic timeout → allow legitimate long work; SIGINT/SIGTERM cancels it |
+| External script interrupted | Kill process group and reap → context error plus bounded rollback/relock |
+| Clone fails after target creation, or CREATE outcome is uncertain | Targeted owned-resource cleanup → report residual/uncertain database if cleanup fails |
+| Later clone fails in a multi-database `up` | Immediately registered earlier cleanups run → no silent loss of rollback ownership |
+| Postgres remains unavailable during rollback | Fresh cleanup budget expires → warning names remaining resource; continue other cleanup |
+| Provenance read and relock both fail | Join both errors → retain failure cause and unsafe lock-state warning |
+| Swap repeatedly gets SQLSTATE 55006 | Existing retry budget exhausted → staged base retained, exit 2 |
+| Swap gets timeout/cancellation/permission/network error | Return actual failure → exit 1, never label it database-in-use |
+| Swap drops old base but cannot confirm rename | Preserve staged state where possible → identify uncertain names and manual recovery |
+| `down` cannot connect before teardown because of timeout | Remember startup error → continue other teardown, name skipped databases, exit 1 |
+| `down` times out or is interrupted while dropping a database | Continue remaining teardown → incomplete summary and exit 1, even after registry removal |
+| Tolerant caller encounters timeout/cancellation | Explicit command-specific result above → no silent healthy verification or resumed success |
+
+## Tests
+
+### Unit and local-transport tests (no Postgres required)
+
+| Test | What it verifies |
+|---|---|
+| `TestPostgres_ConnectDeadline` | A local TCP listener accepts but never responds; the real constructor/pgx returns under an injected short connection deadline |
+| `TestPostgres_ConnectCancellation` | Cancel after the listener signals acceptance; real pgx returns a wrapped cancellation error |
+| `TestPostgres_TimeoutPolicyValidation` | Private duration injection rejects non-positive limits; public defaults remain 10s/60s/10s |
+| `TestPostgres_PhaseHonorsParent` | Earlier deadlines and canceled parents win; nested helpers cannot extend a phase |
+| `TestPostgres_PhaseBudgetShared` | Several simulated constituent calls share one budget, not a full budget each |
+| `TestPostgres_CleanupFreshBoundedContext` | Cleanup begins with a fresh deadline despite an expired parent; nested recovery does not restart it |
+| `TestPostgres_SwapRetriesOnlyObjectInUse` | Executor fake returns 55006, permission, and transport failures; only 55006 retries/defers |
+| `TestPostgres_SwapDeadlineNotDeferred` | Expiration during execution/backoff returns a deadline error, never ErrDeferredSwap |
+| `TestPostgres_SwapCancellationNotDeferred` | Cancellation during backoff exits promptly and preserves staged state |
+| `TestPostgres_BaseCommandCancellationStopsChildren` | Base command cancellation kills both shell and a child holding output pipes; no hung Wait |
+| `TestPostgres_BaseCommandHasNoAutomaticDeadline` | Script runs beyond injected DB-phase duration, then finishes successfully with an uncanceled parent |
+| `TestRunCommand_CancellationStopsProcess` | Retain/strengthen existing instance process-group regression test |
+| `TestRunCommand_CanceledContextDoesNotStart` | An already-canceled parent cannot start a side-effecting script |
+| `TestInstance_Up_CloneTimeoutRollsBackEarlierDatabases` | Deterministic later-clone failure cleans all earlier clones, network, ports, mailbox, and worktree |
+| `TestInstance_Up_MigrationCancellationRollsBack` | Interrupted instance migration returns cancellation and performs rollback with fresh DB cleanup contexts |
+| `TestInstance_Up_CleanupTimeoutContinuesRollback` | Blocking fake drop respects injected cleanup bound; later local cleanups still run and stderr names the residual DB |
+| `TestInstance_Down_DatabaseTimeoutContinuesTeardown` | Timeout is retained while network/worktree/mailbox/registry teardown continues; return non-nil |
+| `TestInstance_Down_CancellationContinuesTeardown` | Canceled DB work does not cancel remaining cleanup; return cancellation, not success |
+| `TestCLI_Down_ConnectTimeoutStillTearsDown` | Initialization timeout is not lost when BM remains nil; skipped DB names and non-zero result remain visible |
+| `TestCLI_DatabaseTimeoutCallerPolicies` | Table-driven base/up/resume/verify/status/doctor coverage for the documented timeout/degraded behavior, including JSON output validity |
+| `TestCLI_DatabaseCancellationCallerPolicies` | No tolerant caller turns cancellation into successful forward work |
+| `TestDoctor_DatabaseTimeoutIsFailure` | Deadline errors in existence/orphan/base checks are failures, not warnings or an all-resources-present claim |
+| `TestDoctor_ConnectionErrorRetainsCause` | A nil backend with BMErr produces a failed check containing the connection failure |
+| `TestStatus_ConnectionErrorMakesDatabaseDimensionsUnknown` | Schema/data details retain the backend cause without changing report JSON shape |
+
+Use listener/script readiness channels or marker files before canceling, not
+sleep-based assumptions about startup. Test subprocesses have independent
+watchdog deadlines and teardown; close accepted sockets/listeners and reap
+children even when an assertion fails. Timing assertions allow race-enabled
+CI scheduling slack and assert error identity, not just elapsed time.
+
+### Postgres integration tests
+
+Skip when `PLAX_TEST_POSTGRES_URL` is unset and retain existing serialization.
+Do not change `LockPostgres` behavior in this plan; that belongs to #83.
+
+- `TestPostgres_ProvenanceDeadline` — hold an exclusive lock on a fixture's
+  `_plax_provenance` table using a separate transaction; an injected short
+  database phase expires during a real query, preserving deadline identity.
+  Release the lock and prove the next healthy read succeeds.
+- `TestPostgres_DatabaseEntrypointsHaveDeadlines` — table-driven coverage of
+  database-only entry points and the first phase of each mixed entry point;
+  block pool acquisition/connection through pgx's configuration hooks and
+  verify every method returns under its injected budget without starting scripts.
+- `TestPostgres_BaseStatusRelocksAfterTimeout` — hold a provenance-table lock
+  before locking the base; time out during temporary-unlock reading and verify
+  `datallowconn` is restored with a fresh cleanup budget.
+- `TestPostgres_BaseScriptCancellationRestoresState` — table-driven create,
+  seed, and refresh scenarios; cancel a marker-ready migrate/seed script,
+  verify child termination, and check partial-base/staging cleanup or relocking.
+  A bounded cleanup failure must be explicitly returned.
+- `TestPostgres_CloneTimeoutCleansOwnedTarget` — force a post-create failure
+  under a short parent deadline, then verify the owned target is removed;
+  independently verify a pre-existing target is never dropped.
+- `TestPostgres_RefreshInterruptedSwapPreservesStaging` — simulate the state
+  after old-base drop but before successful rename; refresh refuses to silently
+  create a competing base and reports the staged recovery state.
+
+Retain the existing create/seed/reset/clone/refresh/provenance/applied-migration
+healthy-path suites, including staged-refresh resumption.
+
+### End-to-end tests and fixtures
+
+- `TestE2E_BaseStatusUnresponsivePostgres` — a real binary talks to a local
+  accept-and-stall listener, exits non-zero under the production connection
+  limit plus scheduling slack, and names connection establishment. This
+  scenario alone does not prove established-query deadlines.
+- `TestE2E_UpSIGINTRollsBack` — real Git, Docker, and Postgres fixture; wait
+  for an instance migration's readiness marker, signal only the plax PID,
+  verify its process group is stopped, and assert clones and provisioning
+  resources are removed. No production timeout override is added.
+- `TestE2E_DownSIGINTContinuesTeardown` — create a real instance, use an
+  accept-and-stall Postgres endpoint for down, signal after connection
+  acceptance, and verify other resources/registry are removed, residual DBs
+  are named, and the command exits non-zero. Test cleanup uses the real DSN.
+
+Keep real-binary scenarios in `cmd/plax/e2e_test.go` with the existing
+`PLAX_TEST_POSTGRES_URL` skip convention. Extend generic sample fixtures and
+generate listener/marker fixtures in test temp directories; no real product
+names, checked-in credentials, or global server shutdowns are needed.
+
+## Acceptance criteria
+
+- [ ] Run `plax base status` against an accept-and-stall TCP listener; observe
+  exit 1 after approximately the 10s connection budget and a connection error.
+- [ ] Block a provenance query on a real Postgres fixture; observe expiration
+  of one shared injected operation budget, not one budget per SQL call.
+- [ ] Exercise every database entry point with deadline/cancellation coverage;
+  preserve `errors.Is` identity through operation and cleanup wrapping.
+- [ ] Cancel `base create`/`seed`/`refresh` and instance migration scripts after
+  readiness; observe child termination, prompt Wait completion, and bounded recovery.
+- [ ] Run scripts longer than the injected database-phase budget; observe
+  successful completion without an automatic script deadline.
+- [ ] Fail a later clone in multi-database `up`; verify all previously created
+  resources receive cleanup and every cleanup failure is named.
+- [ ] Time out lock-sensitive base work; verify relocking is attempted with a
+  fresh 10s budget and failed relocking cannot be silently reported as success.
+- [ ] Return swap timeout/network/permission errors as exit 1; return exit 2
+  only after database-in-use retry exhaustion, preserving staging where possible.
+- [ ] Interrupt or time out database work during `down`; verify other teardown
+  continues, registry/ports are removed, residual DBs are named, and exit is 1.
+- [ ] Exercise tolerant CLI callers; verify the documented degraded-report
+  behavior without silently recording a healthy verification on timeout.
+- [ ] Confirm no new timeout flags, environment variables, blueprint fields,
+  JSON report shapes, or whole-command deadlines were introduced.
+- [ ] Update manual and bundled guide with limits, script interruption,
+  incomplete teardown, and staged-swap recovery; retain maintainer-owned README prose.
+- [ ] Run full local checks and Postgres/E2E suites; report actual output,
+  failures, skips, and infrastructure availability before declaring implementation complete.
+
+Verification at implementation time:
+
+```sh
+make check
+gofmt -s -l .
+go mod tidy -diff
+go test -race -count=1 ./...
+```
+
+Until #83 is fixed, run the all-package checks with
+`PLAX_TEST_POSTGRES_URL` unset, then run the two infrastructure-bearing
+packages sequentially with it set and explicit budgets:
+
+```sh
+go test -race -count=1 -timeout=30m -v ./pkg/derive/postgres
+go test -race -count=1 -timeout=30m -v ./cmd/plax
+```
+
+⚠ Unsetting the variable skips E2E tests, but does not make the existing
+Postgres package unit-only: `pgTestURL` currently falls back to localhost,
+and its helpers skip only if connection fails. Record which tests actually
+ran, do not call the unset run infrastructure-free, and inspect the local
+server target before running tests that create/drop fixture databases.
+New integration tests in this plan follow the explicit-environment skip
+convention. Aligning the old helper belongs in the test-infrastructure
+discussion for #83, not an unreviewed change here.
+
+This is a temporary verification procedure, not an implementation of #83.
+An absent server/Docker/tool is a reported blocker or skip, not evidence that
+the integration acceptance criteria passed. Keep acceptance boxes unchecked
+until the corresponding evidence exists; plan approval is not verification.
+
+## Dependencies
+
+No new external Go modules are required. Retain the existing versions:
+
+| Module | Version | Use |
+|---|---|---|
+| `github.com/jackc/pgx/v5` | v5.10.0 | pgx pools, connection deadlines, PostgreSQL error codes, real-query tests |
+| `github.com/alecthomas/kong` | v1.16.0 | Existing CLI parsing and unchanged command syntax |
+| `github.com/google/go-cmp` | v0.7.0 | Existing fixture/report comparisons where appropriate |
+| `github.com/docker/docker` | v27.1.1+incompatible | Existing lifecycle and E2E Docker operations |
+
+Standard-library additions/use: `context`, `errors`, `fmt`, `net`, `os`,
+`os/exec`, `os/signal`, `syscall`, `sync`, and `time`, plus existing test
+helpers. `pgconn` and `pgxpool` are subpackages of the pinned pgx module.
+Go remains at the repository's `go 1.26.5` directive.

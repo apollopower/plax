@@ -131,6 +131,7 @@ JSON, checked into the repo root as `plax.json`. No comments.
 | 19 | [`19-upgrade.md`](19-upgrade.md) | `plax upgrade`: install-method detection (brew / go install / direct), atomic binary replacement |
 | 21 | [`21-up-migrate.md`](21-up-migrate.md) | Apply instance migrations during `plax up`, with validated skip steps and rollback |
 | 22 | [`22-work-records.md`](22-work-records.md) | Durable per-instance work records and stacked instance lineage |
+| 23 | [`23-db-timeouts.md`](23-db-timeouts.md) | Bound Postgres operations and cleanup, interrupt migration/seed scripts, and report incomplete teardown (#82; draft) |
 
 ---
 
