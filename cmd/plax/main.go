@@ -246,19 +246,19 @@ func main() {
 	case "guide":
 		ctx.FatalIfErrorf(runGuide(cli.Guide))
 	case "base create":
-		ctx.FatalIfErrorf(runBaseCreate(cli.Base.Create))
+		ctx.FatalIfErrorf(databaseCommandError(runBaseCreate(cli.Base.Create)))
 	case "base seed":
-		ctx.FatalIfErrorf(runBaseSeed(cli.Base.Seed))
+		ctx.FatalIfErrorf(databaseCommandError(runBaseSeed(cli.Base.Seed)))
 	case "base reset":
-		ctx.FatalIfErrorf(runBaseReset(cli.Base.Reset))
+		ctx.FatalIfErrorf(databaseCommandError(runBaseReset(cli.Base.Reset)))
 	case "base refresh":
-		ctx.FatalIfErrorf(runBaseRefresh(cli.Base.Refresh))
+		ctx.FatalIfErrorf(databaseCommandError(runBaseRefresh(cli.Base.Refresh)))
 	case "base status":
-		ctx.FatalIfErrorf(runBaseStatus(cli.Base.Status))
+		ctx.FatalIfErrorf(databaseCommandError(runBaseStatus(cli.Base.Status)))
 	case "up <name>":
-		ctx.FatalIfErrorf(runUp(cli.Up))
+		ctx.FatalIfErrorf(databaseCommandError(runUp(cli.Up)))
 	case "down <name>":
-		ctx.FatalIfErrorf(runDown(cli.Down))
+		ctx.FatalIfErrorf(databaseCommandError(runDown(cli.Down)))
 	case "ls":
 		ctx.FatalIfErrorf(runLs(cli.Ls))
 	case "attach <name>":
@@ -268,15 +268,15 @@ func main() {
 	case "suspend <name>":
 		ctx.FatalIfErrorf(runSuspend(cli.Suspend))
 	case "resume <name>":
-		ctx.FatalIfErrorf(runResume(cli.Resume))
+		ctx.FatalIfErrorf(databaseCommandError(runResume(cli.Resume)))
 	case "status <name>":
-		ctx.FatalIfErrorf(runStatus(cli.Status))
+		ctx.FatalIfErrorf(databaseCommandError(runStatus(cli.Status)))
 	case "doctor":
-		ctx.FatalIfErrorf(runDoctor(cli.Doctor))
+		ctx.FatalIfErrorf(databaseCommandError(runDoctor(cli.Doctor)))
 	case "rederive":
 		ctx.FatalIfErrorf(runRederive(cli.Rederive))
 	case "verify <name>":
-		ctx.FatalIfErrorf(runVerify(cli.Verify))
+		ctx.FatalIfErrorf(databaseCommandError(runVerify(cli.Verify)))
 	case "send <name>", "send <name> <body>":
 		ctx.FatalIfErrorf(runSend(cli.Send))
 	case "recv <name>":
@@ -292,6 +292,20 @@ func main() {
 	default:
 		ctx.FatalIfErrorf(fmt.Errorf("unknown command: %s", ctx.Command()))
 	}
+}
+
+type interruptedCommand struct{ error }
+
+func (e interruptedCommand) Unwrap() error { return e.error }
+func (e interruptedCommand) ExitCode() int { return 1 }
+
+func databaseCommandError(err error) error {
+	// Kong otherwise finds a killed script's exec.ExitError through errors.Join
+	// and uses ExitCode(-1), rather than the command's interruption contract.
+	if databaseInterrupted(err) {
+		return interruptedCommand{err}
+	}
+	return err
 }
 
 // runGuide prints the embedded agent-facing reference. Deliberately
@@ -490,6 +504,8 @@ func requireSeedConfig(bp *blueprint.Blueprint) error {
 }
 
 func runBaseCreate(cmd BaseCreateCmd) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	root, _, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
@@ -502,7 +518,6 @@ func runBaseCreate(cmd BaseCreateCmd) error {
 		return err
 	}
 
-	ctx := context.Background()
 	bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 	if err != nil {
 		return err
@@ -516,6 +531,8 @@ func runBaseCreate(cmd BaseCreateCmd) error {
 }
 
 func runBaseSeed(cmd BaseSeedCmd) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	root, _, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
@@ -530,7 +547,6 @@ func runBaseSeed(cmd BaseSeedCmd) error {
 
 	fmt.Fprintln(os.Stderr, "SeedBase is not safe while instances exist; use 'plax base refresh' for ongoing updates")
 
-	ctx := context.Background()
 	bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 	if err != nil {
 		return err
@@ -542,6 +558,8 @@ func runBaseSeed(cmd BaseSeedCmd) error {
 }
 
 func runBaseReset(cmd BaseResetCmd) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	root, _, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
@@ -554,7 +572,6 @@ func runBaseReset(cmd BaseResetCmd) error {
 		return err
 	}
 
-	ctx := context.Background()
 	bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 	if err != nil {
 		return err
@@ -567,6 +584,8 @@ func runBaseReset(cmd BaseResetCmd) error {
 }
 
 func runBaseRefresh(cmd BaseRefreshCmd) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	root, _, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
@@ -579,7 +598,6 @@ func runBaseRefresh(cmd BaseRefreshCmd) error {
 		return err
 	}
 
-	ctx := context.Background()
 	bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 	if err != nil {
 		return err
@@ -599,6 +617,8 @@ func runBaseRefresh(cmd BaseRefreshCmd) error {
 }
 
 func runBaseStatus(cmd BaseStatusCmd) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	root, _, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
@@ -608,7 +628,6 @@ func runBaseStatus(cmd BaseStatusCmd) error {
 		return err
 	}
 
-	ctx := context.Background()
 	bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 	if err != nil {
 		return err
@@ -804,13 +823,43 @@ func resolveParent(root, parent string) (string, error) {
 	return commit, nil
 }
 
+func downSignalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		select {
+		case <-signals:
+			// Restore defaults before acknowledging: a later signal can force
+			// exit even if non-DB teardown is stuck. The message is best-effort.
+			signal.Stop(signals)
+			cancel()
+			fmt.Fprintln(os.Stderr, "database work canceled; continuing non-DB teardown. Another SIGINT/SIGTERM forces termination.")
+		case <-ctx.Done():
+			signal.Stop(signals)
+		}
+	}()
+	return ctx, func() {
+		cancel()
+		<-done
+	}
+}
+
+func databaseInterrupted(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+}
+
 func runDown(cmd DownCmd) error {
+	ctx, stop := downSignalContext(context.Background())
+	defer stop()
 	// Down is best-effort: the registry is required, but each backend is
 	// optional. A stopped Postgres or broken Docker client must not prevent
 	// teardown of everything else.
 	//
-	// Deliberately not signal-cancellable: an interrupted down is safely
-	// re-runnable because every step tolerates missing resources.
+	// Only DB work is cancellable. Registry removal means a later down cannot
+	// discover skipped databases; name them before finishing local teardown.
 	root, found, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
@@ -825,12 +874,16 @@ func runDown(cmd DownCmd) error {
 	defer reg.Close()
 
 	deps := &instance.Deps{Registry: reg, RepoRoot: root}
+	var dbErr error
 
 	bp, connStr, err := loadBlueprintAndConnString(root, cmd.PgURL)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v — skipping database teardown\n", err)
-	} else if bm, err := postgres.NewBaseManager(context.Background(), connStr, root, bp); err != nil {
+	} else if bm, err := postgres.NewBaseManager(ctx, connStr, root, bp); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: %v — skipping database teardown\n", err)
+		if databaseInterrupted(err) {
+			dbErr = err
+		}
 	} else {
 		defer bm.Close()
 		deps.BM = bm
@@ -843,7 +896,11 @@ func runDown(cmd DownCmd) error {
 		deps.Docker = drv
 	}
 
-	return instance.Down(context.Background(), deps, cmd.Name)
+	err = instance.Down(ctx, deps, cmd.Name)
+	if dbErr != nil {
+		fmt.Fprintf(os.Stderr, "instance %s teardown incomplete: database connection failed; inspect residual databases with 'plax doctor' after recovery\n", cmd.Name)
+	}
+	return errors.Join(err, dbErr, ctx.Err())
 }
 
 func runLs(cmd LsCmd) error {
@@ -1391,6 +1448,9 @@ func runResume(cmd ResumeCmd) error {
 			defer bm.Close()
 			deps.BM = bm
 		} else {
+			if databaseInterrupted(err) {
+				return err
+			}
 			fmt.Fprintf(os.Stderr, "note: postgres unreachable — DB checks skipped: %v\n", err)
 		}
 	}
@@ -1418,16 +1478,24 @@ func runResume(cmd ResumeCmd) error {
 	}
 	report, err := status.Build(ctx, sdeps, cmd.Name)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
 		fmt.Fprintf(os.Stderr, "note: drift report unavailable: %v\n", err)
 	} else {
 		printReportStderr(report)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	fmt.Fprintf(os.Stderr, "instance %s resumed\n", cmd.Name)
 	return nil
 }
 
 func runStatus(cmd StatusCmd) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	root, found, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
@@ -1462,15 +1530,23 @@ func runStatus(cmd StatusCmd) error {
 	}
 
 	if connStr != "" {
-		bm, err := postgres.NewBaseManager(context.Background(), connStr, root, bp)
+		bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 		if err == nil {
 			defer bm.Close()
 			sdeps.BM = bm
+		} else {
+			if errors.Is(err, context.Canceled) {
+				return err
+			}
+			sdeps.BMErr = err
 		}
 	}
 
-	report, err := status.Build(context.Background(), sdeps, cmd.Name)
+	report, err := status.Build(ctx, sdeps, cmd.Name)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
@@ -1485,6 +1561,8 @@ func runStatus(cmd StatusCmd) error {
 }
 
 func runDoctor(cmd DoctorCmd) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	root, found, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
@@ -1512,10 +1590,12 @@ func runDoctor(cmd DoctorCmd) error {
 
 	pgURL := connStr
 	if pgURL != "" {
-		bm, err := postgres.NewBaseManager(context.Background(), pgURL, root, bp)
+		bm, err := postgres.NewBaseManager(ctx, pgURL, root, bp)
 		if err == nil {
 			defer bm.Close()
 			ddeps.BM = bm
+		} else {
+			ddeps.BMErr = err
 		}
 	}
 
@@ -1524,7 +1604,7 @@ func runDoctor(cmd DoctorCmd) error {
 		ddeps.Docker = drv
 	}
 
-	report := doctor.Run(context.Background(), ddeps)
+	report := doctor.Run(ctx, ddeps)
 
 	if cmd.JSON {
 		enc := json.NewEncoder(os.Stdout)
@@ -1578,6 +1658,8 @@ func runRederive(cmd RederiveCmd) error {
 }
 
 func runVerify(cmd VerifyCmd) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	root, _, err := discoverRoot(cmd.Root)
 	if err != nil {
 		return err
@@ -1599,8 +1681,6 @@ func runVerify(cmd VerifyCmd) error {
 		return fmt.Errorf("instance %q not found", cmd.Name)
 	}
 
-	ctx := context.Background()
-
 	vDeps := &verify.Deps{
 		Blueprint:     bp,
 		Registry:      reg,
@@ -1611,6 +1691,9 @@ func runVerify(cmd VerifyCmd) error {
 	if connStr != "" {
 		bm, err := postgres.NewBaseManager(ctx, connStr, root, bp)
 		if err != nil {
+			if databaseInterrupted(err) {
+				return err
+			}
 			fmt.Fprintf(os.Stderr, "note: postgres unreachable — DB checks skipped: %v\n", err)
 		} else {
 			defer bm.Close()

@@ -46,6 +46,9 @@ func (w *tailWriter) String() string {
 // semantics) with the instance environment. It returns captured output on
 // success and includes command output in errors on failure.
 func RunCommand(ctx context.Context, worktreePath string, workdir string, ports map[string]int, command string) (CommandResult, error) {
+	if err := ctx.Err(); err != nil {
+		return CommandResult{}, fmt.Errorf("instance command: %w", err)
+	}
 	if strings.TrimSpace(command) == "" {
 		return CommandResult{}, fmt.Errorf("instance command: empty command")
 	}
@@ -86,9 +89,14 @@ func RunCommand(ctx context.Context, worktreePath string, workdir string, ports 
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	tail := &tailWriter{}
-	cmd.Stdout = io.MultiWriter(os.Stderr, tail)
-	cmd.Stderr = io.MultiWriter(os.Stderr, tail)
+	// Sharing the writer also makes os/exec share its copier goroutine: two
+	// independent copiers would race while appending to the retained tail.
+	output := io.MultiWriter(os.Stderr, tail)
+	cmd.Stdout, cmd.Stderr = output, output
 
+	if err := ctx.Err(); err != nil {
+		return CommandResult{}, fmt.Errorf("instance command: %w", err)
+	}
 	if err := cmd.Start(); err != nil {
 		return CommandResult{}, fmt.Errorf("instance command: start: %w", err)
 	}
@@ -98,6 +106,9 @@ func RunCommand(ctx context.Context, worktreePath string, workdir string, ports 
 
 	select {
 	case err := <-done:
+		if ctx.Err() != nil {
+			return CommandResult{}, errors.Join(ctx.Err(), err)
+		}
 		if err == nil {
 			return CommandResult{Output: tail.String()}, nil
 		}
@@ -107,8 +118,11 @@ func RunCommand(ctx context.Context, worktreePath string, workdir string, ports 
 		}
 		return CommandResult{}, fmt.Errorf("%s: %w", out, err)
 	case <-ctx.Done():
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		return CommandResult{}, errors.Join(ctx.Err(), <-done)
+		killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(killErr, syscall.ESRCH) {
+			killErr = nil
+		}
+		return CommandResult{}, errors.Join(ctx.Err(), killErr, <-done)
 	}
 }
 

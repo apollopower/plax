@@ -17,6 +17,7 @@ import (
 	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/derive/docker"
 	"github.com/apollopower/plax/pkg/derive/postgres"
+	"github.com/apollopower/plax/pkg/mailbox"
 	"github.com/apollopower/plax/pkg/portpool"
 	"github.com/apollopower/plax/pkg/process"
 	"github.com/apollopower/plax/pkg/registry"
@@ -46,6 +47,7 @@ type fakeBM struct {
 	statusErr error
 	cloneFunc func(ctx context.Context, targetDB string) error
 	dropErr   error
+	dropFunc  func(context.Context, string) error
 
 	// appliedFunc, when set, supplies live applied-migration reads.
 	appliedFunc func(ctx context.Context, dbName string) ([]string, error)
@@ -72,7 +74,10 @@ func (f *fakeBM) CloneBase(ctx context.Context, targetDB string) error {
 	return nil
 }
 
-func (f *fakeBM) DropInstanceDB(_ context.Context, dbName string) error {
+func (f *fakeBM) DropInstanceDB(ctx context.Context, dbName string) error {
+	if f.dropFunc != nil {
+		return f.dropFunc(ctx, dbName)
+	}
 	if f.dropErr != nil {
 		return f.dropErr
 	}
@@ -117,6 +122,7 @@ type fakeDocker struct {
 	createNetErr      error
 	runErrFor         map[string]error
 	skipBindListeners bool // when true, RunService does not bind TCP listeners
+	stopFunc          func(context.Context)
 
 	mu               sync.Mutex
 	createdNets      []string
@@ -125,6 +131,7 @@ type fakeDocker struct {
 	stopped          []string
 	removed          []string
 	removeNetCtxErrs []error // ctx.Err() observed at each RemoveNetwork call
+	serviceCtxErrs   []error
 	runCfgs          []docker.ServiceConfig
 	listeners        []net.Listener // real TCP listeners for verify checks
 }
@@ -183,10 +190,14 @@ func (f *fakeDocker) RunService(_ context.Context, cfg docker.ServiceConfig) (st
 	return id, nil
 }
 
-func (f *fakeDocker) StopService(_ context.Context, id string) error {
+func (f *fakeDocker) StopService(ctx context.Context, id string) error {
+	if f.stopFunc != nil {
+		f.stopFunc(ctx)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.stopped = append(f.stopped, id)
+	f.serviceCtxErrs = append(f.serviceCtxErrs, ctx.Err())
 	f.closeListeners()
 	if f.stopErr != nil {
 		return f.stopErr
@@ -194,10 +205,11 @@ func (f *fakeDocker) StopService(_ context.Context, id string) error {
 	return nil
 }
 
-func (f *fakeDocker) RemoveService(_ context.Context, id string) error {
+func (f *fakeDocker) RemoveService(ctx context.Context, id string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.removed = append(f.removed, id)
+	f.serviceCtxErrs = append(f.serviceCtxErrs, ctx.Err())
 	return nil
 }
 
@@ -224,6 +236,123 @@ func (f *fakeDocker) ServiceExists(_ context.Context, id string) (bool, error) {
 }
 
 // --- helpers ---
+
+func downTimeoutScenario(t *testing.T, cancelDuringDrop bool) {
+	t.Helper()
+	bp := testBlueprint()
+	bp.Seed.Migrate = "true"
+	svc := bp.Services["db"]
+	svc.Databases = []blueprint.DatabaseDef{{Name: "primary", From: "base"}, {Name: "test", From: "base"}}
+	bp.Services["db"] = svc
+	deps, bm, drv := testDeps(t, bp)
+	if err := Up(context.Background(), deps, "i1", UpOptions{Skip: map[string]bool{"verify": true}}); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := deps.Registry.GetInstance("i1")
+	names := registry.DBNamesFromRecord(rec)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var drops []string
+	bm.dropFunc = func(dbCtx context.Context, name string) error {
+		drops = append(drops, name)
+		if dbCtx != ctx {
+			t.Error("Down detached database context")
+		}
+		if cancelDuringDrop {
+			cancel()
+			return dbCtx.Err()
+		}
+		return context.DeadlineExceeded
+	}
+	stderr := captureStderr(t, func() error {
+		err := Down(ctx, deps, "i1")
+		want := context.DeadlineExceeded
+		if cancelDuringDrop {
+			want = context.Canceled
+		}
+		if !errors.Is(err, want) {
+			t.Errorf("Down = %v, want %v", err, want)
+		}
+		return nil
+	})
+	if cancelDuringDrop && len(drops) != 1 {
+		t.Fatalf("started %d drops after cancellation", len(drops))
+	}
+	if !cancelDuringDrop && len(drops) != len(names) {
+		t.Fatalf("deadline stopped later drops: %v", drops)
+	}
+	for _, name := range names {
+		if !strings.Contains(stderr, name) {
+			t.Errorf("residual name %s missing: %s", name, stderr)
+		}
+	}
+	if !strings.Contains(stderr, "incomplete") || strings.Contains(stderr, "instance i1 down\n") {
+		t.Errorf("misleading completion: %s", stderr)
+	}
+	assertNoResidue(t, deps, "i1")
+	if len(deps.Registry.PortAllocations) != 0 || len(drv.removedNets) != 1 {
+		t.Fatal("local teardown did not finish")
+	}
+	for _, err := range append(drv.serviceCtxErrs, drv.removeNetCtxErrs...) {
+		if err != nil {
+			t.Fatalf("Docker context canceled: %v", err)
+		}
+	}
+}
+
+func TestInstance_Down_DatabaseTimeoutContinuesTeardown(t *testing.T) {
+	downTimeoutScenario(t, false)
+}
+
+func TestInstance_Down_TimeoutDoesNotCancelLaterDrops(t *testing.T) {
+	downTimeoutScenario(t, false)
+}
+
+func TestInstance_Down_CancellationContinuesTeardown(t *testing.T) {
+	downTimeoutScenario(t, true)
+}
+
+func TestInstance_Down_DockerContextSurvivesCancellation(t *testing.T) {
+	for _, when := range []string{"before", "container", "database"} {
+		t.Run(when, func(t *testing.T) {
+			bp := testBlueprint()
+			bp.Seed.Migrate = "true"
+			deps, bm, drv := testDeps(t, bp)
+			if err := Up(context.Background(), deps, "i1", UpOptions{Skip: map[string]bool{"verify": true}}); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			drops := 0
+			bm.dropFunc = func(dbCtx context.Context, _ string) error {
+				drops++
+				cancel()
+				if !errors.Is(dbCtx.Err(), context.Canceled) {
+					t.Error("active DB context survived cancellation")
+				}
+				return dbCtx.Err()
+			}
+			if when == "before" {
+				cancel()
+			}
+			if when == "container" {
+				drv.stopFunc = func(context.Context) { cancel() }
+			}
+			if err := Down(ctx, deps, "i1"); !errors.Is(err, context.Canceled) {
+				t.Fatal(err)
+			}
+			if when != "database" && drops != 0 {
+				t.Fatal("started a DB drop after cancellation")
+			}
+			for _, err := range append(drv.serviceCtxErrs, drv.removeNetCtxErrs...) {
+				if err != nil {
+					t.Fatalf("Docker received canceled context: %v", err)
+				}
+			}
+			assertNoResidue(t, deps, "i1")
+		})
+	}
+}
 
 func initRepo(t *testing.T) string {
 	t.Helper()
@@ -339,6 +468,9 @@ func cleanupInstance(t *testing.T, deps *Deps, name string) {
 
 func assertNoResidue(t *testing.T, deps *Deps, name string) {
 	t.Helper()
+	if _, err := os.Stat(mailbox.Dir(deps.RepoRoot, name)); !os.IsNotExist(err) {
+		t.Errorf("mailbox for %q still exists: %v", name, err)
+	}
 	if worktree.BranchExists(deps.RepoRoot, name) {
 		t.Errorf("branch %q still exists", worktree.BranchName(name))
 	}

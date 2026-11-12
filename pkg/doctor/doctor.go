@@ -4,6 +4,7 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -63,6 +64,7 @@ type Deps struct {
 	Blueprint *blueprint.Blueprint
 	Registry  *registry.Registry
 	BM        BaseManager
+	BMErr     error `json:"-"`
 	Docker    DockerDriver
 	RepoRoot  string
 }
@@ -194,7 +196,7 @@ func runBlueprintVsRegistry(ctx context.Context, r *Report, deps *Deps) {
 		}
 	}
 
-	hasFail := false
+	hasFail := deps.BM == nil && deps.BMErr != nil && databaseErrorLevel(deps.BMErr) == Fail
 	count := 0
 	for name, rec := range deps.Registry.Instances {
 		count++
@@ -212,7 +214,9 @@ func runBlueprintVsRegistry(ctx context.Context, r *Report, deps *Deps) {
 				exists, err := deps.BM.InstanceDBExists(ctx, dbName)
 				switch {
 				case err != nil:
-					r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: fmt.Sprintf("%s: cannot check database %s: %v", name, dbName, err)})
+					level := databaseErrorLevel(err)
+					hasFail = hasFail || level == Fail
+					r.Checks = append(r.Checks, Check{Area: area, Level: level, Message: fmt.Sprintf("%s: cannot check database %s: %v", name, dbName, err)})
 				case !exists:
 					r.Checks = append(r.Checks, Check{Area: area, Level: Fail, Message: fmt.Sprintf("%s: database %s missing — 'plax down' + 'plax up' to rebuild", name, dbName)})
 					hasFail = true
@@ -294,7 +298,11 @@ func runRepoVsMachine(r *Report, deps *Deps) {
 	}
 
 	if deps.BM == nil {
-		r.Checks = append(r.Checks, Check{Area: area, Level: Fail, Message: "postgres: cannot connect"})
+		msg := "postgres: cannot connect"
+		if deps.BMErr != nil {
+			msg += ": " + deps.BMErr.Error()
+		}
+		r.Checks = append(r.Checks, Check{Area: area, Level: Fail, Message: msg})
 	} else {
 		r.Checks = append(r.Checks, Check{Area: area, Level: Pass, Message: "postgres: reachable"})
 	}
@@ -341,7 +349,7 @@ func runOrphanDatabases(ctx context.Context, r *Report, deps *Deps) {
 
 	serverDBs, err := deps.BM.ListPlaxDatabases(ctx)
 	if err != nil {
-		r.Checks = append(r.Checks, Check{Area: area, Level: Warn, Message: fmt.Sprintf("cannot list databases: %v", err)})
+		r.Checks = append(r.Checks, Check{Area: area, Level: databaseErrorLevel(err), Message: fmt.Sprintf("cannot list databases: %v", err)})
 		return
 	}
 
@@ -379,6 +387,13 @@ func runOrphanDatabases(ctx context.Context, r *Report, deps *Deps) {
 			Message: fmt.Sprintf("%s is an unreferenced database — run `psql -c \"DROP DATABASE %s\"` to remove it", db, db),
 		})
 	}
+}
+
+func databaseErrorLevel(err error) Level {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return Fail
+	}
+	return Warn
 }
 
 func runScrubbedKeysWithRealValues(r *Report, deps *Deps) {

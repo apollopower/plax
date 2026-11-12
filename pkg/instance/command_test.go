@@ -58,17 +58,18 @@ func TestRunCommand_CancellationStopsProcess(t *testing.T) {
 	dir := t.TempDir()
 	writeEnv(t, dir, "A=1\n")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	done := make(chan error, 1)
 	go func() {
 		// A multi-command script forces sh to spawn sleep as a child rather
 		// than exec-optimizing it away, so the whole process group must be
 		// killed for Wait to return.
-		_, err := RunCommand(ctx, dir, "", nil, "sleep 30; exit 0")
+		_, err := RunCommand(ctx, dir, "", nil, "echo ready > ready; sleep 30; exit 0")
 		done <- err
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	waitInstanceMarker(t, ctx, filepath.Join(dir, "ready"))
 	cancel()
 
 	select {
@@ -82,6 +83,34 @@ func TestRunCommand_CancellationStopsProcess(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunCommand did not return after cancel")
+	}
+}
+
+func TestRunCommand_CanceledContextDoesNotStart(t *testing.T) {
+	dir := t.TempDir()
+	writeEnv(t, dir, "A=1\n")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := RunCommand(ctx, dir, "", nil, "touch unexpected")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "unexpected")); !os.IsNotExist(err) {
+		t.Fatal("canceled script started")
+	}
+}
+
+func TestRunCommand_MixedOutput(t *testing.T) {
+	dir := t.TempDir()
+	writeEnv(t, dir, "A=1\n")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	result, err := RunCommand(ctx, dir, "", nil, "i=0; while [ $i -lt 100 ]; do echo stdout; echo stderr >&2; i=$((i+1)); done")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(result.Output, "stdout") != 100 || strings.Count(result.Output, "stderr") != 100 {
+		t.Fatal("lost mixed command output")
 	}
 }
 

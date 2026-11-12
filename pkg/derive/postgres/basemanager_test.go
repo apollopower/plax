@@ -2,7 +2,10 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -11,6 +14,7 @@ import (
 
 	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/testutil"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -21,6 +25,401 @@ func testBlueprint() *blueprint.Blueprint {
 			Command: "bash testdata/seed.sh",
 			Workdir: ".",
 		},
+	}
+}
+
+func deadlineManager(t *testing.T) *BaseManager {
+	t.Helper()
+	dsn := os.Getenv("PLAX_TEST_POSTGRES_URL")
+	if dsn == "" {
+		t.Skip("PLAX_TEST_POSTGRES_URL is unset")
+	}
+	testutil.LockPostgres(t, dsn)
+	bm, err := NewBaseManager(context.Background(), dsn, ".", testBlueprint())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bm.baseName = fmt.Sprintf("plax_t23_%x", time.Now().UnixNano())
+	bm.nextName = bm.baseName + "_next"
+	t.Cleanup(bm.Close)
+	cleanupOwnedDB(t, bm, bm.baseName)
+	cleanupOwnedDB(t, bm, bm.nextName)
+	return bm
+}
+
+func cleanupOwnedDB(t *testing.T, bm *BaseManager, name string) {
+	t.Helper()
+	t.Cleanup(func() {
+		if err := bm.cleanupDB(context.Background(), name); err != nil {
+			t.Errorf("cleanup owned fixture %s: %v", name, err)
+		}
+	})
+}
+
+func fixturePool(t *testing.T, bm *BaseManager, name string) *pgxpool.Pool {
+	t.Helper()
+	pool, err := bm.poolForDB(context.Background(), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+func blockProvenance(t *testing.T, bm *BaseManager) pgx.Tx {
+	t.Helper()
+	setBaseLock(t, bm, true)
+	pool := fixturePool(t, bm, bm.baseName)
+	tx, err := pool.Begin(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := tx.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			t.Error(err)
+		}
+	})
+	if _, err := tx.Exec(context.Background(), "LOCK TABLE _plax_provenance IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	return tx
+}
+
+func TestPostgres_ProvenanceDeadline(t *testing.T) {
+	bm := deadlineManager(t)
+	if err := bm.CreateBase(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	tx := blockProvenance(t, bm)
+	bm.timeouts.operation = 100 * time.Millisecond
+	_, err := bm.InstanceProvenance(context.Background(), bm.baseName)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("blocked query: %v", err)
+	}
+	if err := tx.Rollback(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if prov, err := bm.InstanceProvenance(context.Background(), bm.baseName); err != nil || prov == nil {
+		t.Fatalf("healthy read after timeout: prov=%v err=%v", prov, err)
+	}
+}
+
+func TestPostgres_BaseStatusRelocksAfterTimeout(t *testing.T) {
+	bm := deadlineManager(t)
+	if err := bm.CreateBase(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	blockProvenance(t, bm)
+	setBaseLock(t, bm, false)
+	bm.timeouts.operation = 100 * time.Millisecond
+	_, err := bm.BaseStatus(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("status swallowed provenance error: %v", err)
+	}
+	exists, locked, err := bm.dbExists(context.Background(), bm.baseName)
+	if err != nil || !exists || !locked {
+		t.Fatalf("failed to restore lock: exists=%v locked=%v err=%v", exists, locked, err)
+	}
+}
+
+func TestPostgres_ProvenanceReadAndRelockErrors(t *testing.T) {
+	bm := deadlineManager(t)
+	if err := bm.CreateBase(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	blockProvenance(t, bm)
+	setBaseLock(t, bm, false)
+	cfg := bm.pool.Config()
+	calls := 0
+	cfg.PrepareConn = func(ctx context.Context, _ *pgx.Conn) (bool, error) {
+		calls++
+		if calls >= 4 {
+			<-ctx.Done()
+			return false, ctx.Err()
+		}
+		return true, nil
+	}
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := bm.pool
+	bm.pool = pool
+	t.Cleanup(func() { bm.pool = original; pool.Close() })
+	bm.timeouts.operation, bm.timeouts.cleanup = 100*time.Millisecond, 100*time.Millisecond
+	_, err = bm.BaseStatus(context.Background())
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "read provenance") || !strings.Contains(err.Error(), "re-lock "+bm.baseName) || !strings.Contains(err.Error(), "lock state unconfirmed") {
+		t.Fatalf("lost read/relock failure: %v", err)
+	}
+}
+
+func TestPostgres_DatabaseEntrypointsHaveDeadlines(t *testing.T) {
+	bm := deadlineManager(t)
+	bm.bp.Seed.AppliedMigrations = &blueprint.AppliedMigrations{Table: "migrations", Column: "name"}
+	bm.bp.Seed.Migrate = "touch unexpected"
+	bm.repoRoot = t.TempDir()
+	cfg := bm.pool.Config()
+	cfg.PrepareConn = func(ctx context.Context, _ *pgx.Conn) (bool, error) { <-ctx.Done(); return false, ctx.Err() }
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := bm.pool
+	bm.pool = pool
+	t.Cleanup(func() { bm.pool = original; pool.Close() })
+	bm.timeouts.operation = 50 * time.Millisecond
+	methods := map[string]func(context.Context) error{
+		"clone":      func(ctx context.Context) error { return bm.CloneBase(ctx, "unused") },
+		"drop":       func(ctx context.Context) error { return bm.DropInstanceDB(ctx, "unused") },
+		"provenance": func(ctx context.Context) error { _, err := bm.InstanceProvenance(ctx, "unused"); return err },
+		"applied":    func(ctx context.Context) error { _, err := bm.AppliedMigrations(ctx, "unused"); return err },
+		"exists":     func(ctx context.Context) error { _, err := bm.InstanceDBExists(ctx, "unused"); return err },
+		"status":     func(ctx context.Context) error { _, err := bm.BaseStatus(ctx); return err },
+		"list":       func(ctx context.Context) error { _, err := bm.ListPlaxDatabases(ctx); return err },
+		"create":     bm.CreateBase, "seed": bm.SeedBase, "reset": bm.ResetBase, "refresh": bm.RefreshBase,
+	}
+	for name, call := range methods {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			start := time.Now()
+			if err := call(ctx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("deadline lost: %v", err)
+			}
+			if time.Since(start) > 2*time.Second {
+				t.Fatal("method exceeded injected budget")
+			}
+			cancel()
+			if err := call(ctx); !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation lost: %v", err)
+			}
+		})
+	}
+	if _, err := os.Stat(filepath.Join(bm.repoRoot, "unexpected")); !os.IsNotExist(err) {
+		t.Fatal("script started after first phase failed")
+	}
+}
+
+func TestPostgres_BaseScriptCancellationRestoresState(t *testing.T) {
+	for _, op := range []string{"create", "seed", "refresh", "refresh_seed", "cleanup_failure"} {
+		t.Run(op, func(t *testing.T) {
+			bm := deadlineManager(t)
+			if op != "create" && op != "cleanup_failure" {
+				if err := bm.CreateBase(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			dir := t.TempDir()
+			bm.repoRoot = dir
+			command := "echo ready > ready; sleep 30; exit 0"
+			call := bm.CreateBase
+			switch op {
+			case "create":
+				bm.bp.Seed.Migrate = command
+			case "seed":
+				bm.bp.Seed.Command = command
+				call = bm.SeedBase
+			case "refresh":
+				bm.bp.Seed.Migrate = command
+				call = bm.RefreshBase
+			case "refresh_seed":
+				bm.bp.Seed.Migrate = "true"
+				bm.bp.Seed.Command = command
+				call = bm.RefreshBase
+			case "cleanup_failure":
+				bm.bp.Seed.Migrate = command
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if op == "cleanup_failure" {
+				cfg := bm.pool.Config()
+				cfg.PrepareConn = func(acquireCtx context.Context, _ *pgx.Conn) (bool, error) {
+					if ctx.Err() != nil {
+						<-acquireCtx.Done()
+						return false, acquireCtx.Err()
+					}
+					return true, nil
+				}
+				pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+				if err != nil {
+					t.Fatal(err)
+				}
+				original := bm.pool
+				bm.pool = pool
+				bm.timeouts.cleanup = 50 * time.Millisecond
+				defer func() { bm.pool = original; pool.Close() }()
+			}
+			done := make(chan error, 1)
+			go func() { done <- call(ctx) }()
+			finished := false
+			defer func() {
+				cancel()
+				if !finished {
+					select {
+					case err := <-done:
+						if err != nil {
+							t.Logf("watchdog cleanup: %v", err)
+						}
+					case <-time.After(5 * time.Second):
+						t.Error("script watchdog cleanup did not finish")
+					}
+				}
+			}()
+			waitMarker(t, filepath.Join(dir, "ready"))
+			cancel()
+			select {
+			case err := <-done:
+				finished = true
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal(err)
+				}
+				if op == "cleanup_failure" && (!errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "database may remain")) {
+					t.Fatalf("lost bounded cleanup failure: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("cancellation/recovery hung")
+			}
+			if op == "cleanup_failure" {
+				return
+			}
+			exists, locked, err := bm.dbExists(context.Background(), bm.baseName)
+			if err != nil || exists != (op != "create") || (exists && !locked) {
+				t.Fatalf("base state: exists=%v locked=%v err=%v", exists, locked, err)
+			}
+			if exists, _, err := bm.dbExists(context.Background(), bm.nextName); err != nil || exists {
+				t.Fatalf("staging leaked: exists=%v err=%v", exists, err)
+			}
+		})
+	}
+}
+
+func TestPostgres_CloneTimeoutCleansOwnedTarget(t *testing.T) {
+	bm := deadlineManager(t)
+	if err := bm.CreateBase(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	target := bm.baseName + "_clone"
+	cleanupOwnedDB(t, bm, target)
+	dsn, accepted := stalledPostgres(t)
+	bm.dsn = dsn
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := bm.CloneBase(ctx, target); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	select {
+	case <-accepted:
+	default:
+		t.Fatal("clone never reached the post-create connection")
+	}
+	if exists, _, err := bm.dbExists(context.Background(), target); err != nil || exists {
+		t.Fatalf("owned target leaked: exists=%v err=%v", exists, err)
+	}
+	if err := bm.createDB(context.Background(), target, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := bm.CloneBase(context.Background(), target); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatal(err)
+	}
+	if exists, _, err := bm.dbExists(context.Background(), target); err != nil || !exists {
+		t.Fatalf("pre-existing target dropped: exists=%v err=%v", exists, err)
+	}
+}
+
+func TestPostgres_MixedOperationsDoNotTimeOutScripts(t *testing.T) {
+	for _, op := range []string{"create", "seed", "refresh"} {
+		t.Run(op, func(t *testing.T) {
+			bm := deadlineManager(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if op != "create" {
+				if err := bm.CreateBase(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			bm.timeouts.operation = time.Second
+			call := bm.CreateBase
+			switch op {
+			case "create":
+				bm.bp.Seed.Migrate = "sleep 1.2; " + bm.bp.Seed.Migrate
+			case "seed":
+				bm.bp.Seed.Command = "sleep 1.2; " + bm.bp.Seed.Command
+				call = bm.SeedBase
+			case "refresh":
+				bm.bp.Seed.Migrate = "sleep 1.2; " + bm.bp.Seed.Migrate
+				bm.bp.Seed.Command = "sleep 1.2; " + bm.bp.Seed.Command
+				call = bm.RefreshBase
+			}
+			if err := call(ctx); err != nil {
+				t.Fatalf("script inherited database-phase deadline: %v", err)
+			}
+		})
+	}
+}
+
+func TestPostgres_RefreshInterruptedSwapPreservesStaging(t *testing.T) {
+	bm := deadlineManager(t)
+	if err := bm.createDB(context.Background(), bm.nextName, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := bm.RefreshBase(context.Background()); err == nil || !strings.Contains(err.Error(), "interrupted swap") {
+		t.Fatal(err)
+	}
+	if exists, _, err := bm.dbExists(context.Background(), bm.baseName); err != nil || exists {
+		t.Fatalf("created replacement base: %v %v", exists, err)
+	}
+	if exists, _, err := bm.dbExists(context.Background(), bm.nextName); err != nil || !exists {
+		t.Fatalf("lost staged base: %v %v", exists, err)
+	}
+}
+
+func TestPostgres_CloneFixtureTiming(t *testing.T) {
+	bm := deadlineManager(t)
+	ctx := context.Background()
+	if err := bm.CreateBase(ctx); err != nil {
+		t.Fatal(err)
+	}
+	setBaseLock(t, bm, true)
+	pool := fixturePool(t, bm, bm.baseName)
+	if _, err := pool.Exec(ctx, `ALTER TABLE users ADD COLUMN payload text;
+		INSERT INTO users(name, payload)
+		SELECT 'fixture-' || i, (SELECT string_agg(md5(i::text || ':' || j::text), '') FROM generate_series(1,32) j)
+		FROM generate_series(1,102400) i`); err != nil {
+		t.Fatal(err)
+	}
+	var rows, payloadBytes, size int64
+	if err := pool.QueryRow(ctx, "SELECT count(*), sum(octet_length(payload)) FROM users").Scan(&rows, &payloadBytes); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 102400 || payloadBytes != 100*1024*1024 {
+		t.Fatalf("fixture rows=%d bytes=%d", rows, payloadBytes)
+	}
+	pool.Close()
+	setBaseLock(t, bm, false)
+	var version string
+	if err := bm.pool.QueryRow(ctx, "SHOW server_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := bm.pool.QueryRow(ctx, "SELECT pg_database_size($1)", bm.baseName).Scan(&size); err != nil {
+		t.Fatal(err)
+	}
+	sqlTarget, cloneTarget := bm.baseName+"_sql", bm.baseName+"_clone"
+	cleanupOwnedDB(t, bm, sqlTarget)
+	cleanupOwnedDB(t, bm, cloneTarget)
+	copyCtx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	start := time.Now()
+	_, err := bm.pool.Exec(copyCtx, fmt.Sprintf("CREATE DATABASE %s TEMPLATE %s", sqlTarget, bm.baseName))
+	sqlElapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("SQL template copy after %s: %v", sqlElapsed, err)
+	}
+	start = time.Now()
+	err = bm.CloneBase(ctx, cloneTarget)
+	cloneElapsed := time.Since(start)
+	t.Logf("fixture rows=%d payload_bytes=%d database_bytes=%d server=%s SQL_copy=%s full_clone=%s (local configured test server; timings are not production-size guarantees)", rows, payloadBytes, size, version, sqlElapsed, cloneElapsed)
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

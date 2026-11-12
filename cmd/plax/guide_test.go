@@ -35,6 +35,7 @@ var guideManualShared = []string{
 	"the blueprint",
 	"isolation strategies",
 	"the base",
+	"database deadlines and interruption",
 	"working with instances",
 	"verify an instance",
 	"mailbox",

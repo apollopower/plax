@@ -26,13 +26,21 @@ type fakeBM struct {
 	provErr    error
 	applied    []string
 	appliedErr error
+	statusErr  error
+	stage      func(string)
 }
 
 func (f *fakeBM) BaseStatus(context.Context) (postgres.BaseInfo, error) {
-	return f.info, nil
+	if f.stage != nil {
+		f.stage("base")
+	}
+	return f.info, f.statusErr
 }
 
 func (f *fakeBM) InstanceProvenance(context.Context, string) (*postgres.ProvenanceRow, error) {
+	if f.stage != nil {
+		f.stage("provenance")
+	}
 	if f.provErr != nil {
 		return nil, f.provErr
 	}
@@ -40,10 +48,112 @@ func (f *fakeBM) InstanceProvenance(context.Context, string) (*postgres.Provenan
 }
 
 func (f *fakeBM) AppliedMigrations(context.Context, string) ([]string, error) {
+	if f.stage != nil {
+		f.stage("applied")
+	}
 	if f.appliedErr != nil {
 		return nil, f.appliedErr
 	}
 	return f.applied, nil
+}
+
+func reportDeps(t *testing.T) *Deps {
+	t.Helper()
+	dir, bp, reg, wt := initStatusRepo(t)
+	t.Cleanup(reg.Close)
+	migrations := filepath.Join(wt, "src", "db", "migrations")
+	if err := os.MkdirAll(migrations, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(migrations, "001.sql"), []byte("SELECT 1;"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "src"}, {"commit", "-m", "fixture migration"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = wt
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git: %s: %v", out, err)
+		}
+	}
+	bp.Seed.AppliedMigrations = &blueprint.AppliedMigrations{Table: "migrations", Column: "name"}
+	if err := reg.AddInstance("i1", registry.InstanceRecord{ID: "i1", Branch: worktree.BranchName("i1"), WorktreePath: wt, DBName: "plax_i1", State: registry.StateSuspended, BaseRef: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	return &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir}
+}
+
+func TestStatus_ConnectionErrorMakesDatabaseDimensionsUnknown(t *testing.T) {
+	deps := reportDeps(t)
+	deps.BMErr = fmt.Errorf("postgres connect: %w", context.DeadlineExceeded)
+	r, err := Build(context.Background(), deps, "i1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []Dimension{r.Schema, r.Data} {
+		if d.Level != Unknown || !strings.Contains(d.Detail, "context deadline exceeded") {
+			t.Fatalf("dimension = %+v", d)
+		}
+	}
+}
+
+func TestStatus_CancellationReturnsError(t *testing.T) {
+	for _, stage := range []string{"entry", "provenance", "applied", "base"} {
+		t.Run(stage, func(t *testing.T) {
+			deps := reportDeps(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var calls []string
+			deps.BM = &fakeBM{prov: &postgres.ProvenanceRow{Version: 1}, applied: []string{"001"}, stage: func(name string) {
+				calls = append(calls, name)
+				if name == stage {
+					cancel()
+				}
+			}}
+			if stage == "entry" {
+				cancel()
+			}
+			r, err := Build(ctx, deps, "i1")
+			if r != nil || !errors.Is(err, context.Canceled) {
+				t.Fatalf("report=%v err=%v", r, err)
+			}
+			if stage == "entry" && len(calls) != 0 {
+				t.Fatalf("calls after cancellation: %v", calls)
+			}
+			if stage != "entry" && (len(calls) == 0 || calls[len(calls)-1] != stage) {
+				t.Fatalf("continued after cancellation: %v", calls)
+			}
+		})
+	}
+}
+
+func TestStatus_DeadlineRemainsDegradedReport(t *testing.T) {
+	for _, stage := range []string{"provenance", "applied", "base"} {
+		t.Run(stage, func(t *testing.T) {
+			deps := reportDeps(t)
+			bm := &fakeBM{prov: &postgres.ProvenanceRow{Version: 1}, applied: []string{"001"}}
+			switch stage {
+			case "provenance":
+				bm.provErr = context.DeadlineExceeded
+				deps.Blueprint.Seed.AppliedMigrations = nil
+			case "applied":
+				bm.appliedErr = context.DeadlineExceeded
+			case "base":
+				bm.statusErr = context.DeadlineExceeded
+			}
+			deps.BM = bm
+			r, err := Build(context.Background(), deps, "i1")
+			if err != nil || r == nil {
+				t.Fatalf("report=%v err=%v", r, err)
+			}
+			d := r.Data
+			if stage == "applied" {
+				d = r.Schema
+			}
+			if d.Level != Unknown || !strings.Contains(d.Detail, "deadline exceeded") {
+				t.Fatalf("dimension=%+v", d)
+			}
+		})
+	}
 }
 
 func initStatusRepo(t *testing.T) (repoRoot string, bp *blueprint.Blueprint, reg *registry.Registry, wtPath string) {
@@ -335,7 +445,11 @@ func schemaDriftResult(t *testing.T, repoRoot, baseRef string, bm BaseManager, a
 		WorktreePath: wtPath,
 		DBName:       "plax_schema",
 	}
-	return schemaDrift(context.Background(), repoRoot, baseRef, "src/db/migrations", am, bm, rec, prov, nil)
+	d, err := schemaDrift(context.Background(), repoRoot, baseRef, "src/db/migrations", am, bm, rec, prov, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
 }
 
 func TestStatus_SchemaDriftBaseAhead(t *testing.T) {

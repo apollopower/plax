@@ -33,13 +33,15 @@ CREATE TABLE IF NOT EXISTS _plax_provenance (
 )
 `
 
-func CreateProvenance(ctx context.Context, pool *pgxpool.Pool, row ProvenanceRow) error {
+func CreateProvenance(ctx context.Context, pool *pgxpool.Pool, row ProvenanceRow) (err error) {
+	ctx, finish := phase(ctx, defaultTimeouts().operation, "create provenance")
+	defer finish(&err)
 	if _, err := pool.Exec(ctx, provenanceDDL); err != nil {
 		return fmt.Errorf("provenance: create table: %w", err)
 	}
 
 	var exists bool
-	err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM _plax_provenance)`).Scan(&exists)
+	err = pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM _plax_provenance)`).Scan(&exists)
 	if err != nil {
 		return fmt.Errorf("provenance: check existence: %w", err)
 	}
@@ -63,9 +65,11 @@ func CreateProvenance(ctx context.Context, pool *pgxpool.Pool, row ProvenanceRow
 	return nil
 }
 
-func ReadProvenance(ctx context.Context, pool *pgxpool.Pool) (*ProvenanceRow, error) {
+func ReadProvenance(ctx context.Context, pool *pgxpool.Pool) (_ *ProvenanceRow, err error) {
+	ctx, finish := phase(ctx, defaultTimeouts().operation, "read provenance")
+	defer finish(&err)
 	var exists bool
-	err := pool.QueryRow(ctx, `
+	err = pool.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM information_schema.tables
 			WHERE table_schema = 'public' AND table_name = '_plax_provenance'

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,11 +11,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/apollopower/plax/pkg/derive/docker"
+	"github.com/apollopower/plax/pkg/derive/postgres"
 	"github.com/apollopower/plax/pkg/process"
 	"github.com/apollopower/plax/pkg/registry"
 	"github.com/apollopower/plax/pkg/testutil"
@@ -308,6 +311,243 @@ func TestEndToEnd_TwoInstancesWithTestDB(t *testing.T) {
 
 // --- helpers ---
 
+func signalFixture(t *testing.T) (string, string, string) {
+	t.Helper()
+	dsn := e2ePrereqs(t)
+	bin, repo := buildPlax(t), initFixtureRepo(t)
+	t.Setenv("PLAX_BASE_NAME", fmt.Sprintf("plax_sig_%x", time.Now().UnixNano()))
+	if _, stderr, err := runPlax(bin, repo, "base", "reset", "--pg-url", dsn); err != nil {
+		t.Fatalf("base: %v: %s", err, stderr)
+	}
+	t.Cleanup(func() { dropBaseDB(t, dsn) })
+	return dsn, bin, repo
+}
+
+func waitCLIFile(t *testing.T, ctx context.Context, path string) []byte {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		data, err := os.ReadFile(path)
+		if err == nil && len(data) > 0 {
+			return data
+		}
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for %s: %v", path, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func TestEndToEnd_UpSIGINTRollsBack(t *testing.T) {
+	dsn, bin, repo := signalFixture(t)
+	const name = "signal_up"
+	path := filepath.Join(repo, "plax.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bp map[string]any
+	if err := json.Unmarshal(data, &bp); err != nil {
+		t.Fatal(err)
+	}
+	seed := bp["seed"].(map[string]any)
+	seed["migrate"] = "sleep 30 & echo $! > scratch/child; echo $$ > scratch/ready; wait"
+	updated, err := json.Marshal(bp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, updated, 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The migrate command comes from the root blueprint; the committed worktree
+	// still provides all other fixture inputs, and scratch is created by Up.
+	t.Cleanup(func() {
+		_, _, err := runPlax(bin, repo, "down", name, "--pg-url", dsn)
+		if err != nil {
+			t.Logf("cleanup down (may be unregistered after rollback): %v", err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "up", name, "--pg-url", dsn)
+	cmd.Dir = repo
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waited := false
+	defer func() {
+		if !waited {
+			if err := cmd.Process.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				t.Logf("interrupt failed child: %v", err)
+			}
+			if err := cmd.Wait(); err != nil {
+				t.Logf("reaped failed test child: %v", err)
+			}
+		}
+	}()
+	marker := filepath.Join(repo, worktree.WorktreeRelPath(name), "scratch", "ready")
+	pidData := waitCLIFile(t, ctx, marker)
+	childData := waitCLIFile(t, ctx, filepath.Join(filepath.Dir(marker), "child"))
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Error(err)
+	}
+	err = cmd.Wait()
+	waited = true
+	requireExit(t, err, 1)
+	if ctx.Err() != nil {
+		t.Fatal("Up cancellation exceeded watchdog")
+	}
+	if !strings.Contains(out.String(), "cancel") {
+		t.Fatalf("missing cancellation: %s", out.String())
+	}
+	for _, data := range [][]byte{pidData, childData} {
+		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err == nil {
+			_, rest, _ := strings.Cut(string(stat), ") ")
+			if !strings.HasPrefix(rest, "Z ") {
+				t.Errorf("migration process %d survived: %s", pid, stat)
+			}
+		} else if !os.IsNotExist(err) {
+			t.Error(err)
+		}
+	}
+	if dbExists(t, dsn, "plax_"+name) {
+		t.Error("clone survived rollback")
+	}
+	if dockerNetworkExists(t, "plax-"+name+"-net") {
+		t.Error("network survived rollback")
+	}
+	if worktree.BranchExists(repo, name) {
+		t.Error("branch survived rollback")
+	}
+	if _, err := os.Stat(filepath.Dir(filepath.Dir(marker))); !os.IsNotExist(err) {
+		t.Error("worktree survived rollback")
+	}
+	reg := openRegistryFile(t, repo)
+	if len(reg.Instances) != 0 || len(reg.PortAllocations) != 0 {
+		t.Error("registry/ports leaked")
+	}
+}
+
+func TestEndToEnd_DownSIGINTContinuesTeardown(t *testing.T) {
+	dsn, bin, repo := signalFixture(t)
+	const name = "signal_down"
+	if _, stderr, err := runPlax(bin, repo, "up", name, "--pg-url", dsn); err != nil {
+		t.Fatalf("up: %v: %s", err, stderr)
+	}
+	rec := openRegistryFile(t, repo).Instances[name]
+	t.Cleanup(func() {
+		_, _, err := runPlax(bin, repo, "down", name, "--pg-url", dsn)
+		if err != nil {
+			t.Logf("cleanup down (may already be removed): %v", err)
+		}
+		bm, err := postgres.NewBaseManager(context.Background(), dsn, repo, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer bm.Close()
+		for _, db := range registry.DBNamesFromRecord(rec) {
+			ctx, cancel := context.WithTimeout(context.Background(), postgres.DefaultCleanupTimeout)
+			err := bm.DropInstanceDB(ctx, db)
+			cancel()
+			if err != nil {
+				t.Errorf("cleanup residual %s: %v", db, err)
+			}
+		}
+	})
+	stallDSN, accepted := cliStalledPostgres(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "down", name, "--pg-url", stallDSN)
+	cmd.Dir = repo
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-accepted:
+		if err := cmd.Process.Signal(os.Interrupt); err != nil {
+			t.Error(err)
+		}
+	case <-ctx.Done():
+		t.Error("listener not reached")
+	}
+	err := cmd.Wait()
+	requireExit(t, err, 1)
+	if ctx.Err() != nil {
+		t.Fatal("Down cancellation exceeded watchdog")
+	}
+	if !strings.Contains(out.String(), rec.DBName) || !strings.Contains(out.String(), "incomplete") {
+		t.Fatalf("missing residual/incomplete diagnostic: %s", out.String())
+	}
+	if !dbExists(t, dsn, rec.DBName) {
+		t.Error("test should leave the unconfirmed DB for explicit cleanup")
+	}
+	if dockerNetworkExists(t, "plax-"+name+"-net") {
+		t.Error("network survived teardown")
+	}
+	if worktree.BranchExists(repo, name) {
+		t.Error("branch survived teardown")
+	}
+	reg := openRegistryFile(t, repo)
+	if len(reg.Instances) != 0 || len(reg.PortAllocations) != 0 {
+		t.Error("registry/ports survived teardown")
+	}
+	drv, err := docker.NewDriver()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := drv.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	for _, id := range rec.ContainerIDs {
+		exists, err := drv.ServiceExists(context.Background(), id)
+		if err != nil || exists {
+			t.Errorf("container %s survived: %v", id, err)
+		}
+	}
+	for proc, pid := range rec.PIDs {
+		if process.IsAlive(pid) {
+			t.Errorf("process %s survived", proc)
+		}
+	}
+}
+
+func fixtureDatabaseURLs(t *testing.T, content string) string {
+	t.Helper()
+	dsn := os.Getenv("PLAX_TEST_POSTGRES_URL")
+	if dsn == "" {
+		return content
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"DB_NAME", "DB_NAME_test"} {
+		u.Path = "/PLAX_DATABASE_PLACEHOLDER"
+		value := strings.ReplaceAll(u.String(), "PLAX_DATABASE_PLACEHOLDER", "{{"+name+"}}")
+		for _, prefix := range []string{"postgres://localhost:5432/", "postgres://postgres:postgres@localhost:5432/"} {
+			content = strings.ReplaceAll(content, prefix+"{{"+name+"}}", value)
+		}
+	}
+	return content
+}
+
 func e2ePrereqs(t *testing.T) string {
 	t.Helper()
 	pgURL := os.Getenv("PLAX_TEST_POSTGRES_URL")
@@ -384,13 +624,14 @@ API_KEY=placeholder
 		"docker-compose.yml": "services: {}\n",
 	}
 	for name, content := range files {
+		content = fixtureDatabaseURLs(t, content)
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	for _, args := range [][]string{
-		{"git", "init"},
+		{"git", "init", "-b", "main"},
 		{"git", "config", "user.email", "e2e@test.com"},
 		{"git", "config", "user.name", "E2E"},
 		{"git", "add", "."},
@@ -452,13 +693,14 @@ API_KEY=placeholder
 		"docker-compose.yml": "services: {}\n",
 	}
 	for name, content := range files {
+		content = fixtureDatabaseURLs(t, content)
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	for _, args := range [][]string{
-		{"git", "init"},
+		{"git", "init", "-b", "main"},
 		{"git", "config", "user.email", "e2e@test.com"},
 		{"git", "config", "user.name", "E2E"},
 		{"git", "add", "."},
@@ -507,6 +749,8 @@ func openRegistryFile(t *testing.T, repo string) *registry.Registry {
 	if err != nil {
 		t.Fatalf("open registry: %v", err)
 	}
+	// Callers inspect a snapshot, then invoke CLI commands that need this lock.
+	reg.Close()
 	return reg
 }
 
@@ -975,13 +1219,14 @@ CREATE TABLE items (id serial PRIMARY KEY, name text NOT NULL);
 		t.Fatal(err)
 	}
 	for name, content := range files {
+		content = fixtureDatabaseURLs(t, content)
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	for _, args := range [][]string{
-		{"git", "init"},
+		{"git", "init", "-b", "main"},
 		{"git", "config", "user.email", "e2e@test.com"},
 		{"git", "config", "user.name", "E2E"},
 		{"git", "add", "."},

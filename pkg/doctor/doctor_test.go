@@ -15,18 +15,83 @@ import (
 )
 
 type fakeBM struct {
-	info    postgres.BaseInfo
-	dbs     map[string]bool
-	plaxDBs []string
-	listErr error
+	info      postgres.BaseInfo
+	dbs       map[string]bool
+	plaxDBs   []string
+	listErr   error
+	statusErr error
+	existsErr error
 }
 
 func (f *fakeBM) BaseStatus(context.Context) (postgres.BaseInfo, error) {
-	return f.info, nil
+	return f.info, f.statusErr
 }
 
 func (f *fakeBM) InstanceDBExists(_ context.Context, dbName string) (bool, error) {
-	return f.dbs[dbName], nil
+	return f.dbs[dbName], f.existsErr
+}
+
+func TestDoctor_DatabaseTimeoutIsFailure(t *testing.T) {
+	for _, stage := range []string{"exists", "orphans", "base"} {
+		t.Run(stage, func(t *testing.T) {
+			dir, bp, reg := initDoctorRepo(t)
+			t.Cleanup(reg.Close)
+			if err := reg.AddInstance("i1", registry.InstanceRecord{ID: "i1", DBName: "plax_i1", WorktreePath: dir}); err != nil {
+				t.Fatal(err)
+			}
+			bm := &fakeBM{}
+			switch stage {
+			case "exists":
+				bm.existsErr = context.DeadlineExceeded
+			case "orphans":
+				bm.listErr = context.DeadlineExceeded
+			case "base":
+				bm.statusErr = context.DeadlineExceeded
+			}
+			deps := &Deps{Blueprint: bp, Registry: reg, RepoRoot: dir, BM: bm}
+			r := &Report{}
+			switch stage {
+			case "exists":
+				runBlueprintVsRegistry(context.Background(), r, deps)
+			case "orphans":
+				runOrphanDatabases(context.Background(), r, deps)
+			case "base":
+				runBase(context.Background(), r, deps)
+			}
+			found := false
+			for _, c := range r.Checks {
+				if strings.Contains(c.Message, "deadline exceeded") {
+					found = true
+					if c.Level != Fail {
+						t.Errorf("deadline is not failed: %+v", c)
+					}
+				}
+				if strings.Contains(c.Message, "all resources present") {
+					t.Error("false healthy summary")
+				}
+			}
+			if !found {
+				t.Fatal("missing timeout diagnostic")
+			}
+		})
+	}
+}
+
+func TestDoctor_ConnectionErrorRetainsCause(t *testing.T) {
+	r := &Report{}
+	runRepoVsMachine(r, &Deps{Blueprint: &blueprint.Blueprint{}, BMErr: fmt.Errorf("connect: %w", context.DeadlineExceeded)})
+	count := 0
+	for _, c := range r.Checks {
+		if strings.HasPrefix(c.Message, "postgres:") {
+			count++
+			if c.Level != Fail || !strings.Contains(c.Message, "deadline exceeded") {
+				t.Fatalf("check=%+v", c)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("got %d Postgres checks", count)
+	}
 }
 
 func (f *fakeBM) ListPlaxDatabases(_ context.Context) ([]string, error) {
