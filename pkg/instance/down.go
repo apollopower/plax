@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/apollopower/plax/pkg/mailbox"
@@ -25,6 +26,10 @@ import (
 // the source of truth for what exists; leaving a stale entry would block
 // future Up calls and leak port allocations.
 func Down(ctx context.Context, deps *Deps, name string) error {
+	dbCtx := ctx
+	teardownCtx := context.WithoutCancel(ctx)
+	var errs []error
+	var residual []string
 	rec, found := deps.Registry.GetInstance(name)
 	if !found {
 		return fmt.Errorf("instance %q not found", name)
@@ -67,8 +72,8 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 		ch := make(chan svcResult, len(rec.ContainerIDs))
 		for svcName, cid := range rec.ContainerIDs {
 			go func(name, cid string) {
-				stopErr := deps.Docker.StopService(ctx, cid)
-				rmErr := deps.Docker.RemoveService(ctx, cid)
+				stopErr := deps.Docker.StopService(teardownCtx, cid)
+				rmErr := deps.Docker.RemoveService(teardownCtx, cid)
 				if stopErr != nil {
 					ch <- svcResult{name, stopErr}
 					return
@@ -93,20 +98,33 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 	// Step 4: Drop all instance databases.
 	names := registry.DBNamesFromRecord(rec)
 	if deps.BM != nil {
-		for _, dbName := range names {
+		for i, dbName := range names {
+			if err := dbCtx.Err(); err != nil {
+				errs = append(errs, err)
+				residual = append(residual, names[i:]...)
+				break
+			}
 			fmt.Fprintf(os.Stderr, "dropping database %s...\n", dbName)
-			if err := deps.BM.DropInstanceDB(ctx, dbName); err != nil {
+			if err := deps.BM.DropInstanceDB(dbCtx, dbName); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: drop database %s: %v\n", dbName, err)
+				residual = append(residual, dbName)
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+					errs = append(errs, fmt.Errorf("drop %s (outcome unconfirmed): %w", dbName, err))
+				}
 			}
 		}
 	} else if len(names) > 0 {
-		fmt.Fprintf(os.Stderr, "warning: postgres unavailable — skipping database drop for %d database(s)\n", len(names))
+		residual = append(residual, names...)
+		fmt.Fprintf(os.Stderr, "warning: postgres unavailable — skipping database drops: %s\n", strings.Join(names, ", "))
+	}
+	if len(residual) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: residual/unconfirmed databases: %s; continuing non-DB teardown. After Postgres recovers, inspect with 'plax doctor'; registry removal means rerunning down cannot locate these databases.\n", strings.Join(residual, ", "))
 	}
 
 	// Step 5: Remove Docker network.
 	if deps.Docker != nil {
 		netName := "plax-" + name + "-net"
-		if err := deps.Docker.RemoveNetwork(ctx, netName); err != nil {
+		if err := deps.Docker.RemoveNetwork(teardownCtx, netName); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: remove network: %v\n", err)
 		}
 	}
@@ -135,12 +153,20 @@ func Down(ctx context.Context, deps *Deps, name string) error {
 	// Step 8: Remove registry entry. Always runs — even if earlier steps
 	// failed — because the registry is the source of truth for what exists.
 	if err := deps.Registry.RemoveInstance(name); err != nil {
-		return fmt.Errorf("registry: %w", err)
-	}
-	if err := deps.Registry.Save(); err != nil {
-		return fmt.Errorf("registry: %w", err)
+		errs = append(errs, fmt.Errorf("registry: %w", err))
+	} else if err := deps.Registry.Save(); err != nil {
+		errs = append(errs, fmt.Errorf("registry: %w", err))
 	}
 
-	fmt.Fprintf(os.Stderr, "instance %s down\n", name)
+	errs = append(errs, dbCtx.Err())
+	if err := errors.Join(errs...); err != nil {
+		fmt.Fprintf(os.Stderr, "instance %s teardown incomplete; inspect residual resources\n", name)
+		return err
+	}
+	if len(residual) > 0 {
+		fmt.Fprintf(os.Stderr, "instance %s local teardown finished with unconfirmed databases\n", name)
+	} else {
+		fmt.Fprintf(os.Stderr, "instance %s down\n", name)
+	}
 	return nil
 }

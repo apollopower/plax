@@ -14,6 +14,7 @@ import (
 	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/derive/docker"
 	"github.com/apollopower/plax/pkg/derive/env"
+	"github.com/apollopower/plax/pkg/derive/postgres"
 	"github.com/apollopower/plax/pkg/mailbox"
 	"github.com/apollopower/plax/pkg/process"
 	"github.com/apollopower/plax/pkg/record"
@@ -135,6 +136,19 @@ func migrateReport(counts map[string]int) string {
 // database, containers, processes, registry entry. Rolls back all side
 // effects on failure.
 func Up(ctx context.Context, deps *Deps, name string, opts UpOptions) (err error) {
+	return up(ctx, deps, name, opts, postgres.DefaultCleanupTimeout)
+}
+
+func dropForRollback(ctx context.Context, bm BaseManager, dbName string, cleanupTimeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTimeout)
+	defer cancel()
+	return bm.DropInstanceDB(ctx, dbName)
+}
+
+func up(ctx context.Context, deps *Deps, name string, opts UpOptions, cleanupTimeout time.Duration) (err error) {
+	if cleanupTimeout <= 0 {
+		return fmt.Errorf("cleanup timeout must be positive")
+	}
 	if err := validateName(name); err != nil {
 		return err
 	}
@@ -305,14 +319,12 @@ func Up(ctx context.Context, deps *Deps, name string, opts UpOptions) (err error
 			return fmt.Errorf("cloning database: %w", err)
 		}
 		clonedDBs = append(clonedDBs, physicalName)
-	}
-	cleanups = append(cleanups, func() {
-		for _, db := range clonedDBs {
-			if err := deps.BM.DropInstanceDB(cleanupCtx, db); err != nil {
-				fmt.Fprintf(os.Stderr, "rollback: drop database %s: %v\n", db, err)
+		cleanups = append(cleanups, func() {
+			if err := dropForRollback(ctx, deps.BM, physicalName, cleanupTimeout); err != nil {
+				fmt.Fprintf(os.Stderr, "rollback: database %s may remain: %v\n", physicalName, err)
 			}
-		}
-	})
+		})
+	}
 
 	// Step 5.5: Migrate the instance databases. The command runs exactly
 	// once in the instance worktree with the derived environment, after the

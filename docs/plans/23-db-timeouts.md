@@ -4,7 +4,7 @@
 
 Bound Plax-owned Postgres work and failure cleanup, make migration/seed scripts reliably interruptible, and report timeouts without hiding incomplete teardown ([#82](https://github.com/apollopower/plax/issues/82)).
 
-**Status: draft for maintainer review; no implementation yet.**
+**Status: implemented and locally verified; implementation-PR CI and maintainer smoke testing pending.**
 
 Agreed policy:
 
@@ -21,7 +21,7 @@ Agreed policy:
 | `down` | Continue teardown after database timeout/interruption, but return non-zero |
 | Signals during `down` | First SIGINT/SIGTERM cancels DB work; after acknowledgement, a further signal forces termination |
 
-The integration details below are proposals for this plan's review. This plan
+The integration details below are the implementation contract. This plan
 does not fix shared-test-server starvation (#83), add infrastructure to CI,
 change Rails support, or authorize a push, PR, or release.
 
@@ -355,7 +355,7 @@ discards staged state; it must not automatically perform that reset.
    recovers; do not promise that simply rerunning down removes them.
 ```
 
-The `doctor` and `status` diagnostic integration above is proposed for review:
+The `doctor` and `status` diagnostic integration above must
 preserve existing JSON shapes and put detailed causes into their existing
 message/detail fields. A status report containing unknown dimensions is not a
 successful database check, even though the report command may exit 0.
@@ -530,6 +530,7 @@ maintainer before declaring this work complete, not hidden by increasing the lim
 | `TestPostgres_ConnectionErrorsDoNotLeakCredentials` | Initial/per-DB parse and connection failures preserve error identity, while safe diagnostics omit plaintext/encoded URL and query credentials |
 | `TestPostgres_TimeoutPolicyValidation` | Private duration injection rejects non-positive limits; public defaults remain 10s/60s/10s |
 | `TestPostgres_PhaseHonorsParent` | Earlier deadlines and canceled parents win; nested helpers cannot extend a phase |
+| `TestPostgres_PhaseCancellationWithCleanupTimeout` | A cleanup deadline cannot relabel parent cancellation as an operation timeout; both causes remain inspectable |
 | `TestPostgres_PhaseBudgetShared` | Several simulated constituent calls share one budget, not a full budget each |
 | `TestPostgres_CleanupFreshBoundedContext` | Cleanup begins with a fresh deadline despite an expired parent; nested recovery does not restart it |
 | `TestPostgres_SwapRetriesOnlyObjectInUse` | Executor fake returns 55006, permission, and transport failures; only 55006 retries/defers |
@@ -599,10 +600,14 @@ Do not change `LockPostgres` behavior in this plan; that belongs to #83.
 - `TestPostgres_BaseStatusRelocksAfterTimeout` — hold a provenance-table lock
   before locking the base; time out during temporary-unlock reading and verify
   `datallowconn` is restored with a fresh cleanup budget.
+- `TestPostgres_ProvenanceReadAndRelockErrors` — independently block the recovery
+  acquisition; retain both the original read deadline and unsafe-lock warning.
 - `TestPostgres_BaseScriptCancellationRestoresState` — table-driven create,
   seed, and refresh scenarios; cancel a marker-ready migrate/seed script,
   verify child termination, and check partial-base/staging cleanup or relocking.
   A bounded cleanup failure must be explicitly returned.
+- `TestPostgres_MixedOperationsDoNotTimeOutScripts` — create/seed/refresh scripts
+  outlast the injected DB budget and still complete with fresh following phases.
 - `TestPostgres_CloneTimeoutCleansOwnedTarget` — force a post-create failure
   under a short parent deadline, then verify the owned target is removed;
   independently verify a pre-existing target is never dropped.
@@ -645,8 +650,8 @@ server version, and relevant machine/storage context in the implementation
 PR's verification evidence. Run the named test explicitly with
 `-race -count=1 -v` against the configured test server. A pass is evidence for
 that synthetic size/run only; larger or differently stored bases remain a documented risk.
-This plan-only PR adds the measurement requirement, not invented results;
-its implementation acceptance item stays unchecked until measured.
+Implementation measurements are recorded under Acceptance criteria below;
+they establish behavior for this synthetic fixture only.
 
 ### End-to-end tests and fixtures
 
@@ -665,51 +670,88 @@ Extend generic sample fixtures and generate listener/marker fixtures in test
 temp directories; no real product names, checked-in credentials, or global
 server shutdowns are needed.
 
+Implementation fixture notes: existing E2E DATABASE_URL holes hardcode host
+port 5432, and `openRegistryFile` retains an exclusive registry lock while
+its callers use the result only as a snapshot. Route fixture DSNs to the
+explicit test server and release that snapshot lock before returning, so
+these suites can run on an isolated server without hanging later CLI calls.
+This does not change `LockPostgres` or address #83's cross-package starvation.
+
 ## Acceptance criteria
 
-- [ ] Run `plax base status` against an accept-and-stall TCP listener; observe
+- [x] Run `plax base status` against an accept-and-stall TCP listener; observe
   exit 1 after approximately the 10s connection budget and a connection error.
 - [ ] Run `TestCLI_BaseStatusUnresponsivePostgres` with
   `PLAX_TEST_POSTGRES_URL` unset and no Docker daemon; verify it executes rather
   than skipping and passes in the normal CI job.
-- [ ] Block a provenance query on a real Postgres fixture; observe expiration
+  Local no-backend run passed in 10.71s; normal CI remains pending because this
+  implementation has not been pushed.
+- [x] Block a provenance query on a real Postgres fixture; observe expiration
   of one shared injected operation budget, not one budget per SQL call.
-- [ ] Exercise every database entry point with deadline/cancellation coverage;
+- [x] Exercise every database entry point with deadline/cancellation coverage;
   preserve `errors.Is` identity through operation and cleanup wrapping.
-- [ ] Cancel `base create`/`seed`/`refresh` and instance migration scripts after
+- [x] Cancel `base create`/`seed`/`refresh` and instance migration scripts after
   readiness; observe child termination, prompt Wait completion, and bounded recovery.
-- [ ] Run scripts longer than the injected database-phase budget; observe
+- [x] Run scripts longer than the injected database-phase budget; observe
   successful completion without an automatic script deadline.
-- [ ] Fail a later clone in multi-database `up`; verify all previously created
+- [x] Fail a later clone in multi-database `up`; verify all previously created
   resources receive cleanup and every cleanup failure is named.
-- [ ] Time out lock-sensitive base work; verify relocking is attempted with a
+- [x] Time out lock-sensitive base work; verify relocking is attempted with a
   fresh 10s budget and failed relocking cannot be silently reported as success.
-- [ ] Return swap timeout/network/permission errors as exit 1; return exit 2
+- [x] Return swap timeout/network/permission errors as exit 1; return exit 2
   only after database-in-use retry exhaustion, preserving staging where possible.
-- [ ] Interrupt or time out database work during `down`; verify other teardown
+- [x] Interrupt or time out database work during `down`; verify other teardown
   continues, registry/ports are removed, residual DBs are named, and exit is 1.
-- [ ] After a first signal during `down`, verify no additional DB drops start;
+- [x] After a first signal during `down`, verify no additional DB drops start;
   verify Docker calls receive live teardown contexts even when cancellation
   precedes the DB loop. After acknowledgement, send another signal during held
   cleanup and observe default OS termination for SIGINT/SIGTERM combinations.
-- [ ] Cancel `status` during each DB-facing stage; verify Build returns a wrapped
+- [x] Cancel `status` during each DB-facing stage; verify Build returns a wrapped
   cancellation, later DB stages do not run, and CLI exits 1; retain exit 0 with
   Unknown dimensions for a database-phase deadline without parent cancellation.
-- [ ] Exercise tolerant CLI callers; verify the documented degraded-report
+- [x] Exercise tolerant CLI callers; verify the documented degraded-report
   behavior without silently recording a healthy verification on timeout.
-- [ ] Confirm no new timeout flags, environment variables, blueprint fields,
+- [x] Confirm no new timeout flags, environment variables, blueprint fields,
   JSON report shapes, or whole-command deadlines were introduced.
-- [ ] Run `TestPostgres_CloneFixtureTiming` on the configured test server;
+- [x] Run `TestPostgres_CloneFixtureTiming` on the configured test server;
   report actual fixture size, template-copy SQL elapsed time, full clone elapsed
   time, and run context. Bring any failure/timeout back to the maintainer before
   completing the work; do not claim this bounds every larger base.
-- [ ] Exercise connection failures containing plaintext and encoded credential
+- [x] Exercise connection failures containing plaintext and encoded credential
   sentinels; verify stderr and status/doctor JSON contain none of them while
   errors.Is/As still identify the original timeout, cancellation, or pgx cause.
-- [ ] Update manual and bundled guide with limits, script interruption,
+- [x] Update manual and bundled guide with limits, script interruption,
   incomplete teardown, and staged-swap recovery; retain maintainer-owned README prose.
-- [ ] Run full local checks and Postgres/E2E suites; report actual output,
+- [x] Run full local checks and Postgres/E2E suites; report actual output,
   failures, skips, and infrastructure availability before declaring implementation complete.
+- [ ] Maintainer acceptance smoke test on a fresh disposable application instance;
+  do not reset/refresh a shared base or disturb existing application instances.
+
+Local verification evidence (2026-11-12):
+
+- `make check` with official golangci-lint v2.15.0; uncached race-enabled full
+  suite serialized with `GOFLAGS=-p=1` and an explicit isolated Postgres server.
+  Final uncached run: **602 passing test/subtest events, zero failures, two
+  child-only helper skips** (plus two packages with no test files).
+  Postgres and CLI packages also ran separately and sequentially. All eight
+  `TestEndToEnd_*` infrastructure scenarios executed; only the two child-only
+  upgrade/signal harness entry points skipped in their parent process.
+- The explicit no-infrastructure transport regression ran with the test DSN
+  unset and `DOCKER_HOST` pointing at a nonexistent test socket; it passed.
+- The explicit `-race -count=1 -v -run '^TestPostgres_CloneFixtureTiming$'` run
+  used 102,400 rows / 104,857,600 payload bytes / 130,055,191 database bytes.
+  SQL template copy: **607.475971ms**; full CloneBase: **564.824537ms**.
+  Server: PostgreSQL 16.15 (Debian 16.15-1.pgdg13+2), local disposable Docker
+  container, local volume on Btrfs SSD storage (zstd compression); x86_64 Intel
+  Core Ultra 9 185H. A local CLI transport regression ran concurrently with
+  this explicit measurement. These are not production-size guarantees.
+- Initial validation found an interrupted-script exit 255 (Kong inherited
+  `exec.ExitError.ExitCode()`), fixture Git default-branch assumptions, and a
+  race in a new failure-injection test. All were fixed and covered by reruns.
+  Fixture DSNs now follow the isolated endpoint and registry snapshots release
+  their locks before later CLI calls. `LockPostgres` and #83 are unchanged.
+- Operational docs are synchronized; README prose is unchanged. No push, PR,
+  release, shared-base reset/refresh, or application smoke test was performed.
 
 Verification at implementation time:
 
@@ -739,6 +781,11 @@ convention. Aligning the old helper belongs in the test-infrastructure
 discussion for #83, not an unreviewed change here.
 
 This is a temporary verification procedure, not an implementation of #83.
+If localhost:5432 belongs to a shared application, do not use the unset-variable
+fallback against it. Instead run `make check` and the uncached all-package run
+with an explicit isolated test DSN and `GOFLAGS=-p=1`, serializing package test
+binaries, then run the two infrastructure packages individually as above.
+Run the local-transport regression separately with the variable unset.
 An absent server/Docker/tool is a reported blocker or skip, not evidence that
 the integration acceptance criteria passed. Keep acceptance boxes unchecked
 until the corresponding evidence exists; plan approval is not verification.

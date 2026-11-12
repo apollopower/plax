@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/apollopower/plax/pkg/blueprint"
 	"github.com/apollopower/plax/pkg/worktree"
@@ -22,6 +24,139 @@ func TestParseSkip_AcceptsCommaSeparatedNames(t *testing.T) {
 	want := map[string]bool{"migrate": true, "verify": true}
 	if !reflect.DeepEqual(set, want) {
 		t.Errorf("set = %v, want %v", set, want)
+	}
+}
+
+func TestInstance_Up_CloneTimeoutRollsBackEarlierDatabases(t *testing.T) {
+	bp := testBlueprint()
+	svc := bp.Services["db"]
+	svc.Databases = []blueprint.DatabaseDef{{Name: "primary", From: "base"}, {Name: "test", From: "base"}}
+	bp.Services["db"] = svc
+	deps, bm, drv := testDeps(t, bp)
+	var first string
+	bm.cloneFunc = func(_ context.Context, name string) error {
+		if first == "" {
+			first = name
+			return nil
+		}
+		return context.DeadlineExceeded
+	}
+	err := Up(context.Background(), deps, "i1", UpOptions{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if got := bm.droppedDBs(); len(got) != 1 || got[0] != first {
+		t.Fatalf("earlier clone not rolled back: %v", got)
+	}
+	assertNoResidue(t, deps, "i1")
+	if len(drv.removedNets) != 1 || len(deps.Registry.PortAllocations) != 0 {
+		t.Fatal("network/ports leaked")
+	}
+}
+
+func TestInstance_Up_CleanupDurationValidation(t *testing.T) {
+	for _, limit := range []time.Duration{0, -time.Second} {
+		if err := up(context.Background(), nil, "i1", UpOptions{}, limit); err == nil {
+			t.Fatal("accepted nonpositive cleanup duration")
+		}
+	}
+}
+
+func TestInstance_Up_CleanupTimeoutContinuesRollback(t *testing.T) {
+	bp := testBlueprint()
+	bp.Seed.Migrate = "exit 1"
+	deps, bm, drv := testDeps(t, bp)
+	bm.dropFunc = func(ctx context.Context, name string) error {
+		if ctx.Err() != nil {
+			t.Error("cleanup was not fresh")
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("cleanup was unbounded")
+		}
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	stderr := captureStderr(t, func() error {
+		if err := up(context.Background(), deps, "i1", UpOptions{}, 30*time.Millisecond); err == nil {
+			t.Error("migration unexpectedly succeeded")
+		}
+		return nil
+	})
+	if !strings.Contains(stderr, "plax_i1 may remain") {
+		t.Fatalf("missing residual name: %s", stderr)
+	}
+	assertNoResidue(t, deps, "i1")
+	if len(drv.removedNets) != 1 {
+		t.Fatal("cleanup stopped before network removal")
+	}
+}
+
+func TestInstance_Up_MigrationCancellationRollsBack(t *testing.T) {
+	bp := testBlueprint()
+	bp.Seed.Migrate = "echo ready > scratch/ready; sleep 30; exit 0"
+	deps, bm, drv := testDeps(t, bp)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bm.dropFunc = func(ctx context.Context, name string) error {
+		if ctx.Err() != nil {
+			t.Error("rollback inherited cancellation")
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			t.Error("rollback missing deadline")
+		}
+		bm.mu.Lock()
+		defer bm.mu.Unlock()
+		bm.dropped = append(bm.dropped, name)
+		return nil
+	}
+	done := make(chan error, 1)
+	go func() { done <- Up(ctx, deps, "i1", UpOptions{}) }()
+	finished := false
+	defer func() {
+		cancel()
+		if !finished {
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Logf("watchdog cleanup: %v", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Error("Up watchdog cleanup did not finish")
+			}
+		}
+	}()
+	waitInstanceMarker(t, ctx, worktreeFile(deps, "i1", "scratch", "ready"))
+	cancel()
+	select {
+	case err := <-done:
+		finished = true
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Up did not complete rollback")
+	}
+	assertNoResidue(t, deps, "i1")
+	if len(bm.droppedDBs()) != 1 || len(drv.removedNets) != 1 {
+		t.Fatal("rollback missed resources")
+	}
+}
+
+func waitInstanceMarker(t *testing.T, ctx context.Context, path string) {
+	t.Helper()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("waiting for marker %s: %v", path, ctx.Err())
+		case <-ticker.C:
+		}
 	}
 }
 

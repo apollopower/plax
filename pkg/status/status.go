@@ -3,6 +3,7 @@ package status
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -52,11 +53,15 @@ type Deps struct {
 	Blueprint    *blueprint.Blueprint
 	Registry     *registry.Registry
 	BM           BaseManager
+	BMErr        error `json:"-"`
 	RepoRoot     string
 	CurrentStamp registry.BlueprintStamp
 }
 
 func Build(ctx context.Context, deps *Deps, name string) (*Report, error) {
+	if err := ctx.Err(); errors.Is(err, context.Canceled) {
+		return nil, fmt.Errorf("status: %w", err)
+	}
 	rec, found := deps.Registry.GetInstance(name)
 	if !found {
 		return nil, fmt.Errorf("instance %q not found", name)
@@ -73,6 +78,20 @@ func Build(ctx context.Context, deps *Deps, name string) (*Report, error) {
 	report.Host = hostDrift(deps.RepoRoot, deps.Blueprint, &rec)
 	report.Config = configDrift(deps.Registry, deps.CurrentStamp)
 	report.Health = LiveHealth(ctx, deps.Blueprint, &rec)
+	if err := ctx.Err(); errors.Is(err, context.Canceled) {
+		return nil, fmt.Errorf("status: %w", err)
+	}
+	if deps.BM == nil && deps.BMErr != nil {
+		if errors.Is(deps.BMErr, context.Canceled) {
+			return nil, fmt.Errorf("status: %w", deps.BMErr)
+		}
+		d := Dimension{Level: Unknown, Detail: fmt.Sprintf("postgres: %v", deps.BMErr)}
+		report.Schema, report.Data = d, d
+		if err := ctx.Err(); errors.Is(err, context.Canceled) {
+			return nil, fmt.Errorf("status: %w", err)
+		}
+		return report, nil
+	}
 
 	migrationsDir := deps.Blueprint.Seed.MigrationsDir
 	if migrationsDir == "" {
@@ -84,18 +103,32 @@ func Build(ctx context.Context, deps *Deps, name string) (*Report, error) {
 	if deps.BM != nil {
 		prov, provErr = deps.BM.InstanceProvenance(ctx, rec.DBName)
 	}
+	if err := errors.Join(ctx.Err(), provErr); errors.Is(err, context.Canceled) {
+		return nil, fmt.Errorf("status: %w", err)
+	}
 
 	// schemaDrift reads the live applied-migration set from the framework's
 	// tracking table when configured, so it must run even if the provenance
 	// fetch failed. dataDrift still reads provenance version numbers and stays
 	// gated on provErr.
-	report.Schema = schemaDrift(ctx, deps.RepoRoot, base, migrationsDir, deps.Blueprint.Seed.AppliedMigrations, deps.BM, &rec, prov, provErr)
+	var schemaErr error
+	report.Schema, schemaErr = schemaDrift(ctx, deps.RepoRoot, base, migrationsDir, deps.Blueprint.Seed.AppliedMigrations, deps.BM, &rec, prov, provErr)
+	if err := errors.Join(ctx.Err(), schemaErr); errors.Is(err, context.Canceled) {
+		return nil, fmt.Errorf("status: %w", err)
+	}
 	if provErr != nil {
 		report.Data = Dimension{Level: Unknown, Detail: fmt.Sprintf("instance provenance: %v", provErr)}
 	} else {
-		report.Data = dataDrift(ctx, deps.BM, prov)
+		var dataErr error
+		report.Data, dataErr = dataDrift(ctx, deps.BM, prov)
+		if errors.Is(dataErr, context.Canceled) {
+			return nil, fmt.Errorf("status: %w", dataErr)
+		}
 	}
 
+	if err := ctx.Err(); errors.Is(err, context.Canceled) {
+		return nil, fmt.Errorf("status: %w", err)
+	}
 	return report, nil
 }
 
@@ -290,21 +323,21 @@ func configDrift(reg *registry.Registry, current registry.BlueprintStamp) Dimens
 // against the worktree files (liveSchemaDrift); otherwise it falls back to
 // comparing the frozen clone-time stamp (legacySchemaDrift). The prov
 // parameter is used only by the legacy fallback.
-func schemaDrift(ctx context.Context, repoRoot, base, migrationsDir string, am *blueprint.AppliedMigrations, bm BaseManager, rec *registry.InstanceRecord, prov *postgres.ProvenanceRow, provErr error) Dimension {
+func schemaDrift(ctx context.Context, repoRoot, base, migrationsDir string, am *blueprint.AppliedMigrations, bm BaseManager, rec *registry.InstanceRecord, prov *postgres.ProvenanceRow, provErr error) (Dimension, error) {
 	var d Dimension
 
 	if am == nil {
 		// Legacy fallback: bail out before any git work when the stamp is
 		// unavailable, matching the pre-live-tracking behaviour.
 		if d, unavailable := legacyUnavailable(bm, prov, provErr); unavailable {
-			return d
+			return d, provErr
 		}
 	}
 
 	if base == "" {
 		d.Level = Unknown
 		d.Detail = "no base ref to compare against"
-		return d
+		return d, nil
 	}
 
 	ref := base
@@ -326,11 +359,11 @@ func schemaDrift(ctx context.Context, repoRoot, base, migrationsDir string, am *
 		} else {
 			d.Detail = fmt.Sprintf("no migration files at %s on %s", migrationsDir, ref)
 		}
-		return d
+		return d, nil
 	}
 
 	if am == nil {
-		return legacySchemaDrift(repoRoot, base, migrationsDir, usingWorktreeHead, bm, prov, names)
+		return legacySchemaDrift(repoRoot, base, migrationsDir, usingWorktreeHead, bm, prov, names), nil
 	}
 	return liveSchemaDrift(ctx, am, bm, rec.DBName, names, usingWorktreeHead)
 }
@@ -410,24 +443,27 @@ func legacySchemaDrift(repoRoot, base, migrationsDir string, usingWorktreeHead b
 // (from the framework's tracking table) against the migration files at the
 // worktree HEAD. The DB is ground truth, so this is correct by construction
 // and clears once an in-worktree migration is applied.
-func liveSchemaDrift(ctx context.Context, am *blueprint.AppliedMigrations, bm BaseManager, dbName string, names []string, usingWorktreeHead bool) Dimension {
+func liveSchemaDrift(ctx context.Context, am *blueprint.AppliedMigrations, bm BaseManager, dbName string, names []string, usingWorktreeHead bool) (Dimension, error) {
 	var d Dimension
+	if err := ctx.Err(); errors.Is(err, context.Canceled) {
+		return Dimension{Level: Unknown}, err
+	}
 	if bm == nil {
 		d.Level = Unknown
 		d.Detail = "postgres unreachable"
-		return d
+		return d, nil
 	}
 
 	applied, err := bm.AppliedMigrations(ctx, dbName)
 	if err != nil {
 		d.Level = Unknown
 		d.Detail = fmt.Sprintf("applied migrations: %v", err)
-		return d
+		return d, err
 	}
 	if applied == nil {
 		d.Level = Unknown
 		d.Detail = "no applied migrations recorded — run migrations in the instance"
-		return d
+		return d, nil
 	}
 
 	fileIDs := make([]string, 0, len(names))
@@ -456,7 +492,7 @@ func liveSchemaDrift(ctx context.Context, am *blueprint.AppliedMigrations, bm Ba
 		d.Level = Drift
 		d.Detail = fmt.Sprintf("migration histories have diverged — the database has %s this branch lacks, and the branch declares %s the database lacks. Rebuild the instance ('plax down' + 'plax up')", describeMigrations(dbOnly), describeMigrations(branchOnly))
 	}
-	return d
+	return d, nil
 }
 
 // setDiff returns the elements of a absent from b, in sorted order. Migration
@@ -490,12 +526,15 @@ func describeMigrations(names []string) string {
 	return fmt.Sprintf("%d %s (oldest: %s)", len(names), noun, names[0])
 }
 
-func dataDrift(ctx context.Context, bm BaseManager, prov *postgres.ProvenanceRow) Dimension {
+func dataDrift(ctx context.Context, bm BaseManager, prov *postgres.ProvenanceRow) (Dimension, error) {
 	var d Dimension
+	if err := ctx.Err(); errors.Is(err, context.Canceled) {
+		return Dimension{Level: Unknown}, err
+	}
 	if bm == nil {
 		d.Level = Unknown
 		d.Detail = "postgres unreachable"
-		return d
+		return d, nil
 	}
 	if prov == nil || prov.Version == 0 {
 		d.Level = Unknown
@@ -505,19 +544,19 @@ func dataDrift(ctx context.Context, bm BaseManager, prov *postgres.ProvenanceRow
 		default:
 			d.Detail = "no provenance version recorded"
 		}
-		return d
+		return d, nil
 	}
 
 	info, err := bm.BaseStatus(ctx)
 	if err != nil {
 		d.Level = Unknown
 		d.Detail = fmt.Sprintf("base status: %v", err)
-		return d
+		return d, err
 	}
 	if !info.Exists {
 		d.Level = Unknown
 		d.Detail = "base database missing"
-		return d
+		return d, nil
 	}
 
 	if prov.Version == info.ProvenanceVer {
@@ -527,5 +566,5 @@ func dataDrift(ctx context.Context, bm BaseManager, prov *postgres.ProvenanceRow
 		d.Level = Drift
 		d.Detail = fmt.Sprintf("built from base v%d — base is now v%d (stale; 'plax down' + 'plax up' to rebuild from the new base)", prov.Version, info.ProvenanceVer)
 	}
-	return d
+	return d, nil
 }

@@ -136,6 +136,30 @@ otherwise pass `--pg-url`.
 
 The base must exist before the first `plax up`.
 
+### Database deadlines and interruption
+
+Postgres connection establishment has a **10s** budget. Each database-only
+operation/phase has one shared **60s** budget across its queries, pool
+acquisition, and retries. Earlier caller deadlines win. Rollback drops and
+lock restoration each get a fresh, cancellation-independent **10s** budget.
+These fixed limits have no flag, environment-variable, or blueprint override.
+They are not whole-command limits: a slow but legitimate clone can time out,
+and multiple phases can take longer than 60s in total.
+
+Migration/seed scripts have **no automatic deadline**. SIGINT/SIGTERM cancels
+the command, kills its process group, reaps it, and triggers bounded recovery.
+Scripts that deliberately leave their process group are outside this guarantee.
+Database timeout/cancellation exits 1 for base/up/down/resume/verify. `doctor`
+marks timed-out DB checks failed (exit 1). `status` retains exit 0 with Unknown
+DB dimensions and a visible cause on timeout; cancellation exits 1.
+`base status` fails rather than hiding an unreadable provenance record.
+
+`base refresh` retries only PostgreSQL database-in-use errors. Exit 2 means
+that retry budget was exhausted and the staged base remains; other failures
+exit 1. A missing old base with a remaining staged base is an interrupted
+swap: inspect both named databases before recovery. `plax base reset` **discards
+staged state**; it is never performed automatically.
+
 ## Command reference
 
 All commands take `--root <dir>` (default `.`, auto-discovered by walking
@@ -243,6 +267,22 @@ worktree paths and port allocations.
 
 `plax down <name>` tears everything down. Use it when an instance's work
 is done or merged.
+
+Each forward database drop gets its own **60s** budget, not the 10s rollback
+budget: N unavailable databases can consume N × 60s, plus connection and non-DB
+teardown time. A timeout is retained while later drops and other teardown
+continue. First SIGINT/SIGTERM cancels the current DB work and skips all later
+drops, while process/container/network, worktree, mailbox, and registry teardown
+continue. If it finishes, `down` exits 1 with an incomplete summary. After the
+best-effort acknowledgement, another SIGINT/SIGTERM uses normal OS termination
+and may leave cleanup unfinished. Rapid signals before handling can coalesce/be
+lost; exact signal counting is not guaranteed.
+
+Residual/unconfirmed database names are printed to stderr. Registry/port
+allocations are removed even when drops fail, so **rerunning `down` cannot find
+those databases**. Once Postgres recovers, use `plax doctor` and inspect the
+named resources; remove only confirmed orphans. A timed-out SQL statement may
+have completed server-side; do not assume a timeout means no side effect.
 
 ### Regenerate env
 

@@ -534,6 +534,50 @@ plax base status --pg-url "postgres://..."
 Prints whether the base exists, whether it is locked, its provenance
 version, and whether a `plax_base_next` is staging.
 
+### 5.5 Database deadlines and interruption
+
+Plax bounds Postgres connection establishment to **10 seconds**, and each
+database-only operation/phase to **60 seconds shared across its database calls**
+(including pool acquisition and retries). Earlier caller deadlines win.
+Rollback database drops and lock restoration get fresh **10-second** budgets
+independent of the canceled/failed operation. These are fixed policies: there
+is no timeout flag, environment variable, or blueprint setting. They are not
+whole-command deadlines, and a legitimate database clone taking over 60s can fail.
+
+Migration and seed scripts have **no automatic timeout**. SIGINT/SIGTERM stops
+their process group and reaps the command before bounded recovery/rollback.
+Commands that deliberately escape that process group are not contained.
+Database timeout or cancellation exits 1 for base/up/down/resume/verify;
+`doctor` reports timeouts as failed checks and exits 1. `status` remains
+report-oriented: timeouts yield Unknown database dimensions with a visible
+cause and exit 0; cancellation exits 1. `base status` returns errors from
+provenance reads rather than presenting an apparently complete report.
+
+Refresh retries only database-in-use errors. Exhausting those retries leaves
+the staged base ready and exits 2; timeouts, cancellation, network, permission,
+and other errors exit 1. If the old base is absent but a staged base remains,
+refresh reports an interrupted swap instead of creating a competing base.
+Inspect the named databases before recovery. `plax base reset` **discards staged
+state** and is never run automatically.
+
+For `down`, each forward drop gets a new **60s** operation budget, not the
+10s rollback budget. N unresponsive databases may therefore take N × 60s,
+plus initial connection and non-DB teardown. A per-database timeout does not
+prevent later drops or non-DB teardown. First SIGINT/SIGTERM cancels database
+work and skips remaining drops, but continues process/container/network,
+worktree, mailbox, and registry teardown. If that finishes, the command reports
+incomplete teardown and exits 1. After its best-effort acknowledgement, a further
+SIGINT/SIGTERM terminates normally at the OS level and may leave anything
+unfinished. Rapid signals before handling may coalesce/be lost; this is not
+lossless signal counting. Docker/git/filesystem work has no new overall deadline.
+
+Residual/unconfirmed database names appear on stderr. Registry entries and
+port allocations are still removed, so **a second `down` cannot locate orphaned
+databases**. After Postgres recovers, run `plax doctor`, inspect the named
+resources, and remove only confirmed orphans. A timed-out CREATE/DROP/ALTER may
+have completed on the server despite the missing response; never assume that
+a timeout proves there was no side effect.
+
 ## 6. Working with instances
 
 ### 6.1 Create

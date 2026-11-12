@@ -1,10 +1,14 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -26,6 +31,302 @@ import (
 	"github.com/apollopower/plax/pkg/upgrade"
 	"github.com/apollopower/plax/pkg/worktree"
 )
+
+func cliStalledPostgres(t *testing.T) (string, <-chan struct{}) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan struct{})
+	done := make(chan struct{})
+	var conns []net.Conn
+	go func() {
+		defer close(done)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conns = append(conns, conn)
+			if len(conns) == 1 {
+				close(accepted)
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		if err := ln.Close(); err != nil {
+			t.Error(err)
+		}
+		<-done
+		for _, conn := range conns {
+			if err := conn.Close(); err != nil {
+				t.Error(err)
+			}
+		}
+	})
+	return "postgres://sentinel-user:encoded%2Fsecret@" + ln.Addr().String() + "/postgres?sslmode=disable", accepted
+}
+
+func childEnv(values map[string]string) []string {
+	var env []string
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, replace := values[key]; !replace {
+			env = append(env, entry)
+		}
+	}
+	for key, value := range values {
+		env = append(env, key+"="+value)
+	}
+	return env
+}
+
+func cliDBFixture(t *testing.T) string {
+	t.Helper()
+	repo := initFixtureRepo(t)
+	reg, err := openRegistry(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reg.Close()
+	if err := reg.AddInstance("i1", registry.InstanceRecord{ID: "i1", Branch: "plax/i1", WorktreePath: filepath.Join(repo, ".plax", "worktrees", "i1"), DBName: "plax_i1", State: registry.StateSuspended, Ports: map[string]int{"PORT": 26000}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := reg.Save(); err != nil {
+		t.Fatal(err)
+	}
+	return repo
+}
+
+func runStalledCLI(t *testing.T, bin, repo string, args []string, interrupt bool) (string, string, error) {
+	t.Helper()
+	dsn, accepted := cliStalledPostgres(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	args = append(append([]string{}, args...), "--root", repo, "--pg-url", dsn)
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = childEnv(map[string]string{"PLAX_TEST_POSTGRES_URL": "", "DOCKER_HOST": "unix://" + filepath.Join(t.TempDir(), "absent.sock")})
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if interrupt {
+		select {
+		case <-accepted:
+			if err := cmd.Process.Signal(os.Interrupt); err != nil {
+				t.Error(err)
+			}
+		case <-ctx.Done():
+			t.Error("Postgres connection did not reach listener")
+		}
+	}
+	err := cmd.Wait()
+	if ctx.Err() != nil {
+		t.Fatalf("CLI exceeded watchdog: %s", stderr.String())
+	}
+	for _, secret := range []string{"sentinel-user", "encoded/secret", "encoded%2Fsecret", "postgres://"} {
+		if strings.Contains(stdout.String()+stderr.String(), secret) {
+			t.Errorf("credential leaked: %s %s", stdout.String(), stderr.String())
+		}
+	}
+	return stdout.String(), stderr.String(), err
+}
+
+func requireExit(t *testing.T, err error, code int) {
+	t.Helper()
+	if code == 0 {
+		if err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != code {
+		t.Fatalf("exit=%v, want %d", err, code)
+	}
+}
+
+func TestCLI_BaseStatusUnresponsivePostgres(t *testing.T) {
+	bin := buildPlax(t)
+	start := time.Now()
+	stdout, stderr, err := runStalledCLI(t, bin, initFixtureRepo(t), []string{"base", "status", "--json"}, false)
+	requireExit(t, err, 1)
+	if stdout != "" || !strings.Contains(stderr, "connect") || !strings.Contains(stderr, "timed out") {
+		t.Fatalf("stdout=%s stderr=%s", stdout, stderr)
+	}
+	if elapsed := time.Since(start); elapsed < 9*time.Second || elapsed > 20*time.Second {
+		t.Fatalf("production deadline elapsed=%s", elapsed)
+	}
+}
+
+func databaseCallerPolicies(t *testing.T, interrupt bool) {
+	t.Helper()
+	bin := buildPlax(t)
+	cases := []struct {
+		name        string
+		args        []string
+		timeoutExit int
+	}{
+		{"base", []string{"base", "status", "--json"}, 1},
+		{"up", []string{"up", "new"}, 1},
+		{"resume", []string{"resume", "i1"}, 1},
+		{"verify", []string{"verify", "i1", "--json"}, 1},
+		{"status", []string{"status", "i1", "--json"}, 0},
+		{"doctor", []string{"doctor", "--json"}, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			repo := cliDBFixture(t)
+			stdout, stderr, err := runStalledCLI(t, bin, repo, tc.args, interrupt)
+			want := tc.timeoutExit
+			if interrupt {
+				want = 1
+			}
+			requireExit(t, err, want)
+			detail := stdout + stderr
+			if interrupt {
+				if !strings.Contains(detail, "cancel") {
+					t.Fatalf("missing cancellation: %s", detail)
+				}
+			} else if !strings.Contains(detail, "timed out") {
+				t.Fatalf("missing timeout: %s", detail)
+			}
+			if tc.name == "doctor" || (tc.name == "status" && !interrupt) {
+				if !json.Valid([]byte(stdout)) {
+					t.Fatalf("invalid JSON: %s", stdout)
+				}
+			}
+			if tc.name == "status" && !interrupt && (!strings.Contains(stdout, `"unknown"`) || !strings.Contains(stdout, "connect")) {
+				t.Fatalf("missing degraded DB report: %s", stdout)
+			}
+			if tc.name == "resume" && strings.Contains(stderr, "instance i1 resumed") {
+				t.Fatal("reported resumed success")
+			}
+			if tc.name == "verify" {
+				reg, err := openRegistry(repo)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer reg.Close()
+				rec, _ := reg.GetInstance("i1")
+				if rec.VerifiedAt != nil {
+					t.Fatal("recorded verification after initialization failure")
+				}
+			}
+		})
+	}
+}
+
+func TestCLI_DatabaseTimeoutCallerPolicies(t *testing.T)      { databaseCallerPolicies(t, false) }
+func TestCLI_DatabaseCancellationCallerPolicies(t *testing.T) { databaseCallerPolicies(t, true) }
+
+func TestCLI_Down_ConnectTimeoutStillTearsDown(t *testing.T) {
+	bin, repo := buildPlax(t), cliDBFixture(t)
+	_, stderr, err := runStalledCLI(t, bin, repo, []string{"down", "i1"}, false)
+	requireExit(t, err, 1)
+	if !strings.Contains(stderr, "plax_i1") || !strings.Contains(stderr, "incomplete") || strings.Contains(stderr, "instance i1 down\n") {
+		t.Fatalf("misleading teardown: %s", stderr)
+	}
+	reg, err := openRegistry(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reg.Close()
+	if _, found := reg.GetInstance("i1"); found || len(reg.PortAllocations) != 0 {
+		t.Fatal("registry/ports survived teardown")
+	}
+}
+
+func TestCLI_ConnectionDiagnosticsDoNotLeakCredentials(t *testing.T) {
+	bin := buildPlax(t)
+	for _, args := range [][]string{{"base", "status"}, {"status", "i1", "--json"}, {"doctor", "--json"}} {
+		repo := cliDBFixture(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		cmd := exec.CommandContext(ctx, bin, append(args, "--root", repo, "--pg-url", "postgres://sentinel-user:encoded%2Fsecret@localhost:bad/postgres?password=query-secret")...)
+		cmd.Env = childEnv(map[string]string{"DOCKER_HOST": "unix://" + filepath.Join(t.TempDir(), "absent.sock")})
+		out, err := cmd.CombinedOutput()
+		cancel()
+		if args[0] == "status" {
+			requireExit(t, err, 0)
+		} else {
+			requireExit(t, err, 1)
+		}
+		for _, secret := range []string{"sentinel-user", "encoded%2Fsecret", "encoded/secret", "query-secret", "postgres://"} {
+			if strings.Contains(string(out), secret) {
+				t.Fatalf("leaked %s: %s", secret, out)
+			}
+		}
+		if !strings.Contains(string(out), "connect") {
+			t.Fatalf("lost connection diagnostic: %s", out)
+		}
+	}
+}
+
+func TestCLI_Down_SignalHelper(t *testing.T) {
+	if os.Getenv("PLAX_DOWN_SIGNAL_CHILD") != "1" {
+		t.Skip("child-only signal harness")
+	}
+	ctx, stop := downSignalContext(context.Background())
+	defer stop()
+	if _, err := fmt.Fprintln(os.Stdout, "ready"); err != nil {
+		t.Fatal(err)
+	}
+	<-ctx.Done()
+	select {}
+}
+
+func TestCLI_Down_SecondSignalForcesExit(t *testing.T) {
+	for _, first := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
+		for _, second := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
+			t.Run(fmt.Sprintf("%v_then_%v", first, second), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCLI_Down_SignalHelper$")
+				cmd.Env = childEnv(map[string]string{"PLAX_DOWN_SIGNAL_CHILD": "1"})
+				stdout, err := cmd.StdoutPipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				stderr, err := cmd.StderrPipe()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := cmd.Start(); err != nil {
+					t.Fatal(err)
+				}
+				reader := bufio.NewReader(stdout)
+				if line, err := reader.ReadString('\n'); err != nil || !strings.Contains(line, "ready") {
+					t.Errorf("ready=%q %v", line, err)
+				}
+				if err := cmd.Process.Signal(first); err != nil {
+					t.Error(err)
+				}
+				ack, readErr := bufio.NewReader(stderr).ReadString('\n')
+				if readErr != nil || !strings.Contains(ack, "continuing non-DB teardown") {
+					t.Errorf("ack=%q %v", ack, readErr)
+				}
+				if err := cmd.Process.Signal(second); err != nil {
+					t.Error(err)
+				}
+				err = cmd.Wait()
+				if ctx.Err() != nil {
+					t.Fatal("signal helper watchdog expired")
+				}
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) {
+					t.Fatalf("exit=%v", err)
+				}
+				status, ok := exitErr.Sys().(syscall.WaitStatus)
+				if !ok || !status.Signaled() || status.Signal() != second {
+					t.Fatalf("not default termination by %v: %v", second, status)
+				}
+			})
+		}
+	}
+}
 
 // fakeUpgradeServer serves a canned latest-release payload (or HTTP status)
 // for the GitHub API shape runUpgrade consumes.
