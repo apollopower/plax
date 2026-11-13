@@ -30,12 +30,9 @@ func testBlueprint() *blueprint.Blueprint {
 
 func deadlineManager(t *testing.T) *BaseManager {
 	t.Helper()
-	dsn := os.Getenv("PLAX_TEST_POSTGRES_URL")
-	if dsn == "" {
-		t.Skip("PLAX_TEST_POSTGRES_URL is unset")
-	}
+	dsn := testutil.PostgresURL(t)
 	testutil.LockPostgres(t, dsn)
-	bm, err := NewBaseManager(context.Background(), dsn, ".", testBlueprint())
+	bm, err := NewBaseManager(t.Context(), dsn, ".", testBlueprint())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,11 +46,41 @@ func deadlineManager(t *testing.T) *BaseManager {
 
 func cleanupOwnedDB(t *testing.T, bm *BaseManager, name string) {
 	t.Helper()
+	// Failure injection belongs to the operation under test, not fixture teardown.
+	fixture := *bm
 	t.Cleanup(func() {
-		if err := bm.cleanupDB(context.Background(), name); err != nil {
+		if err := fixture.cleanupDB(context.Background(), name); err != nil {
 			t.Errorf("cleanup owned fixture %s: %v", name, err)
 		}
 	})
+}
+
+func TestPostgres_FixtureCleanupIsolatesFailureInjection(t *testing.T) {
+	testutil.PostgresURL(t)
+	var bm *BaseManager
+	injected := timeouts{time.Nanosecond, time.Nanosecond, time.Nanosecond}
+	if !t.Run("injected", func(t *testing.T) {
+		bm = deadlineManager(t)
+		if err := bm.CreateBase(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		bm.timeouts = injected
+	}) {
+		t.Fatal("ordinary fixture teardown inherited the failure policy")
+	}
+	if bm.timeouts != injected {
+		t.Fatal("fixture teardown mutated the policy under test")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	pool := testPool(t, ctx)
+	var remains bool
+	if err := pool.QueryRow(ctx, "SELECT EXISTS(SELECT FROM pg_database WHERE datname=$1 OR datname=$2)", bm.baseName, bm.nextName).Scan(&remains); err != nil {
+		t.Fatal(err)
+	}
+	if remains {
+		t.Fatal("owned fixture remains after ordinary teardown")
+	}
 }
 
 func fixturePool(t *testing.T, bm *BaseManager, name string) *pgxpool.Pool {
@@ -337,22 +364,96 @@ func TestPostgres_MixedOperationsDoNotTimeOutScripts(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			bm.timeouts.operation = time.Second
+			phases := make(chan context.Context, 1)
+			cfg := bm.pool.Config()
+			cfg.PrepareConn = func(ctx context.Context, _ *pgx.Conn) (bool, error) {
+				select {
+				case phases <- ctx:
+				default:
+				}
+				return true, nil
+			}
+			pool, err := pgxpool.NewWithConfig(ctx, cfg)
+			if err != nil {
+				t.Fatal(&connectionError{cause: err})
+			}
+			original := bm.pool
+			bm.pool = pool
+			t.Cleanup(func() { bm.pool = original; pool.Close() })
+			dir := t.TempDir()
+			t.Setenv("PLAX_TEST_SCRIPT_DIR", dir)
+			gate := func(stage, command string) string {
+				return fmt.Sprintf(`echo ready > "$PLAX_TEST_SCRIPT_DIR/%s-ready"; while [ ! -f "$PLAX_TEST_SCRIPT_DIR/%s-release" ]; do sleep 0.01; done; %s`, stage, stage, command)
+			}
 			call := bm.CreateBase
+			stages := []string{"migrate"}
 			switch op {
 			case "create":
-				bm.bp.Seed.Migrate = "sleep 1.2; " + bm.bp.Seed.Migrate
+				bm.bp.Seed.Migrate = gate("migrate", bm.bp.Seed.Migrate)
 			case "seed":
-				bm.bp.Seed.Command = "sleep 1.2; " + bm.bp.Seed.Command
+				bm.bp.Seed.Command = gate("seed", bm.bp.Seed.Command)
 				call = bm.SeedBase
+				stages = []string{"seed"}
 			case "refresh":
-				bm.bp.Seed.Migrate = "sleep 1.2; " + bm.bp.Seed.Migrate
-				bm.bp.Seed.Command = "sleep 1.2; " + bm.bp.Seed.Command
+				bm.bp.Seed.Migrate = gate("migrate", bm.bp.Seed.Migrate)
+				bm.bp.Seed.Command = gate("seed", bm.bp.Seed.Command)
 				call = bm.RefreshBase
+				stages = []string{"migrate", "seed"}
 			}
-			if err := call(ctx); err != nil {
-				t.Fatalf("script inherited database-phase deadline: %v", err)
+			// The command-only regression covers duration; real DDL need not fit 1s.
+			done := make(chan error, 1)
+			go func() { done <- call(ctx) }()
+			finished := false
+			defer func() {
+				cancel()
+				if !finished {
+					if err := <-done; err != nil {
+						t.Logf("joined mixed-operation recovery: %v", err)
+					}
+				}
+			}()
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			for _, stage := range stages {
+				for {
+					if _, err := os.Stat(filepath.Join(dir, stage+"-ready")); err == nil {
+						break
+					} else if !os.IsNotExist(err) {
+						t.Fatal(err)
+					}
+					select {
+					case err := <-done:
+						finished = true
+						t.Fatalf("operation ended before %s readiness: %v", stage, err)
+					case <-ctx.Done():
+						t.Fatalf("waiting for %s readiness: %v", stage, ctx.Err())
+					case <-ticker.C:
+					}
+				}
+				select {
+				case phaseCtx := <-phases:
+					if !errors.Is(phaseCtx.Err(), context.Canceled) || ctx.Err() != nil {
+						t.Fatalf("%s did not leave its completed DB phase: phase=%v caller=%v", stage, phaseCtx.Err(), ctx.Err())
+					}
+				default:
+					t.Fatalf("no preceding DB phase observed for %s", stage)
+				}
+				select {
+				case err := <-done:
+					finished = true
+					t.Fatalf("operation ended while %s was gated: %v", stage, err)
+				default:
+				}
+				t.Logf("%s: preceding DB phase canceled; caller and script remain live", stage)
+				if err := os.WriteFile(filepath.Join(dir, stage+"-release"), []byte("release"), 0600); err != nil {
+					t.Fatal(err)
+				}
 			}
+			if err := <-done; err != nil {
+				finished = true
+				t.Fatalf("mixed operation failed after script release: %v", err)
+			}
+			finished = true
 		})
 	}
 }
@@ -520,12 +621,12 @@ func testSuffix(t *testing.T) string {
 
 func testManagerWith(t *testing.T, bp *blueprint.Blueprint) *BaseManager {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	url := pgTestURL(t)
 	testutil.LockPostgres(t, url)
 	bm, err := NewBaseManager(ctx, url, ".", bp)
 	if err != nil {
-		t.Skipf("skipping: cannot connect to Postgres: %v", err)
+		t.Fatal(err)
 	}
 	suffix := testSuffix(t)
 	bm.baseName = "plax_test_base_" + suffix

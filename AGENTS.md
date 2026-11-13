@@ -41,7 +41,7 @@ are real — but when in doubt, follow them.
     gofmt -s -w .
     go mod tidy
     go vet ./...
-    go test -race -count=1 ./...
+    make test
     golangci-lint run
     ```
 
@@ -108,13 +108,24 @@ are real — but when in doubt, follow them.
   name appears anywhere.
 - E2E tests live in `cmd/plax/e2e_test.go` under `package main`. They build
   a real binary and exercise real Docker, Postgres, and git. Self-skip with
-  `t.Skip` when `PLAX_TEST_POSTGRES_URL` is unset.
-- Integration tests that need real infrastructure (Postgres, Docker) check
-  environment variables and `t.Skip()` if unavailable.
+  `t.Skip` when `PLAX_TEST_POSTGRES_URL` is unset/empty. When configured,
+  Postgres setup and missing git/python3/psql/Docker prerequisites fail, not skip.
+- Use only an explicit disposable, isolated Postgres server; never a shared
+  application server. There is no localhost fallback. `make test`/`make check`
+  run uncached race tests with a 10m package watchdog, adding `-p=1` when
+  `PLAX_TEST_POSTGRES_URL` is nonempty and emitting one credential-free stderr
+  mode notice. Direct configured full runs must use
+  `go test -race -count=1 -timeout=10m -p=1 ./...` with the variable exported.
+- Postgres-only development without Docker is supported:
+  `PLAX_TEST_POSTGRES_URL='<isolated-test-url>' go test -race -count=1 -timeout=10m ./pkg/derive/postgres`.
+  `psql` is still required. This is partial coverage, not a full check/E2E pass.
+  See `docs/testing.md` for prerequisites, remaining hang gaps, and recovery.
+- Docker-only package tests retain their independent availability/skip policy.
 - Lightweight hand-rolled fakes with `sync.Mutex`-guarded call recording are
   preferred over mock frameworks. Define fakes per-package, not globally.
-- `pkg/testutil/` carries cross-package test helpers — currently only
-  Postgres advisory-lock serialization so parallel test binaries don't collide.
+- `pkg/testutil/` carries the shared Postgres opt-in gate and bounded advisory-lock
+  serialization. Acquire the lock once per outer mutating fixture, before
+  registering resource cleanup; parent-held locks cover spawned CLI work.
 
 ### Dev tooling
 
