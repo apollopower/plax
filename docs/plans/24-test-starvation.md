@@ -2,7 +2,7 @@
 
 ## Objective
 
-Make Postgres-enabled test runs deterministic and fail visibly on configured infrastructure failures, resolving [#83](https://github.com/apollopower/plax/issues/83) before adding infrastructure CI.
+Make canonical Postgres-enabled test scheduling deterministic and configured setup failures visible as scoped hardening for [#83](https://github.com/apollopower/plax/issues/83), without claiming to resolve the remaining non-lock hangs or CI execution gap.
 
 **Status: draft for maintainer review; no implementation authorized yet.**
 
@@ -13,7 +13,7 @@ Proposed policy, requiring approval:
 | `PLAX_TEST_POSTGRES_URL` empty/unset | Skip Postgres-dependent tests before connecting; no localhost fallback |
 | Variable explicitly configured | Backend/setup failures fail tests, not skip them |
 | Configured CLI E2E prerequisites | Missing git/python3/psql or unavailable Docker fails, rather than silently reducing coverage |
-| Canonical configured test run | `make test` runs all packages with `-p=1`, `-race`, `-count=1`, and `-timeout=30m` |
+| Canonical configured test run | `make test` runs all packages with `-p=1`, `-race`, `-count=1`, and `-timeout=10m` |
 | Canonical unconfigured test run | Keep package parallelism; `-race -count=1 -timeout=10m` |
 | Canonical test-mode visibility | One fixed stderr notice before invoking Go; never print the configured URL |
 | Postgres-only development | Supported direct package invocation without Docker/CLI E2E; report it as partial coverage |
@@ -26,6 +26,15 @@ The test-lock limits are test infrastructure settings, not additions to plan 23'
 product policy. No new flag or environment variable is proposed. Serialization
 trades some package parallelism for independent package runtime budgets; it is
 not intended as a speed optimization.
+
+Keep the existing Go default-sized **10m per-package watchdog in both modes**.
+Serial package execution removes competing package timers; it does not justify
+tripling their individual limits. Ten minutes is more than eight times the
+observed worst local package runtime (~73s), but that measurement is not a CI
+runtime guarantee. If later CI measurements need a different budget, bring the
+evidence back for review rather than silently increasing it. This is not a total
+run deadline: N stuck serialized packages can still consume roughly N × 10m,
+plus build/other work. No whole-run watchdog is introduced in this plan.
 
 ### Investigation and scope
 
@@ -62,8 +71,8 @@ include private application smoke evidence in committed content.
 
 **Non-lock hangs are explicitly not fixed here.** Existing raw fixture SQL using
 `context.Background()` and the `runPlax` helper's `exec.Command` waits do not gain
-per-call bounds. A single stuck operation can still consume the entire configured
-30m package watchdog (10m in the unconfigured canonical mode), which is longer
+per-call bounds. A single stuck operation can still consume the entire
+10m package watchdog in either canonical mode, which is longer
 than the measured baseline. Plan 23's product DB deadlines do not bound every
 fixture operation or an intentionally deadline-free migration script. A package
 watchdog abort is not graceful cleanup: it can bypass test cleanup and leave a
@@ -76,7 +85,10 @@ separate scope/approval; do not claim this plan prevents all historical hangs.
 It bypasses the Makefile routing and its mode notice. Future fake-go regression
 tests can cover routing decisions in that job, but cannot establish that real CI
 has exercised the configured serialized suite. Merging this plan-only PR does
-not fix or close #83. Implementing it changes the canonical local path; the next
+not fix or close #83. Implementing it changes the canonical local path, not the
+unverified historical CI outcome. Keep #83 open pending CI adoption evidence and
+an explicit maintainer decision on the remaining hang gaps; do not infer full
+resolution from these local scheduling/helper changes alone. The next
 infrastructure-CI task must separately review provisioning and actual invocation
 (prefer `make test` for one canonical path). Do not claim infrastructure CI
 coverage until that job is implemented and has run successfully.
@@ -92,7 +104,10 @@ pkg/testutil/
 pkg/derive/postgres/
   basemanager_test.go                    # consistent gate and fatal configured setup failures
   provenance_test.go                    # remove fallback/skips; lock mutating fixture once
+  watchdog_test.go                      # controlled raw-fixture SQL package-watchdog boundary
 cmd/plax/e2e_test.go                     # consistent gate; fail missing configured prerequisites
+cmd/plax/watchdog_linux_test.go          # contained runPlax watchdog/descendant cleanup regression
+cmd/plax/watchdog_other_test.go          # explicit unsupported-platform skip; no unsafe child tree
 docs/
   testing.md                            # full/partial runs, safe targets, limitations, CI adoption gap
   plans/index.md                        # phase 24 inventory entry
@@ -103,6 +118,8 @@ No runtime source, bundled guide, or user manual change is expected. Their CLI
 contract is unchanged. Docker-only package tests' independent availability policy
 is outside this plan; explicitly opting into CLI E2E must nevertheless require
 that suite's Docker dependency.
+The CLI watchdog files use `//go:build linux` and `//go:build !linux`, respectively;
+the latter contains the explicit unsupported-platform skip, not a child harness.
 
 ## Type specifications
 
@@ -142,7 +159,7 @@ types, schema fields, or new external modules are needed.
 1. make test checks whether PLAX_TEST_POSTGRES_URL is nonempty without printing it,
    and emits one fixed test-mode notice to stderr before invoking Go.
 2. Unset → go test -race -count=1 -timeout=10m ./...
-3. Configured → go test -race -count=1 -timeout=30m -p=1 ./...
+3. Configured → go test -race -count=1 -timeout=10m -p=1 ./...
 4. Propagate go test's failure status. make check continues to call this target.
 5. Real-Postgres setup/mutation paths call PostgresURL before connecting or
    mutating a database; generic temp-repo fixtures remain usable without Postgres.
@@ -230,11 +247,11 @@ PLAX_TEST_POSTGRES_URL='<isolated-test-url>' make test
 PLAX_TEST_POSTGRES_URL='<isolated-test-url>' make check
 
 # Equivalent direct configured all-package invocation:
-go test -race -count=1 -timeout=30m -p=1 ./...
+go test -race -count=1 -timeout=10m -p=1 ./...
 
 # Supported partial run: real Postgres tests, no Docker or CLI E2E required.
 PLAX_TEST_POSTGRES_URL='<isolated-test-url>' \
-  go test -race -count=1 -timeout=30m ./pkg/derive/postgres
+  go test -race -count=1 -timeout=10m ./pkg/derive/postgres
 ```
 
 The direct all-package command requires the variable exported in the environment.
@@ -285,9 +302,10 @@ Unit/local-transport and child-process tests (no real Postgres required):
 | `TestTestutil_PostgresCallerCancellation` | Canceled/earlier-deadline parent wins without starting protected work |
 | `TestTestutil_PostgresLimitValidation` | Reject non-positive private limits; fixed defaults remain 10s/2m/10s |
 | `TestTestutil_PostgresDiagnosticsHideCredentials` | Plain/encoded URL and query sentinels absent from errors/child output |
-| `TestTestutil_MakeTestRoutesByConfiguration` | Fake go records configured -p=1/30m versus unset parallelism/10m; both race/uncached; exactly one correct fixed stderr notice, absent from stdout and free of URL/credential sentinels |
+| `TestTestutil_MakeTestRoutesByConfiguration` | Fake go records configured -p=1 versus unset parallelism; both explicitly use -timeout=10m, race/uncached tests, and exactly one correct fixed stderr notice, absent from stdout and free of URL/credential sentinels |
 | `TestTestutil_MakeTestPropagatesFailure` | Fake go fails → Makefile target non-zero; mode notice still appears exactly once |
 | `TestCLI_E2EConfiguredPrerequisiteFailure` | Child harness with missing required tool/unreachable Docker fails instead of skipping |
+| `TestCLI_RunPlaxPackageWatchdogBoundary` | Linux-only contained child test blocks in the real runPlax helper; short Go package watchdog aborts without its cleanup marker; supervisor reclaims the surviving test-owned worker |
 
 Use child-only helper entry points to test `t.Fatal`/`t.Skip` without turning the
 parent regression test into an intentional failure: `TestTestutil_PostgresHelperChild`
@@ -307,10 +325,63 @@ Real Postgres tests require an explicit isolated URL; otherwise they skip:
   lock session; cleanup reports failure and does not hang or silently pass.
 - `TestPostgres_TestDatabaseURLPreservesOptions` — fixture DB selection retains
   query options/encoded credentials without rendering them in test output.
+- `TestPostgres_FixturePackageWatchdogBoundary` — a child test blocks in a raw
+  fixture query with `context.Background()`; the short Go package watchdog, not
+  a query deadline, aborts it. Parent observes incomplete child cleanup and
+  reclaims only the owned fixture/session.
 
 Lock-lifecycle tests must not acquire an outer `LockPostgres` and then recursively
 wait on the same key. Register cleanup immediately for every test-owned session.
 Retain all existing Postgres, CLI transport, and eight infrastructure E2E scenarios.
+
+### Controlled package-watchdog boundary tests
+
+These tests demonstrate the two remaining hang modes; they do not add deadlines
+to existing fixture SQL or `runPlax`. Do not wait ten minutes to test the Go
+watchdog. Re-execute only dedicated child-test entry points from the already
+built test binary, using **`-test.timeout=3s`** and an independent **15s parent
+execution watchdog**. Ordinary suites retain their explicit 10m timeout. If the
+parent watchdog fires or readiness is never confirmed, fail the regression;
+do not count an arbitrary crash/kill as the expected package timeout.
+
+```text
+1. Parent creates only temporary, uniquely identified fixture resources and
+   registers its own bounded cleanup before starting the child test.
+2. Child registers a cleanup-marker callback, then enters one deliberate wait:
+   - SQL: query a table locked by the parent in a uniquely owned fixture DB.
+     Child uses raw pgx I/O with context.Background(), not a plan-23 DB phase.
+   - CLI: call the existing runPlax helper with a temporary fake CLI that writes
+     its PID/readiness marker and remains running. No real application or Docker.
+3. Confirm the intended blocked state before the child watchdog fires:
+   SQL backend identity + lock-wait state, or the fake CLI's readiness marker.
+4. Wait/reap the child test. Require non-zero status and Go's package-timeout
+   diagnostic; verify the child's registered cleanup marker is absent.
+5. Parent independently cleans up and records what the timed-out test did not:
+   terminate only the identified SQL fixture backend if it remains, release
+   the owned lock/transaction, and drop only its fixture DB; or stop/reap the
+   exact fake-CLI worker. Use fresh bounded parent cleanup contexts.
+6. Assert no owned DB session, worker, or fixture remains. Preserve readiness,
+   timeout, missing-cleanup-marker, and parent-recovery evidence in test output.
+   ⚠ Never signal the ordinary test runner or a shared server. Do not search by
+   broad process/database prefixes or rely on an arbitrary startup sleep.
+```
+
+For the CLI case, process death alone does not prove an orphan was reaped. Keep
+Linux child-subreaper/process-group handling in a throwaway supervisor helper
+process, not the ordinary test runner: that avoids adopting or reaping unrelated
+tests' children. Record the owned PID/group before waiting, and have that
+supervisor stop and reap its adopted worker even on assertion failures. An outer
+independent watchdog guards the supervisor and targets only its recorded tree.
+On other platforms, explicitly skip this case with the unsupported-containment
+reason instead of starting an uncontained orphan. The SQL boundary test still
+requires the explicit isolated Postgres URL and otherwise follows the normal gate.
+
+Name the child-only entry points `TestPostgres_FixtureWatchdogChild`,
+`TestCLI_RunPlaxWatchdogSupervisorChild`, and `TestCLI_RunPlaxWatchdogChild`;
+they skip in ordinary parent runs. No child helper may recursively invoke the
+full package suite or acquire the parent's already-held advisory lock. The
+private fake-CLI/supervisor machinery exists only for this negative test, not
+as a general runner or a change to production script/fixture timeout policy.
 
 ## Acceptance criteria
 
@@ -323,7 +394,8 @@ Retain all existing Postgres, CLI transport, and eight infrastructure E2E scenar
 - [ ] Normal/failing test bodies release the advisory lock; lost-session/cleanup
   failures are visible, and cleanup has a fresh bounded allowance.
 - [ ] `make test`/`make check` use explicit serialized package scheduling when
-  configured; a fake-go regression verifies flags and failure propagation.
+  configured; a fake-go regression verifies flags, the explicit 10m timeout in
+  both modes, and failure propagation. No total-run deadline is claimed.
 - [ ] Configured E2E missing-prerequisite failures are non-zero, not skips.
 - [ ] Run the documented Postgres-only command against an isolated server with
   `DOCKER_HOST` pointing at a nonexistent test socket and psql available; verify
@@ -342,6 +414,13 @@ Retain all existing Postgres, CLI transport, and eight infrastructure E2E scenar
 - [ ] Document that raw fixture SQL/child hangs retain only the package watchdog,
   teardown can remain incomplete on abort, and the existing direct CI path does
   not validate configured serialization or actual infrastructure coverage.
+- [ ] Run both controlled watchdog-boundary regressions on Linux with the isolated
+  Postgres server: confirm the intended SQL/runPlax wait, short child-package
+  timeout (not parent-watchdog termination), absent child-cleanup marker, and
+  successful parent recovery with no test-owned session/worker/fixture left.
+- [ ] Keep the objective/index limited to local scheduling and visible configured
+  failures; report CI adoption/non-lock hangs as remaining gaps and leave #83 open
+  for a separate verification/maintainer closure decision.
 
 The parallel baseline above is investigation evidence, not verification of this
 unimplemented plan. During this plan-only work, use the explicit isolated server
@@ -349,7 +428,8 @@ and `GOFLAGS=-p=1` for all-package checks to avoid the old localhost fallback.
 
 ## Dependencies
 
-No new modules. Retain Go 1.26.5 and `github.com/jackc/pgx/v5` v5.10.0.
+No new modules. Retain Go 1.26.5, `github.com/jackc/pgx/v5` v5.10.0, and the
+existing `golang.org/x/sys` v0.47.0 for test-only Linux subreaper support.
 Use standard-library context/errors/time/testing/os/exec/net helpers, existing
 GNU make, per-test temporary directories, and the existing Docker/Git/Postgres
 fixtures. No mock framework, test daemon, global scheduler, or new runtime package.

@@ -132,7 +132,7 @@ JSON, checked into the repo root as `plax.json`. No comments.
 | 21 | [`21-up-migrate.md`](21-up-migrate.md) | Apply instance migrations during `plax up`, with validated skip steps and rollback |
 | 22 | [`22-work-records.md`](22-work-records.md) | Durable per-instance work records and stacked instance lineage |
 | 23 | [`23-db-timeouts.md`](23-db-timeouts.md) | Bound Postgres operations and cleanup, interrupt migration/seed scripts, and report incomplete teardown (#82; implemented, merged via #88) |
-| 24 | [`24-test-starvation.md`](24-test-starvation.md) | Serialize configured Postgres test runs and fail visibly on configured infrastructure/lock failures (#83; draft) |
+| 24 | [`24-test-starvation.md`](24-test-starvation.md) | Deterministic canonical Postgres test scheduling and visible setup failures (scoped #83 hardening; draft, not full resolution) |
 
 ---
 
