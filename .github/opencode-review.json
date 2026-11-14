@@ -10,14 +10,13 @@
       "mode": "primary",
       "permissions": [
         {"action": "*", "resource": "*", "effect": "deny"},
-        {"action": "read", "resource": "*", "effect": "allow"},
-        {"action": "glob", "resource": "*", "effect": "allow"},
+        {"action": "read", "resource": "pr-context.md", "effect": "allow"},
+        {"action": "read", "resource": "index.json", "effect": "allow"},
+        {"action": "read", "resource": "files/*.txt", "effect": "allow"},
+        {"action": "glob", "resource": "files/*.txt", "effect": "allow"},
         {"action": "external_directory", "resource": "*", "effect": "deny"},
         {"action": "question", "resource": "*", "effect": "deny"},
-        {"action": "edit", "resource": "*", "effect": "deny"},
-        {"action": "read", "resource": "*.env", "effect": "deny"},
-        {"action": "read", "resource": "*.env.*", "effect": "deny"},
-        {"action": "read", "resource": "*.env.example", "effect": "allow"}
+        {"action": "edit", "resource": "*", "effect": "deny"}
       ]
     }
   }
