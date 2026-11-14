@@ -1,0 +1,24 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "update": "disable",
+  "agents": {
+    "title": {
+      "model": "opencode/deepseek-v4.1-flash"
+    },
+    "review": {
+      "description": "Non-interactive pull request reviewer",
+      "mode": "primary",
+      "permissions": [
+        {"action": "*", "resource": "*", "effect": "deny"},
+        {"action": "read", "resource": "*", "effect": "allow"},
+        {"action": "glob", "resource": "*", "effect": "allow"},
+        {"action": "external_directory", "resource": "*", "effect": "deny"},
+        {"action": "question", "resource": "*", "effect": "deny"},
+        {"action": "edit", "resource": "*", "effect": "deny"},
+        {"action": "read", "resource": "*.env", "effect": "deny"},
+        {"action": "read", "resource": "*.env.*", "effect": "deny"},
+        {"action": "read", "resource": "*.env.example", "effect": "allow"}
+      ]
+    }
+  }
+}
