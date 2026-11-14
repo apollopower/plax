@@ -12,6 +12,7 @@ jobs:
   review:
     if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
       pull-requests: write
@@ -20,16 +21,23 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+      - name: Prepare review scratch directory
+        run: |
+          scratch="$GITHUB_WORKSPACE/.git/opencode-review-tmp"
+          mkdir -p "$scratch"
+          printf 'TMPDIR=%s\n' "$scratch" >> "$GITHUB_ENV"
       - uses: anomalyco/opencode/github@latest
         env:
           OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
-          OPENCODE_CONFIG_CONTENT: '{"agents":{"title":{"model":"opencode/deepseek-v4.1-flash"}}}'
+          OPENCODE_CONFIG_CONTENT: >-
+            {"agents":{"title":{"model":"opencode/deepseek-v4.1-flash"}},"permissions":[{"action":"external_directory","resource":"*","effect":"deny"}]}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           model: opencode/deepseek-v4.1-flash
           use_github_token: true
           prompt: |
             Review this pull request:
+            - This job is non-interactive. Use TMPDIR for scratch files and disposable fixtures; it is inside the checkout's Git metadata so it cannot pollute the diff. External-directory access is denied. If access or prerequisites are unavailable, report the validation limitation and finish the review rather than requesting approval.
             - Flag bugs and correctness issues first, ranked by severity. Skip style nits that gofmt and golangci-lint already catch.
             - Check the code against AGENTS.md: package responsibilities, CSP over mutexes, comments explaining why (not what), explicit error handling, test conventions (-race, go-cmp golden files).
             - Raise architectural concerns where the change drifts from Plax's design in docs/design.md or its UNIX-tool values.
