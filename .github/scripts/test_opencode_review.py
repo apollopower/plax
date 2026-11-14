@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import textwrap
 import threading
@@ -116,10 +117,92 @@ class ReviewTests(unittest.TestCase):
         self.assertIn(RUN_URL, body)
         self.assertNotIn("investigating", body)
 
+    def test_render_always_includes_fixed_validation_note(self):
+        for text in ("No findings.", "All tests passed."):
+            with self.subTest(text=text):
+                body = review.render_review(completed(text), SHA, RUN_URL)
+                self.assertTrue(
+                    body.startswith(
+                        "OpenCode on behalf of apollopower\n\n"
+                        + review.VALIDATION_NOTE
+                        + "\n\n"
+                    )
+                )
+                self.assertLess(body.index(review.VALIDATION_NOTE), body.index(text))
+
+    def test_config_denies_symlinks_after_other_read_rules(self):
+        root = self.scratch
+        (root / "ordinary.txt").write_text("fixture")
+        (root / "dir").mkdir()
+        (root / "dir" / "nested-link").symlink_to(root / "ordinary.txt")
+        links = {
+            "alias": root / "ordinary.txt",
+            "directory": root / "dir",
+            ".env.example": root / "ordinary.txt",
+            "dangling": root / "missing",
+            "cycle": root / "cycle",
+            "{env:OPENCODE_API_KEY}": root / "ordinary.txt",
+            "~": root / "ordinary.txt",
+            "$HOME": root / "ordinary.txt",
+        }
+        for name, target in links.items():
+            (root / name).symlink_to(target)
+        cfg = json.loads((ROOT / ".github/opencode-review.json").read_text())
+        before = copy.deepcopy(cfg)
+        result = review.review_config(root, cfg)
+        initial = before["agents"]["review"]["permissions"]
+        perms = result["agents"]["review"]["permissions"]
+        self.assertEqual(perms[: len(initial)], initial)
+        expected = [
+            "alias",
+            "directory",
+            ".env.example",
+            "dangling",
+            "cycle",
+            "?env:OPENCODE_API_KEY}",
+            "?",
+            "?HOME",
+            "dir/nested-link",
+        ]
+        for name in expected:
+            for resource in (name, name + "/*"):
+                self.assertIn(
+                    {"action": "read", "resource": resource, "effect": "deny"},
+                    perms[len(initial) :],
+                )
+        self.assertEqual(len(perms), len(initial) + 2 * len(expected))
+        self.assertEqual(result["agents"]["title"], before["agents"]["title"])
+        self.assertEqual((root / "ordinary.txt").read_text(), "fixture")
+        self.assertTrue((root / "directory").is_symlink())
+
+    def test_config_fails_if_symlink_inventory_cannot_be_read(self):
+        cfg = json.loads((ROOT / ".github/opencode-review.json").read_text())
+
+        def broken_walk(root, **kwargs):
+            kwargs["onerror"](OSError("fixture scan error"))
+
+        with patch.object(review.os, "walk", side_effect=broken_walk):
+            with self.assertRaises(OSError):
+                review.review_config(self.scratch, cfg)
+        (self.scratch / "fixture").write_text("fixture")
+        with patch.object(Path, "lstat", side_effect=OSError("fixture stat error")):
+            with self.assertRaises(OSError):
+                review.review_config(self.scratch, cfg)
+
     def test_render_rejects_invalid_or_incomplete_results(self):
         cases = [
+            None,
+            {},
             [],
             [None],
+            [{}],
+            [{"type": 7}],
+            [{"type": "step_finish", "part": None}],
+            [{"type": "step_finish", "part": []}],
+            [{"type": "step_finish", "part": {"messageID": 7, "reason": "stop"}}],
+            [{"type": "step_finish", "part": {"messageID": "", "reason": "stop"}}],
+            [{"type": "step_finish", "part": {"messageID": "final", "reason": None}}],
+            [{"type": "text", "part": {"messageID": "final", "text": {}}}],
             completed(" "),
             completed("é" * 30000),
             completed() + [{"type": "error", "error": "fixture failure"}],
@@ -158,6 +241,29 @@ class ReviewTests(unittest.TestCase):
         (self.scratch / "review.jsonl").write_text("not JSON\n")
         with self.assertRaises(ValueError):
             review.render()
+
+    def test_malformed_events_fail_cleanly_at_cli_boundary(self):
+        for event in (
+            {"type": "step_finish", "part": None},
+            {"type": "text", "part": {"messageID": "final", "text": 7}},
+        ):
+            with self.subTest(event=event):
+                self.write_events([event])
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / ".github/scripts/opencode_review.py"),
+                        "render",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("Review pipeline failed:", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertFalse((self.scratch / "review.md").exists())
 
     def test_post_checks_head_before_publishing(self):
         body = self.scratch / "review.md"
@@ -225,6 +331,7 @@ class FixtureProvider:
                     name, args = fixture.calls[fixture.turn]
                     delta = {
                         "role": "assistant",
+                        "content": "INTERMEDIATE_PREAMBLE_MUST_NOT_POST",
                         "tool_calls": [
                             {
                                 "index": 0,
@@ -319,6 +426,18 @@ class RuntimeTests(unittest.TestCase):
             (repo / ".env").write_text("ENV_READ_MUST_NOT_LEAK")
             (repo / ".env.local").write_text("ENV_LOCAL_MUST_NOT_LEAK")
             (repo / ".env.example").write_text("EXAMPLE_READ_OK")
+            (repo / "env-alias.txt").symlink_to(repo / ".env")
+            (repo / "outside-alias.txt").symlink_to(root / "outside.txt")
+            (repo / "environ-alias.txt").symlink_to("/proc/self/environ")
+            (repo / "alias-chain.txt").symlink_to(repo / "env-alias.txt")
+            (repo / "outside-dir").symlink_to(root)
+            (repo / "nested").mkdir()
+            (repo / "nested" / ".env.example").symlink_to(repo / ".env")
+            (repo / "{env:OPENCODE_API_KEY}").symlink_to(repo / ".env")
+            (repo / "~").symlink_to(repo / ".env")
+            (repo / "$HOME").symlink_to(repo / ".env")
+            (repo / "dangling-link").symlink_to(repo / "missing")
+            (repo / "cycle").symlink_to(repo / "cycle")
             calls = [
                 ("read", {"path": str(scratch / "allowed.txt")}),
                 ("read", {"path": str(root / "outside.txt")}),
@@ -359,6 +478,22 @@ class RuntimeTests(unittest.TestCase):
                         "prompt": "Say delegated.",
                     },
                 ),
+                ("read", {"path": str(repo / "env-alias.txt")}),
+                ("read", {"path": str(repo / "outside-alias.txt")}),
+                ("read", {"path": str(repo / "environ-alias.txt")}),
+                ("read", {"path": str(repo / "alias-chain.txt")}),
+                ("read", {"path": str(repo / "outside-dir" / "outside.txt")}),
+                ("read", {"path": str(repo / "nested" / ".env.example")}),
+                ("read", {"path": str(repo / "{env:OPENCODE_API_KEY}")}),
+                ("read", {"path": str(repo / "~")}),
+                ("read", {"path": str(repo / "$HOME")}),
+                ("read", {"path": str(repo / "dangling-link")}),
+                ("read", {"path": str(repo / "cycle")}),
+                ("read", {"path": "env-alias.txt"}),
+                ("read", {"path": "nested/../env-alias.txt"}),
+                ("read", {"path": "outside-dir"}),
+                ("read", {"path": "outside-dir/./outside.txt"}),
+                ("read", {"path": "outside-dir/checkout with spaces/../outside.txt"}),
             ]
             # Only this executable can handle gh; no local authentication or network publishing.
             stub = root / "bin"
@@ -466,8 +601,11 @@ class RuntimeTests(unittest.TestCase):
                 "OUTSIDE_READ_MUST_NOT_LEAK",
                 "ENV_READ_MUST_NOT_LEAK",
                 "ENV_LOCAL_MUST_NOT_LEAK",
+                "fixture-provider-credential",
             ):
-                self.assertNotIn(secret, requests + output)
+                self.assertFalse(
+                    secret in requests + output, "Leaked fixture " + secret
+                )
             self.assertEqual((scratch / "allowed.txt").read_text(), "SCRATCH_READ_OK")
             tools = [
                 event["part"] for event in events if event.get("type") == "tool_use"
@@ -478,12 +616,17 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(
                     state["status"], "completed" if index in (0, 4) else "error", part
                 )
+                if index >= 11:
+                    self.assertIn("Permission denied", state["error"])
             env.pop("OPENCODE_API_KEY")
             subprocess.run(["python3", helper, "post"], cwd=repo, env=env, check=True)
             posted = (root / "posted.md").read_text()
             self.assertTrue(posted.startswith("OpenCode on behalf of apollopower\n\n"))
             self.assertIn(sha, posted)
             self.assertIn("Fixture review: no findings.", posted)
+            self.assertIn(review.VALIDATION_NOTE, posted)
+            self.assertIn("INTERMEDIATE_PREAMBLE_MUST_NOT_POST", output)
+            self.assertNotIn("INTERMEDIATE_PREAMBLE_MUST_NOT_POST", posted)
             self.assertEqual(len((root / "gh-calls.jsonl").read_text().splitlines()), 5)
             (scratch / "review.md").unlink()
             (stub / "opencode").unlink()
@@ -507,6 +650,26 @@ class RuntimeTests(unittest.TestCase):
                 timeout=10,
             )
             self.assertEqual(failed.returncode, 13)
+            self.assertFalse((scratch / "review.md").exists())
+            (repo / ".github" / "opencode-review.json").write_text("invalid JSON")
+            failed_config = subprocess.run(
+                [
+                    "bash",
+                    "--noprofile",
+                    "--norc",
+                    "-euo",
+                    "pipefail",
+                    "-c",
+                    generation_script(),
+                ],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            self.assertEqual(failed_config.returncode, 1)
+            self.assertIn("Review pipeline failed:", failed_config.stderr)
             self.assertFalse((scratch / "review.md").exists())
 
 

@@ -2,8 +2,12 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
+
+
+VALIDATION_NOTE = "Validation: this read-only review did not execute tests. Consult CI for test results."
 
 
 def gh(*args):
@@ -66,11 +70,55 @@ def prepare():
     Path(os.environ["TMPDIR"], "pr-context.md").write_text(context)
 
 
+def review_config(root, cfg):
+    def walk_error(err):
+        raise err
+
+    perms = cfg["agents"]["review"]["permissions"]
+    # V2.3.0 checks read permissions against aliases, not their symlink targets.
+    # This inventory assumes a stable checkout; it cannot sandbox PR-controlled code.
+    for parent, dirs, files in os.walk(root, followlinks=False, onerror=walk_error):
+        for name in sorted(dirs + files):
+            path = Path(parent, name)
+            if not stat.S_ISLNK(path.lstat().st_mode):
+                continue
+            resource = path.relative_to(root).as_posix().replace("\\", "/")
+            # Wildcards only broaden denials and avoid config variable expansion.
+            resource = resource.replace("{", "?")
+            if resource.startswith(("~", "$HOME")):
+                resource = "?" + resource[1:]
+            for pattern in (resource, resource + "/*"):
+                perms.append({"action": "read", "resource": pattern, "effect": "deny"})
+    return cfg
+
+
+def configure():
+    root = Path.cwd()
+    cfg = json.loads((root / ".github/opencode-review.json").read_text())
+    print(json.dumps(review_config(root, cfg)))
+
+
 def render_review(events, sha, run_url):
+    if not isinstance(events, list):
+        raise ValueError("Invalid OpenCode event list")
     if not all(isinstance(event, dict) for event in events):
         raise ValueError("Invalid OpenCode event")
     if any(event.get("type") == "error" for event in events):
         raise ValueError("OpenCode reported an error; refusing to post a review")
+    for event in events:
+        kind = event.get("type")
+        if not isinstance(kind, str) or not kind:
+            raise ValueError("Invalid OpenCode event type")
+        if kind not in ("text", "step_finish"):
+            continue
+        part = event.get("part")
+        if not isinstance(part, dict):
+            raise ValueError("Invalid OpenCode event part")
+        if not isinstance(part.get("messageID"), str) or not part["messageID"]:
+            raise ValueError("Invalid OpenCode message ID")
+        field = "text" if kind == "text" else "reason"
+        if not isinstance(part.get(field), str):
+            raise ValueError(f"Invalid OpenCode {field}")
     finishes = [event["part"] for event in events if event.get("type") == "step_finish"]
     if not finishes or finishes[-1].get("reason") != "stop":
         raise ValueError("No completed final assistant response")
@@ -85,7 +133,7 @@ def render_review(events, sha, run_url):
     if not text:
         raise ValueError("Empty final review")
     body = (
-        "OpenCode on behalf of apollopower\n\n"
+        f"OpenCode on behalf of apollopower\n\n{VALIDATION_NOTE}\n\n"
         + text
         + f"\n\nReviewed `{sha}` · [GitHub run]({run_url})\n"
     )
@@ -136,9 +184,14 @@ def post():
 
 
 def main():
-    commands = {"prepare": prepare, "render": render, "post": post}
+    commands = {
+        "prepare": prepare,
+        "configure": configure,
+        "render": render,
+        "post": post,
+    }
     if len(sys.argv) != 2 or sys.argv[1] not in commands:
-        raise ValueError("Expected prepare, render, or post")
+        raise ValueError("Expected prepare, configure, render, or post")
     commands[sys.argv[1]]()
 
 
