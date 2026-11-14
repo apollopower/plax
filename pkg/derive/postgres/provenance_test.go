@@ -2,31 +2,31 @@ package postgres
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/apollopower/plax/pkg/testutil"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func pgTestURL(t *testing.T) string {
 	t.Helper()
-	url := os.Getenv("PLAX_TEST_POSTGRES_URL")
-	if url == "" {
-		url = "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
-	}
-	return url
+	return testutil.PostgresURL(t)
 }
 
 func testPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
-	pool, err := pgxpool.New(ctx, pgTestURL(t))
+	cfg := testDatabaseConfig(t, pgTestURL(t), "")
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
-		t.Skipf("skipping: cannot connect to Postgres (%s): %v", pgTestURL(t), err)
+		t.Fatal(&connectionError{cause: err})
 	}
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		t.Skipf("skipping: cannot connect to Postgres (%s): %v", pgTestURL(t), err)
+		t.Fatal(&connectionError{cause: err})
 	}
 	t.Cleanup(func() { pool.Close() })
 	return pool
@@ -34,11 +34,42 @@ func testPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 
 func testDB(t *testing.T, ctx context.Context, name string) {
 	t.Helper()
+	testutil.LockPostgres(t, pgTestURL(t))
 	pool := testPool(t, ctx)
-	_, _ = pool.Exec(ctx, "DROP DATABASE IF EXISTS "+name)
+	if _, err := pool.Exec(ctx, "DROP DATABASE IF EXISTS "+name); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
-		_, _ = pool.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name)
+		if _, err := pool.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name); err != nil {
+			t.Error(err)
+		}
 	})
+}
+
+func testDatabaseConfig(t *testing.T, dsn, name string) *pgxpool.Config {
+	t.Helper()
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(&connectionError{cause: err})
+	}
+	if name != "" {
+		cfg.ConnConfig.Database = name
+	}
+	cfg.ConnConfig.ConnectTimeout = 10 * time.Second
+	return cfg
+}
+
+func TestPostgres_TestDatabaseURLPreservesOptions(t *testing.T) {
+	cfg := testDatabaseConfig(t, "postgres://user:encoded%2Fsecret@127.0.0.1:5433/original?sslmode=disable&search_path=foo/bar&application_name=fixture&password=query%2Fsecret", "owned")
+	if cfg.ConnConfig.Database != "owned" || cfg.ConnConfig.User != "user" || cfg.ConnConfig.Password != "query/secret" ||
+		cfg.ConnConfig.Port != 5433 || cfg.ConnConfig.RuntimeParams["search_path"] != "foo/bar" ||
+		cfg.ConnConfig.RuntimeParams["application_name"] != "fixture" || cfg.ConnConfig.TLSConfig != nil {
+		t.Fatal("fixture selection lost connection options/credentials")
+	}
+	cfg = testDatabaseConfig(t, "postgres://user:encoded%2Fsecret@127.0.0.1/original?sslmode=disable", "owned")
+	if cfg.ConnConfig.Password != "encoded/secret" {
+		t.Fatal("fixture selection lost encoded userinfo")
+	}
 }
 
 func TestPostgres_CreateProvenanceRoundTrip(t *testing.T) {
@@ -51,19 +82,9 @@ func TestPostgres_CreateProvenanceRoundTrip(t *testing.T) {
 		t.Fatalf("create db: %v", err)
 	}
 
-	dsn := pgTestURL(t)
-	idx := -1
-	for i := len(dsn) - 1; i >= 0; i-- {
-		if dsn[i] == '/' {
-			idx = i
-			break
-		}
-	}
-	dbDSN := dsn[:idx+1] + "prov_test_roundtrip"
-
-	dbPool, err := pgxpool.New(ctx, dbDSN)
+	dbPool, err := pgxpool.NewWithConfig(ctx, testDatabaseConfig(t, pgTestURL(t), "prov_test_roundtrip"))
 	if err != nil {
-		t.Fatalf("connect to test db: %v", err)
+		t.Fatal(&connectionError{cause: err})
 	}
 	defer dbPool.Close()
 
@@ -99,19 +120,9 @@ func TestPostgres_CreateProvenanceIdempotent(t *testing.T) {
 		t.Fatalf("create db: %v", err)
 	}
 
-	dsn := pgTestURL(t)
-	idx := -1
-	for i := len(dsn) - 1; i >= 0; i-- {
-		if dsn[i] == '/' {
-			idx = i
-			break
-		}
-	}
-	dbDSN := dsn[:idx+1] + "prov_test_idem"
-
-	dbPool, err := pgxpool.New(ctx, dbDSN)
+	dbPool, err := pgxpool.NewWithConfig(ctx, testDatabaseConfig(t, pgTestURL(t), "prov_test_idem"))
 	if err != nil {
-		t.Fatalf("connect to test db: %v", err)
+		t.Fatal(&connectionError{cause: err})
 	}
 	defer dbPool.Close()
 
@@ -144,19 +155,9 @@ func TestPostgres_ReadProvenanceNoTable(t *testing.T) {
 		t.Fatalf("create db: %v", err)
 	}
 
-	dsn := pgTestURL(t)
-	idx := -1
-	for i := len(dsn) - 1; i >= 0; i-- {
-		if dsn[i] == '/' {
-			idx = i
-			break
-		}
-	}
-	dbDSN := dsn[:idx+1] + "prov_test_notable"
-
-	dbPool, err := pgxpool.New(ctx, dbDSN)
+	dbPool, err := pgxpool.NewWithConfig(ctx, testDatabaseConfig(t, pgTestURL(t), "prov_test_notable"))
 	if err != nil {
-		t.Fatalf("connect to test db: %v", err)
+		t.Fatal(&connectionError{cause: err})
 	}
 	defer dbPool.Close()
 

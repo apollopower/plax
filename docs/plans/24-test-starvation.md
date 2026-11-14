@@ -4,11 +4,11 @@
 
 Make canonical Postgres-enabled test scheduling deterministic and configured setup failures visible as scoped hardening for [#83](https://github.com/apollopower/plax/issues/83), without claiming to resolve the remaining non-lock hangs or CI execution gap.
 
-**Status: draft for maintainer review; no implementation authorized yet.**
+**Status: implemented and locally verified, including the approved fixture-regression amendment. The issue-state acceptance discrepancy below remains; configured infrastructure CI is separate.**
 
-Proposed policy, requiring approval:
+Agreed policy:
 
-| Boundary | Proposal |
+| Boundary | Policy |
 |---|---|
 | `PLAX_TEST_POSTGRES_URL` empty/unset | Skip Postgres-dependent tests before connecting; no localhost fallback |
 | Variable explicitly configured | Backend/setup failures fail tests, not skip them |
@@ -54,14 +54,14 @@ plus build/other work. No whole-run watchdog is introduced in this plan.
   wall time **103.439s**, the same 149 passing test/subtest events, two helper
   skips, and eight E2E scenarios. These are single local observations, not a
   benchmark or evidence that serialization makes total execution faster.
-- Current `LockPostgres` uses unbounded contexts and skips connection failures.
+- At planning time, `LockPostgres` used unbounded contexts and skipped connection failures.
   `t.Skipf` aborts that test; it does **not** continue its mutations lock-free.
   The remaining silent failure is loss of intended test coverage.
 - A parent-held session lock can serialize its spawned CLI mutations against
   other cooperating tests without the CLI acquiring the lock. Keep that model;
   it depends on the parent session remaining connected and covering child cleanup.
-- Legacy Postgres helpers still fall back to localhost and skip after a failed
-  ping/constructor. The provenance fixtures do not take the shared lock.
+- At planning time, legacy Postgres helpers fell back to localhost and skipped after a failed
+  ping/constructor. The provenance fixtures did not take the shared lock.
 
 This is a test-harness change, not a product change. Do not add a Postgres CI job,
 change production timeouts or teardown exit codes, remove anonymous volumes,
@@ -102,7 +102,7 @@ pkg/testutil/
   testutil.go                           # shared URL gate; bounded, fail-closed lock lifecycle
   testutil_test.go                      # transport/child-harness/real-lock/Makefile tests
 pkg/derive/postgres/
-  basemanager_test.go                    # consistent gate and fatal configured setup failures
+  basemanager_test.go                    # gate, fatal setup, isolated cleanup policy, script-phase regression
   provenance_test.go                    # remove fallback/skips; lock mutating fixture once
   watchdog_test.go                      # controlled raw-fixture SQL package-watchdog boundary
 cmd/plax/e2e_test.go                     # consistent gate; fail missing configured prerequisites
@@ -234,6 +234,35 @@ DSN surgery, preserving URL/query credentials and connection options. Scope all
 cleanup to test-owned resources; this does not authorize running against a shared
 application server. No generic fixture framework or per-test server provisioner.
 
+### Approved fixture-regression amendment
+
+After the acceptance failures recorded below, the maintainer authorized these
+two additional test-only fixes. No production code or timeout policy changes:
+
+1. `cleanupOwnedDB` captures the known-good fixture manager (including its pool
+   and timeout policy) when cleanup is registered, before later failure injection.
+   The intentional 50ms recovery failure must still be asserted by the test body;
+   ordinary owned-database teardown uses its original fixed cleanup allowance,
+   not the injected failure policy. Do not mutate the manager under test to mask
+   its result. Add `TestPostgres_FixtureCleanupIsolatesFailureInjection` to verify
+   teardown succeeds despite an injected nanosecond policy and leaves no fixture.
+2. Refactor `TestPostgres_MixedOperationsDoNotTimeOutScripts` to observe phase
+   separation instead of forcing all real DDL/checkpoint work under an artificial
+   1s limit. Keep normal fixed database policy and the existing 15s parent guard.
+   Record the preceding DB context through the test pool's `PrepareConn` hook;
+   gate each script on readiness/release files. Require that DB context to be
+   canceled while its caller and script remain live, then release the script and
+   require the whole create/seed/refresh operation to succeed. Check both migrate
+   and seed boundaries during refresh. Any database failure is still fatal and
+   must not be mislabeled as proof of script-deadline inheritance.
+3. Retain `TestPostgres_BaseCommandHasNoAutomaticDeadline` unchanged: that local
+   command-only regression proves a script outlasts an injected short DB budget
+   without involving storage-sensitive DDL. Together the tests cover command
+   duration and mixed-operation context separation, not storage speed.
+   ⚠ Use channels for observed contexts and join the operation goroutine before
+   fixture teardown on every exit path. Do not add runtime seams or raise the
+   production, canonical, parent-guard, or intentional-failure budgets.
+
 ## CLI specification
 
 No Plax CLI changes. Developer entry points are:
@@ -329,6 +358,11 @@ Real Postgres tests require an explicit isolated URL; otherwise they skip:
   fixture query with `context.Background()`; the short Go package watchdog, not
   a query deadline, aborts it. Parent observes incomplete child cleanup and
   reclaims only the owned fixture/session.
+- `TestPostgres_FixtureCleanupIsolatesFailureInjection` — ordinary fixture cleanup
+  retains its registered pool/policy despite later injected limits; no DB remains.
+- `TestPostgres_MixedOperationsDoNotTimeOutScripts` — create/seed/refresh scripts
+  wait behind readiness/release gates; preceding DB contexts are canceled while
+  the caller remains live, and subsequent phases complete under normal policy.
 
 Lock-lifecycle tests must not acquire an outer `LockPostgres` and then recursively
 wait on the same key. Register cleanup immediately for every test-owned session.
@@ -385,46 +419,161 @@ as a general runner or a change to production script/fixture timeout policy.
 
 ## Acceptance criteria
 
-- [ ] With the variable unset, all Postgres-dependent tests skip before any
+- [x] With the variable unset, all Postgres-dependent tests skip before any
   connection, including the old provenance/base-manager helpers; no localhost fallback.
-- [ ] With a malformed, unreachable, or stalled explicitly configured endpoint,
+- [x] With a malformed, unreachable, or stalled explicitly configured endpoint,
   helper and applicable package invocations fail rather than silently skipping.
-- [ ] A contended lock expires under an injected short wait budget, preserves
+- [x] A contended lock expires under an injected short wait budget, preserves
   its cause, closes the waiter, and never reaches protected fixture work.
-- [ ] Normal/failing test bodies release the advisory lock; lost-session/cleanup
+- [x] Normal/failing test bodies release the advisory lock; lost-session/cleanup
   failures are visible, and cleanup has a fresh bounded allowance.
-- [ ] `make test`/`make check` use explicit serialized package scheduling when
+- [x] `make test`/`make check` use explicit serialized package scheduling when
   configured; a fake-go regression verifies flags, the explicit 10m timeout in
   both modes, and failure propagation. No total-run deadline is claimed.
-- [ ] Configured E2E missing-prerequisite failures are non-zero, not skips.
-- [ ] Run the documented Postgres-only command against an isolated server with
+- [x] Configured E2E missing-prerequisite failures are non-zero, not skips.
+- [x] Run the documented Postgres-only command against an isolated server with
   `DOCKER_HOST` pointing at a nonexistent test socket and psql available; verify
   real Postgres tests execute without CLI E2E, and report the result as partial.
-- [ ] Verify both Makefile modes emit exactly one fixed stderr notice before Go,
+- [x] Verify both Makefile modes emit exactly one fixed stderr notice before Go,
   including failure paths; no configured URL or credential sentinel is printed.
-- [ ] Run the configured full suite uncached/race-enabled on an isolated server;
+- [x] Run the configured full suite uncached/race-enabled on an isolated server;
   both infrastructure packages and all eight E2E scenarios execute. Report exact
   durations, failures, skips, and environment limitations; do not claim a faster run.
-- [ ] Run the unset-variable suite and full formatting/tidy/vet/build/lint checks;
+- [x] Run the unset-variable suite and full formatting/tidy/vet/build/lint checks;
   confirm ordinary unit/local-transport coverage still executes.
-- [ ] Update AGENTS/testing documentation and the plan inventory; supersede plan
+- [x] Update AGENTS/testing documentation and the plan inventory; supersede plan
   23's temporary procedure without rewriting its historical verification evidence.
-- [ ] Confirm runtime source, CLI, production deadlines, CI workflow/service
+- [x] Confirm runtime source, CLI, production deadlines, CI workflow/service
   configuration, README prose, and release state are unchanged.
-- [ ] Document that raw fixture SQL/child hangs retain only the package watchdog,
+- [x] Document that raw fixture SQL/child hangs retain only the package watchdog,
   teardown can remain incomplete on abort, and the existing direct CI path does
   not validate configured serialization or actual infrastructure coverage.
-- [ ] Run both controlled watchdog-boundary regressions on Linux with the isolated
+- [x] Run both controlled watchdog-boundary regressions on Linux with the isolated
   Postgres server: confirm the intended SQL/runPlax wait, short child-package
   timeout (not parent-watchdog termination), absent child-cleanup marker, and
   successful parent recovery with no test-owned session/worker/fixture left.
 - [ ] Keep the objective/index limited to local scheduling and visible configured
   failures; report CI adoption/non-lock hangs as remaining gaps and leave #83 open
   for a separate verification/maintainer closure decision.
+- [x] Verify both approved fixture fixes with repeated uncached race tests, then
+  rerun the full configured canonical check without excluding either scenario or
+  raising timeout budgets; retain the earlier acceptance failure evidence.
 
-The parallel baseline above is investigation evidence, not verification of this
-unimplemented plan. During this plan-only work, use the explicit isolated server
-and `GOFLAGS=-p=1` for all-package checks to avoid the old localhost fallback.
+### Local verification evidence (2026-11-12)
+
+The parallel/serial baselines in the Objective remain historical investigation,
+not proof of this implementation or a speed claim. Implementation validation used
+Linux amd64, Go 1.26.5, golangci-lint v2.15.0, and an explicitly configured,
+disposable PostgreSQL 16.15 Docker server on a random loopback port. Docker,
+git, python3, and psql were available. Local validation was not a constrained
+four-core CI reproduction; some independent local checks overlapped.
+
+Pre-amendment runs, retained as historical evidence:
+
+| Run | Passing test/subtest events | Failures | Skips | Selected package duration |
+|---|---:|---:|---:|---|
+| Configured full suite, direct `-json -race -count=1 -timeout=10m -p=1 ./...` | 629 | 0 | 7 child-only helpers | CLI 77.042s; Postgres 43.898s; testutil 4.739s |
+| Unconfigured canonical `make test`, `GOFLAGS=-json` for evidence | 561 | 0 | 64 (including child-only helpers and explicitly gated Postgres/E2E tests/subtests) | CLI 45.576s; Postgres 8.059s; testutil 3.365s |
+| Explicit Postgres-only command, nonexistent `DOCKER_HOST` socket, psql available | 84 | 0 | 1 child-only helper | Postgres 42.917s; partial coverage, no CLI E2E |
+
+- All eight `TestEndToEnd_*` CLI scenarios executed and passed in the configured
+  full run. The seven configured skips were only the prerequisite, signal,
+  upgrade, two CLI watchdog, SQL watchdog, and testutil child entry points.
+  `pkg/stamp` has no test files; it is not included in the test-event skip count.
+- Configured canonical `make check` passed with explicit serialized, uncached
+  race-enabled scheduling; formatting, module tidy/diff, vet, build, and lint
+  checks passed. Initial lint found four local style/unused-assignment diagnostics;
+  these were corrected before the clean check.
+- Separate malformed/refused/stalled endpoint invocations selected two legacy
+  Postgres tests and one real CLI E2E entry point. All nine selected tests failed
+  as expected across six package invocations, with no skips, package-watchdog
+  termination, or credential sentinels in diagnostics. The stalled runs took
+  20.679s (two Postgres setup failures) and 10.966s (one CLI setup failure),
+  including Go invocation overhead. These intentional negative results are not
+  failures in the green full-suite counts above.
+- Fake-go tests verified both exact stderr notices, their ordering before Go,
+  explicit flags despite inherited `GOFLAGS=-p=9`, and failure propagation.
+  The actual unconfigured canonical run emitted exactly its one fixed notice
+  on stderr, outside JSON test output.
+- Both controlled watchdog regressions confirmed readiness, the 3s Go timeout,
+  missing child-cleanup markers, and parent-owned recovery. The CLI supervisor
+  additionally confirmed the worker survived the caller, then stopped and reaped
+  that adopted PID. CLI containment/prerequisite and local helper/routing tests
+  also passed three consecutive race-enabled repetitions. Non-Linux runtime
+  behavior was not exercised; `go list` confirmed selection of the explicit
+  unsupported-platform skip file for Darwin.
+- Runtime source, CLI surface, product deadlines, CI workflow/services, README,
+  module versions, and releases are unchanged. No shared application server/base
+  or instance was reset, refreshed, or removed. Raw fixture SQL/CLI waits still
+  retain only the package watchdog; no whole-run watchdog or infrastructure CI
+  adoption is claimed.
+
+**Recorded acceptance failure (before the approved amendment):** a configured
+`make check` failed in two existing plan-23 cases, despite the earlier passing
+runs above. CLI passed in 88.430s and testutil in 4.731s; Postgres failed in
+59.276s. The full-suite acceptance row was reopened and implementation paused:
+
+- `TestPostgres_BaseScriptCancellationRestoresState/cleanup_failure` left its
+  intentionally injected 50ms recovery budget active for ordinary fixture
+  teardown. That teardown timed out and left one owned fixture database.
+- `TestPostgres_MixedOperationsDoNotTimeOutScripts/refresh` timed out in its
+  database-only swap under the test's injected 1s budget, not in a script.
+  The diagnostic claiming a script inherited that deadline is misleading for
+  this failure. The isolated server logged checkpoint/sync work around and
+  beyond one second during this run; that is not proof of script cancellation.
+
+These failures are retained, not hidden by rerunning until green or excluding
+tests. The maintainer subsequently approved the test-only amendment in Algorithms:
+capture the pre-injection teardown pool/policy and observe mixed-operation context
+separation instead of imposing a 1s DDL/storage requirement. Production, canonical,
+parent-guard, and intentional-failure budgets are unchanged. Earlier green counts
+remain evidence for those specific pre-amendment runs only.
+
+Post-amendment focused validation: one `-race -count=5` invocation exercised five
+repetitions of cleanup isolation, script cancellation/recovery, mixed-operation
+boundaries, and the unchanged command-duration regression; all passed in 16.692s.
+Each mixed-operation run observed all four boundaries (create migrate, seed,
+refresh migrate + seed); no fixture databases remained afterward.
+An attempted `GOFLAGS=-json make check`
+stopped at lint before tests because the linter's `go list -f` conflicts with that
+logging flag. Canonical checks were rerun without it; JSON evidence belongs to
+`make test` only.
+
+Final post-amendment validation:
+
+- Canonical configured `make check` passed: CLI **77.032s**, Postgres **40.040s**,
+  testutil **4.735s**, zero lint issues. Formatting/simplification, module tidy/diff,
+  vet, and build checks passed without dependency or production-source changes.
+- A separate canonical `make test` used `GOFLAGS=-json` only for structured
+  evidence. The subsequent unset and partial runs were sequential, not concurrent:
+
+| Final run | Passing test/subtest events | Failures | Skips | Package / wall durations |
+|---|---:|---:|---:|---|
+| Configured canonical full suite | 631 | 0 | 7 child-only helpers | CLI 77.303s; Postgres 39.353s; testutil 4.735s; wall 210.420s |
+| Unconfigured canonical full suite | 561 | 0 | 65 (child-only helpers and gated Postgres/E2E tests/subtests) | CLI 45.633s; Postgres 8.058s; testutil 3.379s; wall 46.779s |
+| Explicit Postgres-only command with a nonexistent Docker socket | 86 | 0 | 1 child-only helper | Postgres 38.945s; wall 39.574s; partial coverage only |
+
+- All eight infrastructure E2E scenarios passed in the final configured run.
+  Both Makefile modes emitted exactly one correct fixed stderr notice; the
+  direct partial run emitted none. The fixture regressions and both controlled
+  watchdog boundaries passed, without raising policy or failure-injection budgets.
+- The final server contained no fixture databases, other client sessions, or
+  advisory locks after validation; its owned container and attached anonymous
+  volume were removed. No shared services or application instances were disturbed.
+- Fifteen of sixteen acceptance rows are verified. Only the pre-existing issue
+  state conflicts with the approved plan; no infrastructure CI coverage is claimed.
+
+The earlier owned validation server (including the failed test's remaining
+fixture DB) and its attached anonymous volume were discarded after preserving the failure
+and server logs. Shared services and the existing workload-volume policy were
+not changed.
+
+**Issue-state discrepancy:** GitHub reports #83 manually closed by `apollopower`
+at 2026-11-13 03:54:56 UTC, before this implementation was published. The
+issue-state acceptance row remains unchecked because the approved plan required
+leaving it open for CI evidence and a separate remaining-gap decision. This implementation
+does not change issue state, infer that decision, or claim full resolution;
+reopening or any issue comment requires separate maintainer authorization.
 
 ## Dependencies
 
