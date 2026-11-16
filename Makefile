@@ -10,7 +10,13 @@ install:
 	go install $(PKG)
 
 test:
-	go test -race ./...
+	@if [ -n "$$PLAX_TEST_POSTGRES_URL" ]; then \
+		printf '%s\n' 'tests: Postgres + CLI E2E enabled; serial package execution (-p=1).' >&2; \
+		go test -race -count=1 -timeout=10m -p=1 ./...; \
+	else \
+		printf '%s\n' 'tests: Postgres disabled (PLAX_TEST_POSTGRES_URL unset/empty); skipping Postgres integration and CLI E2E.' >&2; \
+		go test -race -count=1 -timeout=10m ./...; \
+	fi
 
 vet:
 	go vet ./...

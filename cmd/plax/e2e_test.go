@@ -27,8 +27,8 @@ import (
 
 // TestEndToEnd_TwoInstances exercises the built binary against real git,
 // Postgres, and Docker: base reset, two parallel instances, HTTP checks,
-// exec environment, failure rollback, and clean teardown. Skipped unless
-// PLAX_TEST_POSTGRES_URL is set and the other tools are available.
+// exec environment, failure rollback, and clean teardown. Skipped when
+// PLAX_TEST_POSTGRES_URL is unset; configured prerequisites must work.
 func TestEndToEnd_TwoInstances(t *testing.T) {
 	pgURL := e2ePrereqs(t)
 	bin := buildPlax(t)
@@ -536,7 +536,7 @@ func fixtureDatabaseURLs(t *testing.T, content string) string {
 	}
 	u, err := url.Parse(dsn)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("fixture database URL: invalid configuration")
 	}
 	for _, name := range []string{"DB_NAME", "DB_NAME_test"} {
 		u.Path = "/PLAX_DATABASE_PLACEHOLDER"
@@ -550,29 +550,69 @@ func fixtureDatabaseURLs(t *testing.T, content string) string {
 
 func e2ePrereqs(t *testing.T) string {
 	t.Helper()
-	pgURL := os.Getenv("PLAX_TEST_POSTGRES_URL")
-	if pgURL == "" {
-		t.Skip("skipping: PLAX_TEST_POSTGRES_URL not set")
-	}
+	pgURL := testutil.PostgresURL(t)
 	for _, tool := range []string{"git", "python3", "psql"} {
 		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("skipping: %s not available", tool)
+			t.Fatalf("E2E prerequisite: %s not available", tool)
 		}
 	}
 	d, err := docker.NewDriver()
 	if err != nil {
-		t.Skipf("skipping: docker: %v", err)
+		t.Fatal("E2E prerequisite: Docker client unavailable")
 	}
-	if _, err := d.ServiceRunning(context.Background(), "plax-e2e-probe"); err != nil {
-		_ = d.Close()
-		t.Skipf("skipping: docker daemon: %v", err)
+	defer func() {
+		if err := d.Close(); err != nil {
+			t.Error("E2E prerequisite: Docker client close failed")
+		}
+	}()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, err := d.ServiceRunning(ctx, "plax-e2e-probe"); err != nil {
+		t.Fatal("E2E prerequisite: Docker daemon unavailable")
 	}
-	_ = d.Close()
 
-	// This test resets and clones plax_base while pkg/derive/postgres tests
-	// do the same in a parallel package binary; serialize on the server.
+	// Direct Go invocations can overlap package binaries; the parent session
+	// protects spawned CLI mutations and their cleanup against cooperating tests.
 	testutil.LockPostgres(t, pgURL)
 	return pgURL
+}
+
+func TestCLI_E2EPrereqChild(t *testing.T) {
+	if os.Getenv("PLAX_TEST_E2E_PREREQ_CHILD") == "" {
+		t.Skip("child-only helper")
+	}
+	e2ePrereqs(t)
+	fmt.Println("E2E_FIXTURE_STARTED")
+}
+
+func TestCLI_E2EConfiguredPrerequisiteFailure(t *testing.T) {
+	for _, missing := range []string{"git", "python3", "psql", "Docker daemon"} {
+		t.Run(missing, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, tool := range []string{"git", "python3", "psql"} {
+				if tool == missing {
+					continue
+				}
+				if err := os.WriteFile(filepath.Join(dir, tool), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCLI_E2EPrereqChild$", "-test.v", "-test.timeout=12s")
+			cmd.Env = append(os.Environ(), "PLAX_TEST_E2E_PREREQ_CHILD=1", "PATH="+dir,
+				"PLAX_TEST_POSTGRES_URL=postgres://user:prereq-secret@unused/postgres", "DOCKER_HOST=unix://"+filepath.Join(dir, "no-docker.sock"),
+				"DOCKER_TLS_VERIFY=", "DOCKER_CERT_PATH=", "DOCKER_API_VERSION=")
+			out, err := cmd.CombinedOutput()
+			if ctx.Err() != nil || err == nil || strings.Contains(string(out), "--- SKIP:") ||
+				strings.Contains(string(out), "E2E_FIXTURE_STARTED") || !strings.Contains(string(out), "E2E prerequisite: "+missing) {
+				t.Fatalf("configured prerequisite did not fail before setup: %v\n%s", err, out)
+			}
+			if strings.Contains(string(out), "prereq-secret") || strings.Contains(string(out), "postgres://") {
+				t.Fatal("prerequisite diagnostic leaked test URL")
+			}
+		})
+	}
 }
 
 func buildPlax(t *testing.T) string {

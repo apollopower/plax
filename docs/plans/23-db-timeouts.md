@@ -608,6 +608,9 @@ Do not change `LockPostgres` behavior in this plan; that belongs to #83.
   A bounded cleanup failure must be explicitly returned.
 - `TestPostgres_MixedOperationsDoNotTimeOutScripts` — create/seed/refresh scripts
   outlast the injected DB budget and still complete with fresh following phases.
+  Plan 24's approved fixture amendment replaces this integration test's artificial
+  1s DDL budget with gated script/DB-context separation checks; the command-only
+  no-automatic-deadline regression retains the short-budget duration proof.
 - `TestPostgres_CloneTimeoutCleansOwnedTarget` — force a post-create failure
   under a short parent deadline, then verify the owned target is removed;
   independently verify a pre-existing target is never dropped.
@@ -752,6 +755,15 @@ Local verification evidence (2026-11-12):
   their locks before later CLI calls. `LockPostgres` and #83 are unchanged.
 - Operational docs are synchronized; README prose is unchanged. No push, PR,
   release, shared-base reset/refresh, or application smoke test was performed.
+
+**Verification procedure superseded by plan 24:** use the canonical `make test`
+or `make check` path described in [`../testing.md`](../testing.md), with an
+explicit isolated server for full coverage. Both modes now use a 10m package
+watchdog; configured runs serialize packages, and unset/empty skips all real
+Postgres setup without localhost fallback. The commands/workarounds below are
+historical plan-23 instructions, not the current procedure. Their original
+verification evidence above is retained; this does not establish #83 resolution
+or configured infrastructure CI coverage.
 
 Verification at implementation time:
 
