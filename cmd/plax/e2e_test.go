@@ -551,7 +551,7 @@ func fixtureDatabaseURLs(t *testing.T, content string) string {
 func e2ePrereqs(t *testing.T) string {
 	t.Helper()
 	pgURL := testutil.PostgresURL(t)
-	for _, tool := range []string{"git", "python3", "psql"} {
+	for _, tool := range []string{"git", "python3", "psql", "docker"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Fatalf("E2E prerequisite: %s not available", tool)
 		}
@@ -586,10 +586,10 @@ func TestCLI_E2EPrereqChild(t *testing.T) {
 }
 
 func TestCLI_E2EConfiguredPrerequisiteFailure(t *testing.T) {
-	for _, missing := range []string{"git", "python3", "psql", "Docker daemon"} {
+	for _, missing := range []string{"git", "python3", "psql", "docker", "Docker daemon"} {
 		t.Run(missing, func(t *testing.T) {
 			dir := t.TempDir()
-			for _, tool := range []string{"git", "python3", "psql"} {
+			for _, tool := range []string{"git", "python3", "psql", "docker"} {
 				if tool == missing {
 					continue
 				}

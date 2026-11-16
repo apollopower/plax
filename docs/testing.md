@@ -29,8 +29,8 @@ The URL is never part of the notice. A green unconfigured run has reduced
 Postgres coverage, not necessarily zero infrastructure: Docker-only package
 tests retain their own availability policy, and local TCP transport regressions
 still execute. Configured Postgres setup failures are failures, never availability
-skips. Full-suite CLI E2E also requires git, python3, psql, and a working Docker
-daemon; missing prerequisites fail before creating fixtures.
+skips. Full-suite CLI E2E also requires git, python3, psql, the Docker CLI, and a
+working Docker daemon; missing prerequisites fail before creating fixtures.
 
 ## Safe server setup
 
@@ -126,13 +126,26 @@ and recover their exact owned fixtures/workers from the parent. The CLI case
 uses a throwaway Linux child-subreaper supervisor; other platforms explicitly
 skip that containment regression. Child-only test entry points skip normally.
 
-## CI adoption is separate
+## CI coverage
 
-The current CI workflow still runs `go test -race -count=1 ./...` directly with
-no configured Postgres server. It bypasses Makefile routing and notices; fake-go
-regressions validate those decisions but not actual configured infrastructure
-execution in CI. Provisioning and adoption of the canonical path require a
-separate change and a successful configured CI run. This local scheduling/setup
-hardening does not prove that historical starvation was fixed or establish #83
-resolution; configured CI evidence and a maintainer decision on the remaining
-non-lock hangs are still needed.
+The `test-and-lint` workflow has two independent jobs on fresh hosted runners:
+
+- `ci` retains tidy, vet, build, formatting, and lint checks. Its `make test`
+  invocation explicitly empties `PLAX_TEST_POSTGRES_URL`, covering the canonical
+  unconfigured path. The fixed mode notice reports the Postgres/E2E omission;
+  individual skipped tests are not printed without `-v`. Docker-only tests
+  retain their independent availability policy.
+- `infrastructure` provisions an isolated PostgreSQL 16 service, with a health
+  check against its TCP listener and a dynamically assigned host port. It installs
+  `psql`, checks git/python3/psql/docker and the Docker daemon, and sets an explicit
+  disposable test URL only for `make test`. `GOFLAGS=-v` exposes individual test
+  results, including the eight CLI E2E scenarios and child-only helper skips.
+  The canonical target supplies `-race -count=1 -timeout=10m -p=1`.
+
+Both jobs have a 20-minute whole-job limit; the package watchdog remains 10m.
+The Postgres service and any test-owned Docker resources belong to that runner,
+not a shared application server. No repository secret or external database is
+required. Hosted coverage is established only after the configured job actually
+succeeds; local runs and workflow lint are not substitutes for that evidence.
+The previously documented raw-SQL/child-wait limitations still apply: adopting
+this path does not prove every historical hang fixed or change issue state.

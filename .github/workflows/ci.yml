@@ -12,6 +12,7 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
 
@@ -35,7 +36,9 @@ jobs:
         run: go build ./...
 
       - name: go test
-        run: go test -race -count=1 ./...
+        env:
+          PLAX_TEST_POSTGRES_URL: ""
+        run: make test
 
       - name: gofmt check
         run: |
@@ -49,3 +52,47 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.15.0
+
+  infrastructure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: plax-ci-fixture
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          check-latest: true
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends postgresql-client
+
+      - name: Check infrastructure prerequisites
+        run: |
+          for tool in git python3 psql docker; do
+            command -v "$tool"
+          done
+          docker info --format '{{.ServerVersion}}'
+
+      - name: Postgres and Docker tests
+        env:
+          POSTGRES_PORT: ${{ job.services.postgres.ports['5432'] }}
+          GOFLAGS: -v
+        run: |
+          test -n "$POSTGRES_PORT"
+          export PLAX_TEST_POSTGRES_URL="postgres://postgres:plax-ci-fixture@127.0.0.1:$POSTGRES_PORT/postgres?sslmode=disable"
+          make test
