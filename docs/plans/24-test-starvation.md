@@ -4,7 +4,15 @@
 
 Make canonical Postgres-enabled test scheduling deterministic and configured setup failures visible as scoped hardening for [#83](https://github.com/apollopower/plax/issues/83), without claiming to resolve the remaining non-lock hangs or CI execution gap.
 
-**Status: implemented and locally verified, including the approved fixture-regression amendment. The issue-state acceptance discrepancy below remains; configured infrastructure CI is separate.**
+**Status: implemented and locally verified, including the approved fixture-regression amendment, and merged via [PR #90](https://github.com/apollopower/plax/pull/90). The issue-state acceptance discrepancy below remains.**
+
+**Separate CI follow-up (2026-11-16):** [PR #92](https://github.com/apollopower/plax/pull/92)
+adds canonical unconfigured and isolated infrastructure jobs. Its
+[hosted run](https://github.com/apollopower/plax/actions/runs/43937159238), at
+`b600f43`, passed the configured suite with **631 passing test/subtest events,
+zero failures, seven child-only helper skips, and all eight CLI E2E scenarios**.
+This establishes configured CI coverage for that commit, not resolution of the
+remaining non-lock hangs or the issue-state acceptance discrepancy below.
 
 Agreed policy:
 
@@ -12,7 +20,7 @@ Agreed policy:
 |---|---|
 | `PLAX_TEST_POSTGRES_URL` empty/unset | Skip Postgres-dependent tests before connecting; no localhost fallback |
 | Variable explicitly configured | Backend/setup failures fail tests, not skip them |
-| Configured CLI E2E prerequisites | Missing git/python3/psql or unavailable Docker fails, rather than silently reducing coverage |
+| Configured CLI E2E prerequisites | Missing git/python3/psql/docker CLI or an unavailable Docker daemon fails, rather than silently reducing coverage |
 | Canonical configured test run | `make test` runs all packages with `-p=1`, `-race`, `-count=1`, and `-timeout=10m` |
 | Canonical unconfigured test run | Keep package parallelism; `-race -count=1 -timeout=10m` |
 | Canonical test-mode visibility | One fixed stderr notice before invoking Go; never print the configured URL |
@@ -80,9 +88,9 @@ spawned CLI/workload behind. Inspect and recover only test-owned resources after
 such an abort. Per-fixture SQL deadlines and managed child watchdogs would need
 separate scope/approval; do not claim this plan prevents all historical hangs.
 
-**CI adoption remains separate.** The current CI workflow directly invokes
+**Original CI adoption boundary (historical).** At planning time, CI directly invoked
 `go test -race -count=1 ./...`, with no Postgres service or configured test URL.
-It bypasses the Makefile routing and its mode notice. Future fake-go regression
+It bypassed the Makefile routing and its mode notice. Planned fake-go regression
 tests can cover routing decisions in that job, but cannot establish that real CI
 has exercised the configured serialized suite. Merging this plan-only PR does
 not fix or close #83. Implementing it changes the canonical local path, not the
@@ -298,8 +306,10 @@ skips to support Postgres-only development. Document the partial command in
 An unset run is Postgres-free, not necessarily infrastructure-free: existing
 Docker-only tests retain their own policy. The Makefile notice makes the
 Postgres/CLI E2E coverage omission explicit. Direct Go users can add `-v` to see
-skips; the current CI invocation remains a direct, unconfigured run until the
-separate CI task. Do not put credentials in shared reports or examples.
+individual skips. At this plan's approval, CI still used a direct, unconfigured
+invocation; the separate follow-up is recorded above and the current two-job
+policy is documented in `docs/testing.md`. Do not put credentials in shared
+reports or examples.
 
 ## Error handling
 

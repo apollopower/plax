@@ -132,8 +132,9 @@ The `test-and-lint` workflow has two independent jobs on fresh hosted runners:
 
 - `ci` retains tidy, vet, build, formatting, and lint checks. Its `make test`
   invocation explicitly empties `PLAX_TEST_POSTGRES_URL`, covering the canonical
-  unconfigured path and its visible Postgres/E2E skips. Docker-only tests retain
-  their independent availability policy.
+  unconfigured path. The fixed mode notice reports the Postgres/E2E omission;
+  individual skipped tests are not printed without `-v`. Docker-only tests
+  retain their independent availability policy.
 - `infrastructure` provisions an isolated PostgreSQL 16 service, with a health
   check against its TCP listener and a dynamically assigned host port. It installs
   `psql`, checks git/python3/psql/docker and the Docker daemon, and sets an explicit
